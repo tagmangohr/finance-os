@@ -133,19 +133,33 @@ async function syncConnector(
         metadata: tx.metadata as import("@/lib/supabase/types").Json,
       }));
 
-      const { error: upsertErr, count } = await supabase
-        .from("transactions")
-        .upsert(rows, {
-          onConflict: "org_id,connector_id,external_id",
-          ignoreDuplicates: false,
-          count: "exact",
-        });
-
-      if (upsertErr) {
-        throw new Error(`Upsert failed: ${upsertErr.message}`);
+      // The DB has a partial unique index (WHERE external_id IS NOT NULL) which
+      // PostgREST can't resolve via onConflict column list. Instead: fetch
+      // already-synced external_ids, then insert only the truly new rows.
+      const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
+      let existingIds = new Set<string>();
+      if (externalIds.length > 0) {
+        const { data: existing } = await supabase
+          .from("transactions")
+          .select("external_id")
+          .eq("org_id", orgId)
+          .eq("connector_id", connector.id)
+          .in("external_id", externalIds);
+        existingIds = new Set((existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? ""));
       }
 
-      result.synced = count ?? rows.length;
+      const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
+
+      if (newRows.length > 0) {
+        const { error: insertErr, count } = await supabase
+          .from("transactions")
+          .insert(newRows, { count: "exact" });
+
+        if (insertErr) {
+          throw new Error(`Insert failed: ${insertErr.message}`);
+        }
+        result.synced = count ?? newRows.length;
+      }
     }
 
     // Update last_synced_at

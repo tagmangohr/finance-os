@@ -92,7 +92,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const allTransactions = [...charges, ...payouts];
 
-  // ── Upsert into Supabase ──────────────────────────────────────────────────
+  // ── Insert new transactions (skip already-synced ones) ───────────────────
   let synced = 0;
   if (allTransactions.length > 0) {
     const rows: TransactionInsert[] = allTransactions.map((tx) => ({
@@ -113,22 +113,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       metadata: tx.metadata as import("@/lib/supabase/types").Json,
     }));
 
-    const { error: upsertErr, count } = await supabase
-      .from("transactions")
-      .upsert(rows, {
-        onConflict: "org_id,connector_id,external_id",
-        ignoreDuplicates: false,
-        count: "exact",
-      });
-
-    if (upsertErr) {
-      return NextResponse.json(
-        { error: "Failed to upsert transactions", details: upsertErr.message },
-        { status: 500 }
-      );
+    // Fetch already-synced external_ids to avoid duplicate inserts
+    const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
+    let existingIds = new Set<string>();
+    if (externalIds.length > 0) {
+      const { data: existing } = await supabase
+        .from("transactions")
+        .select("external_id")
+        .eq("org_id", org_id)
+        .eq("connector_id", connector_id)
+        .in("external_id", externalIds);
+      existingIds = new Set((existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? ""));
     }
 
-    synced = count ?? allTransactions.length;
+    const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
+
+    if (newRows.length > 0) {
+      const { error: insertErr, count } = await supabase
+        .from("transactions")
+        .insert(newRows, { count: "exact" });
+
+      if (insertErr) {
+        return NextResponse.json(
+          { error: "Failed to insert transactions", details: insertErr.message },
+          { status: 500 }
+        );
+      }
+      synced = count ?? newRows.length;
+    }
   }
 
   // ── Update connector last_synced_at ───────────────────────────────────────
