@@ -147,6 +147,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
@@ -349,14 +350,18 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 
   // ── Disconnect ─────────────────────────────────────────────────────────────
   const handleDisconnect = async (connectorId: string) => {
+    setConfirmRemove(null);
     setDisconnectingId(connectorId);
     try {
       const res = await fetch(`/api/connectors/manage?id=${connectorId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? "Failed to disconnect");
+      }
       setActiveConnectors((prev) => prev.filter((c) => c.id !== connectorId));
       toast.success("Connector removed");
     } catch (err) {
-      toast.error(`Failed to disconnect: ${err instanceof Error ? err.message : "Unknown error"}`);
+      toast.error(err instanceof Error ? err.message : "Failed to disconnect");
     } finally {
       setDisconnectingId(null);
     }
@@ -409,54 +414,86 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                 <div className="space-y-1.5">
                   {instances.map((inst) => {
                     const cfg = (inst.config ?? {}) as Record<string, string>;
-                    const subtitle = cfg.email || cfg.mid
-                      ? [cfg.email, cfg.mid].filter(Boolean).join(" · ")
-                      : inst.last_synced_at
-                      ? `Synced ${formatDate(inst.last_synced_at)}`
-                      : "Never synced";
+
+                    // Primary key identifier — masked so secrets aren't fully exposed
+                    const keyId = getKeyIdentifier(inst.type, cfg);
+                    const contextInfo = [cfg.email, cfg.mid].filter(Boolean).join(" · ");
+                    const subtitle = [keyId, contextInfo].filter(Boolean).join(" · ")
+                      || (inst.last_synced_at ? `Synced ${formatDate(inst.last_synced_at)}` : "Never synced");
+
+                    const isConfirming = confirmRemove?.id === inst.id;
 
                     return (
                       <div
                         key={inst.id}
                         className={cn(
-                          "flex items-center gap-2 rounded-xl px-3 py-2.5 border",
+                          "rounded-xl border transition-all",
                           inst.status === "error"
                             ? "border-red-500/20 bg-red-500/[0.04]"
+                            : isConfirming
+                            ? "border-red-500/30 bg-red-500/[0.06]"
                             : "border-white/[0.06] bg-white/[0.025]"
                         )}
                       >
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
-                          <p className="text-[10px] text-white/25 truncate">{subtitle}</p>
-                        </div>
-                        <div className="flex items-center gap-0.5 flex-shrink-0">
-                          {/* Edit */}
-                          <button
-                            onClick={() => handleOpenEdit(inst)}
-                            title="Edit credentials"
-                            className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </button>
-                          {/* Sync */}
-                          <button
-                            onClick={() => handleSync(inst)}
-                            disabled={syncingId === inst.id}
-                            title="Sync now"
-                            className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-40"
-                          >
-                            <RefreshCw className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")} />
-                          </button>
-                          {/* Disconnect */}
-                          <button
-                            onClick={() => handleDisconnect(inst.id)}
-                            disabled={disconnectingId === inst.id}
-                            title="Remove"
-                            className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
+                        {/* Normal row */}
+                        {!isConfirming ? (
+                          <div className="flex items-center gap-2 px-3 py-2.5">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
+                              <p className="text-[10px] text-white/25 truncate font-mono">{subtitle}</p>
+                            </div>
+                            <div className="flex items-center gap-0.5 flex-shrink-0">
+                              {/* Edit */}
+                              <button
+                                onClick={() => handleOpenEdit(inst)}
+                                title="Edit credentials"
+                                className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                              {/* Sync */}
+                              <button
+                                onClick={() => handleSync(inst)}
+                                disabled={syncingId === inst.id}
+                                title="Sync now"
+                                className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-40"
+                              >
+                                <RefreshCw className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")} />
+                              </button>
+                              {/* Remove — show confirmation first */}
+                              <button
+                                onClick={() => setConfirmRemove(inst)}
+                                disabled={disconnectingId === inst.id}
+                                title="Remove"
+                                className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Confirmation row */
+                          <div className="px-3 py-2.5 space-y-2">
+                            <p className="text-[11px] text-red-400/90 leading-snug">
+                              Remove <span className="font-semibold">{inst.name}</span> and all its synced transactions?
+                            </p>
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => setConfirmRemove(null)}
+                                className="flex-1 text-[11px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] rounded-lg py-1 transition-all"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={() => handleDisconnect(inst.id)}
+                                disabled={disconnectingId === inst.id}
+                                className="flex-1 text-[11px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50"
+                              >
+                                {disconnectingId === inst.id ? "Removing…" : "Yes, remove"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -611,6 +648,35 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Returns a masked key identifier for a connector so users can visually
+ * distinguish which account is which without exposing full credentials.
+ * e.g. "rzp_live_ABCDE12345" → "rzp_live_ABCDE…2345"
+ */
+function maskKey(s: string): string {
+  if (s.length <= 16) return s;
+  return `${s.slice(0, 13)}…${s.slice(-4)}`;
+}
+
+function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>): string | null {
+  switch (type) {
+    case "razorpay":
+      // key_id is non-secret (rzp_live_xxx / rzp_test_xxx) — safe to show masked
+      return cfg.key_id ? maskKey(cfg.key_id) : null;
+    case "stripe":
+      // Only the prefix reveals mode (live vs test); never show full key
+      return cfg.secret_key ? `${cfg.secret_key.slice(0, 11)}…` : null;
+    case "zoho":
+      return cfg.client_id ? maskKey(cfg.client_id) : null;
+    case "quickbooks":
+      return cfg.realm_id ? `Realm ${cfg.realm_id}` : null;
+    case "tally":
+      return cfg.host ? `${cfg.host}:${cfg.port ?? "9000"}` : null;
+    default:
+      return null;
+  }
+}
 
 function FormField({
   label,

@@ -63,7 +63,7 @@ export async function PATCH(request: Request) {
   }
 }
 
-// DELETE — remove a connector
+// DELETE — remove a connector (and its associated transactions)
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -71,6 +71,19 @@ export async function DELETE(request: Request) {
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
     const supabase = await createServiceClient();
+
+    // Must delete child transactions first — connector_id is NOT NULL with a FK constraint
+    const { error: txErr } = await supabase
+      .from("transactions")
+      .delete()
+      .eq("connector_id", id);
+
+    if (txErr) {
+      return NextResponse.json(
+        { error: `Could not remove transactions: ${txErr.message}` },
+        { status: 500 }
+      );
+    }
 
     const { error } = await supabase.from("connectors").delete().eq("id", id);
 
