@@ -70,28 +70,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── Fetch transactions in parallel ────────────────────────────────────────
   const razorpay = new RazorpayConnector(keyId, keySecret);
 
-  let payments: NormalizedTransaction[] = [];
-  let payouts: NormalizedTransaction[] = [];
+  const allTransactions: NormalizedTransaction[] = [];
   const errors: string[] = [];
 
-  const [paymentsResult, payoutsResult] = await Promise.allSettled([
-    razorpay.fetchPayments(fromDate, toDate),
-    razorpay.fetchPayouts(fromDate, toDate),
-  ]);
+  const [paymentsResult, payoutsResult, refundsResult, settlementsResult] =
+    await Promise.allSettled([
+      razorpay.fetchPayments(fromDate, toDate),
+      razorpay.fetchPayouts(fromDate, toDate),
+      razorpay.fetchRefunds(fromDate, toDate),
+      razorpay.fetchSettlements(fromDate, toDate),
+    ]);
 
-  if (paymentsResult.status === "fulfilled") {
-    payments = paymentsResult.value;
-  } else {
-    errors.push(`payments: ${paymentsResult.reason?.message ?? "unknown error"}`);
-  }
+  const capture = (
+    label: string,
+    result: PromiseSettledResult<NormalizedTransaction[]>
+  ) => {
+    if (result.status === "fulfilled") {
+      allTransactions.push(...result.value);
+    } else {
+      const msg: string =
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason);
+      errors.push(`${label}: ${msg.slice(0, 120)}`);
+    }
+  };
 
-  if (payoutsResult.status === "fulfilled") {
-    payouts = payoutsResult.value;
-  } else {
-    errors.push(`payouts: ${payoutsResult.reason?.message ?? "unknown error"}`);
-  }
-
-  const allTransactions = [...payments, ...payouts];
+  capture("payments", paymentsResult);
+  capture("payouts", payoutsResult);
+  capture("refunds", refundsResult);
+  capture("settlements", settlementsResult);
 
   // ── Insert new transactions (skip already-synced ones) ───────────────────
   let synced = 0;

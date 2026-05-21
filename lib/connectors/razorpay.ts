@@ -2,8 +2,12 @@ import {
   NormalizedTransaction,
   RazorpayPayment,
   RazorpayPayout,
+  RazorpayRefund,
+  RazorpaySettlement,
   normalizeRazorpayPayment,
   normalizeRazorpayPayout,
+  normalizeRazorpayRefund,
+  normalizeRazorpaySettlement,
 } from "@/lib/normalizer";
 
 const RAZORPAY_BASE = "https://api.razorpay.com/v1";
@@ -111,6 +115,70 @@ export class RazorpayConnector {
 
       if (items.length < PAGE_SIZE || !data.cursor) break;
       cursor = data.cursor;
+    }
+
+    return results;
+  }
+
+  // ─── Refunds ─────────────────────────────────────────────────────────────
+
+  async fetchRefunds(
+    fromDate: Date,
+    toDate: Date
+  ): Promise<NormalizedTransaction[]> {
+    const results: NormalizedTransaction[] = [];
+    let skip = 0;
+
+    while (true) {
+      const data = await this.get<{ items: RazorpayRefund[]; count: number }>(
+        "/refunds",
+        {
+          from: Math.floor(fromDate.getTime() / 1000),
+          to: Math.floor(toDate.getTime() / 1000),
+          count: PAGE_SIZE,
+          skip,
+        }
+      );
+
+      const items: RazorpayRefund[] = data.items ?? [];
+      for (const refund of items) {
+        results.push(normalizeRazorpayRefund(refund));
+      }
+
+      if (items.length < PAGE_SIZE) break;
+      skip += PAGE_SIZE;
+    }
+
+    return results;
+  }
+
+  // ─── Settlements ──────────────────────────────────────────────────────────
+
+  async fetchSettlements(
+    fromDate: Date,
+    toDate: Date
+  ): Promise<NormalizedTransaction[]> {
+    const results: NormalizedTransaction[] = [];
+    let skip = 0;
+
+    while (true) {
+      const data = await this.get<{ items: RazorpaySettlement[]; count: number }>(
+        "/settlements",
+        {
+          from: Math.floor(fromDate.getTime() / 1000),
+          to: Math.floor(toDate.getTime() / 1000),
+          count: PAGE_SIZE,
+          skip,
+        }
+      );
+
+      const items: RazorpaySettlement[] = data.items ?? [];
+      for (const settlement of items) {
+        results.push(normalizeRazorpaySettlement(settlement));
+      }
+
+      if (items.length < PAGE_SIZE) break;
+      skip += PAGE_SIZE;
     }
 
     return results;

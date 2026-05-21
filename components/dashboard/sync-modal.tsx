@@ -56,6 +56,11 @@ function ResultRow({ r }: { r: SyncResult }) {
             <span className="text-[10px] text-white/25 uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.05]">
               {r.type}
             </span>
+            {r.warnings && r.warnings.length > 0 && !hasError && (
+              <span className="text-[10px] text-amber-400/70 uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400/[0.08] border border-amber-400/20">
+                {r.warnings.length} skipped
+              </span>
+            )}
           </div>
           {!hasError && (
             <p className="text-xs text-white/35 mt-0.5">
@@ -91,6 +96,14 @@ function ResultRow({ r }: { r: SyncResult }) {
               value={`${new Date(r.from).toLocaleDateString("en-IN", { day: "numeric", month: "short" })} → ${new Date(r.to).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
             />
           </div>
+          {r.warnings && r.warnings.length > 0 && (
+            <div className="mt-3 space-y-1.5">
+              <p className="text-[10px] font-semibold text-amber-400/50 uppercase tracking-widest">Unavailable endpoints</p>
+              {r.warnings.map((w, i) => (
+                <p key={i} className="text-[11px] text-amber-400/50 leading-relaxed">{w}</p>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -12,12 +12,13 @@ export type SyncResult = {
   connector_id: string;
   connector_name: string;
   type: string;
-  fetched: number;    // total transactions returned by the API
-  inserted: number;   // new rows actually added to DB
-  skipped: number;    // already existed — not re-inserted
+  fetched: number;      // total transactions returned by the API
+  inserted: number;     // new rows actually added to DB
+  skipped: number;      // already existed — not re-inserted
   from: string;
   to: string;
   error?: string;
+  warnings?: string[];  // non-fatal per-endpoint failures (e.g. payouts not activated)
 };
 
 // ─── POST /api/sync ───────────────────────────────────────────────────────────
@@ -111,11 +112,34 @@ async function syncConnector(
       const { key_id, key_secret } = config;
       if (!key_id || !key_secret) throw new Error("Missing key_id or key_secret");
       const razorpay = new RazorpayConnector(key_id, key_secret);
-      const [payments, payouts] = await Promise.all([
+
+      const [paymentsRes, payoutsRes, refundsRes, settlementsRes] = await Promise.allSettled([
         razorpay.fetchPayments(fromDate, toDate),
         razorpay.fetchPayouts(fromDate, toDate),
+        razorpay.fetchRefunds(fromDate, toDate),
+        razorpay.fetchSettlements(fromDate, toDate),
       ]);
-      transactions = [...payments, ...payouts];
+
+      const addWarning = (label: string, reason: unknown) => {
+        const msg = reason instanceof Error ? reason.message : String(reason);
+        // Trim verbose API body — keep first 120 chars
+        result.warnings = [
+          ...(result.warnings ?? []),
+          `${label}: ${msg.slice(0, 120)}`,
+        ];
+      };
+
+      if (paymentsRes.status === "fulfilled") transactions.push(...paymentsRes.value);
+      else addWarning("payments", paymentsRes.reason);
+
+      if (payoutsRes.status === "fulfilled") transactions.push(...payoutsRes.value);
+      else addWarning("payouts", payoutsRes.reason);
+
+      if (refundsRes.status === "fulfilled") transactions.push(...refundsRes.value);
+      else addWarning("refunds", refundsRes.reason);
+
+      if (settlementsRes.status === "fulfilled") transactions.push(...settlementsRes.value);
+      else addWarning("settlements", settlementsRes.reason);
     } else if (connector.type === "stripe") {
       const { secret_key } = config;
       if (!secret_key) throw new Error("Missing secret_key");

@@ -56,6 +56,35 @@ export type RazorpayPayout = {
   notes: Record<string, unknown>;
 };
 
+export type RazorpayRefund = {
+  id: string;
+  entity: string;
+  amount: number; // in paise
+  currency: string;
+  payment_id: string;
+  notes: Record<string, unknown>;
+  receipt: string | null;
+  acquirer_data: Record<string, unknown> | null;
+  created_at: number;
+  batch_id: string | null;
+  status: string; // processed | pending | failed
+  speed_processed: string | null;
+  speed_requested: string | null;
+};
+
+export type RazorpaySettlement = {
+  id: string;
+  entity: string;
+  amount: number; // in paise
+  status: string; // created | processed
+  fees: number; // in paise
+  tax: number;  // in paise
+  utr: string | null;
+  created_at: number;
+  onhold_amount: number;
+  description: string | null;
+};
+
 export type StripeCharge = {
   id: string;
   object: "charge";
@@ -231,6 +260,65 @@ export function normalizeRazorpayPayout(
       tax: payout.tax / 100,
       processed_at: payout.processed_at,
       notes: payout.notes,
+    },
+  };
+}
+
+export function normalizeRazorpayRefund(
+  refund: RazorpayRefund
+): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  switch (refund.status) {
+    case "processed":
+      status = "completed";
+      break;
+    case "failed":
+      status = "failed";
+      break;
+    default:
+      status = "pending";
+  }
+
+  return {
+    external_id: refund.id,
+    type: "debit",
+    amount: refund.amount / 100,
+    currency: (refund.currency ?? "INR").toUpperCase(),
+    category: "refund",
+    counterparty_name: null,
+    description: `Refund for payment ${refund.payment_id}`,
+    source: "razorpay_refund",
+    status,
+    transaction_date: unixToDateString(refund.created_at),
+    metadata: {
+      payment_id: refund.payment_id,
+      receipt: refund.receipt,
+      speed_processed: refund.speed_processed,
+      speed_requested: refund.speed_requested,
+      acquirer_data: refund.acquirer_data,
+    },
+  };
+}
+
+export function normalizeRazorpaySettlement(
+  settlement: RazorpaySettlement
+): NormalizedTransaction {
+  return {
+    external_id: settlement.id,
+    type: "credit",
+    amount: settlement.amount / 100,
+    currency: "INR",
+    category: "settlement",
+    counterparty_name: "Razorpay",
+    description: settlement.description ?? `Settlement ${settlement.utr ?? settlement.id}`,
+    source: "razorpay_settlement",
+    status: settlement.status === "processed" ? "completed" : "pending",
+    transaction_date: unixToDateString(settlement.created_at),
+    metadata: {
+      fees: settlement.fees / 100,
+      tax: settlement.tax / 100,
+      utr: settlement.utr,
+      onhold_amount: settlement.onhold_amount / 100,
     },
   };
 }
