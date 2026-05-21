@@ -184,21 +184,23 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         return;
       }
 
-      body = { ...body, config: formValues };
-      const res = await fetch("/api/connectors/connect", {
+      // /api/connectors/manage requires: { org_id, type, name, config, status }
+      body = { ...body, name: openModal.name, config: formValues, status: "active" };
+      const res = await fetch("/api/connectors/manage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      // manage route returns the connector row directly (not wrapped in { connector })
+      const connector = await res.json();
 
       setActiveConnectors((prev) => {
         const existing = prev.find((c) => c.type === openModal.type);
         if (existing) {
           return prev.map((c) => (c.type === openModal.type ? { ...c, status: "active" } : c));
         }
-        return [...prev, data.connector];
+        return [...prev, connector];
       });
 
       toast.success(`${openModal.name} connected successfully`);
@@ -213,12 +215,36 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const handleSync = async (connector: Connector) => {
     setSyncingId(connector.id);
     try {
-      const res = await fetch("/api/connectors/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connector_id: connector.id }),
-      });
-      if (!res.ok) throw new Error(await res.text());
+      // Route each connector type to its dedicated sync endpoint
+      const syncEndpoints: Partial<Record<Connector["type"], string>> = {
+        razorpay: "/api/connectors/razorpay",
+        stripe: "/api/connectors/stripe",
+      };
+      const endpoint = syncEndpoints[connector.type];
+
+      let synced = 0;
+      if (endpoint) {
+        // Type-specific endpoint needs connector_id + org_id
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connector_id: connector.id, org_id: orgId }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        synced = data.synced ?? 0;
+      } else {
+        // Fallback: bulk sync for org (covers tally, zoho, etc.)
+        const res = await fetch("/api/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ org_id: orgId }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const data = await res.json();
+        synced = data.total_synced ?? 0;
+      }
+
       setActiveConnectors((prev) =>
         prev.map((c) =>
           c.id === connector.id
@@ -226,9 +252,9 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             : c
         )
       );
-      toast.success("Sync complete");
-    } catch {
-      toast.error("Sync failed. Please try again.");
+      toast.success(`Synced ${synced} transactions`);
+    } catch (err) {
+      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
     }
