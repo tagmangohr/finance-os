@@ -16,44 +16,48 @@ interface CategoryChartProps {
 }
 
 const COLORS = [
-  "hsl(221.2, 83.2%, 53.3%)",
-  "hsl(142.1, 76.2%, 36.3%)",
-  "hsl(32.1, 94.6%, 43.7%)",
-  "hsl(262.1, 83.3%, 57.8%)",
-  "hsl(0, 84.2%, 60.2%)",
-  "hsl(199, 89%, 48%)",
-  "hsl(330, 81%, 60%)",
-  "hsl(174, 72%, 40%)",
+  "hsl(258, 88%, 66%)",   // violet
+  "hsl(158, 64%, 48%)",   // emerald
+  "hsl(38, 92%, 56%)",    // amber
+  "hsl(199, 89%, 54%)",   // sky
+  "hsl(330, 81%, 62%)",   // pink
+  "hsl(174, 72%, 40%)",   // teal
+  "hsl(290, 70%, 60%)",   // purple
+  "hsl(15, 80%, 58%)",    // orange
 ];
 
 function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
   const entry = payload[0];
   return (
-    <div className="bg-card border border-border rounded-lg shadow-lg px-3 py-2.5 text-sm">
-      <p className="font-medium text-foreground mb-1">{entry.name}</p>
-      <p className="text-muted-foreground">
+    <div className="rounded-xl border border-white/[0.08] bg-[#0d1428]/90 backdrop-blur-md px-3.5 py-2.5 text-sm shadow-xl">
+      <p className="font-semibold text-white/85 mb-1.5">{entry.name}</p>
+      <p className="text-white/45 text-xs">
         {formatCurrency((entry.value as number) ?? 0, "INR", true)}
       </p>
-      <p className="text-muted-foreground">
+      <p className="text-white/30 text-xs mt-0.5">
         {(entry.payload as { pct: number }).pct?.toFixed(1)}% of total
       </p>
     </div>
   );
 }
 
-function renderLegend({ payload }: { payload?: Array<{ color: string; value: string; payload: { pct: number; amount: number } }> }) {
+function renderLegend({
+  payload,
+}: {
+  payload?: Array<{ color: string; value: string; payload: { pct: number; amount: number } }>;
+}) {
   if (!payload) return null;
   return (
-    <ul className="flex flex-col gap-1.5 text-xs pl-2">
+    <ul className="flex flex-col gap-2 text-xs pl-2">
       {payload.map((entry, index) => (
         <li key={index} className="flex items-center gap-2 min-w-0">
           <span
-            className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0"
+            className="inline-block h-2 w-2 rounded-sm flex-shrink-0"
             style={{ backgroundColor: entry.color }}
           />
-          <span className="truncate text-muted-foreground">{entry.value}</span>
-          <span className="ml-auto text-foreground font-medium pl-2 flex-shrink-0">
+          <span className="truncate text-white/35">{entry.value}</span>
+          <span className="ml-auto text-white/55 font-medium pl-2 flex-shrink-0">
             {entry.payload.pct?.toFixed(1)}%
           </span>
         </li>
@@ -65,7 +69,7 @@ function renderLegend({ payload }: { payload?: Array<{ color: string; value: str
 export function CategoryChart({ data }: CategoryChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-64 text-white/25 text-sm">
         No expense data available
       </div>
     );
@@ -78,26 +82,29 @@ export function CategoryChart({ data }: CategoryChartProps) {
           data={data}
           cx="35%"
           cy="50%"
-          innerRadius={60}
-          outerRadius={90}
+          innerRadius={58}
+          outerRadius={88}
           dataKey="amount"
           nameKey="category"
           paddingAngle={2}
           strokeWidth={0}
         >
           {data.map((_, index) => (
-            <Cell key={index} fill={COLORS[index % COLORS.length]} />
+            <Cell
+              key={index}
+              fill={COLORS[index % COLORS.length]}
+              opacity={0.85}
+            />
           ))}
         </Pie>
         <text
           x="35%"
-          y="50%"
+          y="48%"
           textAnchor="middle"
           dominantBaseline="middle"
-          className="fill-muted-foreground"
-          style={{ fontSize: "11px", fontWeight: 500 }}
+          style={{ fontSize: "10px", fill: "rgba(255,255,255,0.25)", fontWeight: 500 }}
         >
-          Expenses
+          Spend
         </text>
         <Tooltip content={<CustomTooltip />} />
         <Legend

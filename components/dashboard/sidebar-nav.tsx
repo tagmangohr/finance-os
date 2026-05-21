@@ -52,25 +52,33 @@ export function SidebarNav({ org, userEmail }: SidebarNavProps) {
   return (
     <aside
       className={cn(
-        "relative flex flex-col bg-card border-r border-border transition-all duration-200",
+        "relative flex flex-col bg-[#060a14] border-r border-white/[0.05] transition-all duration-300 ease-out",
         collapsed ? "w-16" : "w-60"
       )}
     >
+      {/* Ambient top glow */}
+      <div className="pointer-events-none absolute top-0 left-0 right-0 h-32 bg-gradient-to-b from-primary/[0.06] to-transparent" />
+
       {/* Logo */}
-      <div className={cn("flex items-center gap-2 px-4 h-16 border-b border-border", collapsed && "justify-center px-0")}>
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center flex-shrink-0">
-          <TrendingUp className="w-4 h-4 text-primary-foreground" />
+      <div
+        className={cn(
+          "relative flex items-center gap-2.5 px-4 h-16 border-b border-white/[0.05]",
+          collapsed && "justify-center px-0"
+        )}
+      >
+        <div className="relative w-8 h-8 rounded-lg bg-primary/20 border border-primary/30 flex items-center justify-center flex-shrink-0 shadow-[0_0_12px_hsl(258_88%_66%/0.3)]">
+          <TrendingUp className="w-4 h-4 text-primary" />
         </div>
         {!collapsed && (
           <div className="overflow-hidden">
-            <p className="font-semibold text-sm leading-none">Finance OS</p>
-            <p className="text-xs text-muted-foreground truncate max-w-[130px]">{org.name}</p>
+            <p className="font-semibold text-sm leading-none text-white/90 tracking-tight">Finance OS</p>
+            <p className="text-[11px] text-white/30 truncate max-w-[130px] mt-0.5">{org.name}</p>
           </div>
         )}
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 p-2 space-y-0.5">
+      <nav className="flex-1 p-2.5 space-y-0.5 relative">
         {navItems.map((item) => {
           const active = isActive(item.href, item.exact);
           return (
@@ -78,37 +86,55 @@ export function SidebarNav({ org, userEmail }: SidebarNavProps) {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+                "group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150",
                 active
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  ? "bg-primary/[0.12] text-white/90"
+                  : "text-white/35 hover:bg-white/[0.04] hover:text-white/70",
                 collapsed && "justify-center px-0"
               )}
               title={collapsed ? item.label : undefined}
             >
-              <item.icon className="w-4 h-4 flex-shrink-0" />
+              {/* Active left bar */}
+              {active && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-r-full bg-primary shadow-[0_0_8px_hsl(258_88%_66%/0.6)]" />
+              )}
+              <item.icon
+                className={cn(
+                  "w-4 h-4 flex-shrink-0 transition-colors duration-150",
+                  active ? "text-primary" : "text-white/35 group-hover:text-white/60"
+                )}
+              />
               {!collapsed && <span>{item.label}</span>}
+              {/* Active dot */}
+              {active && !collapsed && (
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_hsl(258_88%_66%/0.8)]" />
+              )}
             </Link>
           );
         })}
       </nav>
 
       {/* Footer */}
-      <div className="p-2 border-t border-border">
-        <div className={cn("flex items-center gap-2 px-2 py-2 mb-1", collapsed && "justify-center")}>
-          <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+      <div className="p-2.5 border-t border-white/[0.05]">
+        <div
+          className={cn(
+            "flex items-center gap-2.5 px-3 py-2 mb-1 rounded-lg",
+            collapsed && "justify-center px-0"
+          )}
+        >
+          <div className="w-7 h-7 rounded-full bg-primary/15 border border-primary/25 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-semibold text-primary">
               {userEmail.charAt(0).toUpperCase()}
             </span>
           </div>
           {!collapsed && (
-            <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+            <p className="text-xs text-white/30 truncate">{userEmail}</p>
           )}
         </div>
         <button
           onClick={handleSignOut}
           className={cn(
-            "flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors",
+            "flex items-center gap-2.5 w-full px-3 py-2 rounded-lg text-sm text-white/25 hover:bg-red-500/[0.08] hover:text-red-400 transition-all duration-150",
             collapsed && "justify-center px-0"
           )}
           title={collapsed ? "Sign out" : undefined}
@@ -121,12 +147,12 @@ export function SidebarNav({ org, userEmail }: SidebarNavProps) {
       {/* Collapse toggle */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="absolute -right-3 top-20 w-6 h-6 rounded-full bg-card border border-border flex items-center justify-center hover:bg-accent transition-colors z-10"
+        className="absolute -right-3 top-20 w-6 h-6 rounded-full bg-[#0c1221] border border-white/[0.08] flex items-center justify-center hover:border-primary/40 hover:bg-primary/10 transition-all duration-150 z-10 shadow-md"
       >
         {collapsed ? (
-          <ChevronRight className="w-3 h-3" />
+          <ChevronRight className="w-3 h-3 text-white/40" />
         ) : (
-          <ChevronLeft className="w-3 h-3" />
+          <ChevronLeft className="w-3 h-3 text-white/40" />
         )}
       </button>
     </aside>

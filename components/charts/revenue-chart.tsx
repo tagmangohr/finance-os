@@ -28,9 +28,9 @@ function CustomTooltip({ active, payload, label }: TooltipProps<number, string>)
   }
 
   return (
-    <div className="bg-card border border-border rounded-lg shadow-lg px-3 py-2.5 text-sm">
-      <p className="text-muted-foreground mb-1">{displayDate}</p>
-      <p className="font-semibold text-foreground">
+    <div className="rounded-xl border border-white/[0.08] bg-[#0d1428]/90 backdrop-blur-md px-3.5 py-2.5 text-sm shadow-xl">
+      <p className="text-white/40 text-xs mb-1.5">{displayDate}</p>
+      <p className="font-bold text-white/90 text-base">
         {formatCurrency(payload[0].value ?? 0, "INR", false)}
       </p>
     </div>
@@ -55,7 +55,7 @@ function formatXAxis(value: string): string {
 export function RevenueChart({ data }: RevenueChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-64 text-white/25 text-sm">
         No revenue data available
       </div>
     );
@@ -63,38 +63,59 @@ export function RevenueChart({ data }: RevenueChartProps) {
 
   return (
     <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+      <AreaChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor="hsl(221.2, 83.2%, 53.3%)" stopOpacity={0.25} />
-            <stop offset="95%" stopColor="hsl(221.2, 83.2%, 53.3%)" stopOpacity={0} />
+            <stop offset="0%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0.3} />
+            <stop offset="60%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0.06} />
+            <stop offset="100%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0} />
           </linearGradient>
+          <filter id="revenueGlow">
+            <feGaussianBlur stdDeviation="2" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="hsl(214.3, 31.8%, 91.4%)" vertical={false} />
+        <CartesianGrid
+          strokeDasharray="3 3"
+          stroke="rgba(255,255,255,0.04)"
+          vertical={false}
+        />
         <XAxis
           dataKey="month"
           tickFormatter={formatXAxis}
-          tick={{ fontSize: 12, fill: "hsl(215.4, 16.3%, 46.9%)" }}
+          tick={{ fontSize: 11, fill: "rgba(255,255,255,0.3)" }}
           axisLine={false}
           tickLine={false}
           dy={8}
         />
         <YAxis
           tickFormatter={formatYAxis}
-          tick={{ fontSize: 11, fill: "hsl(215.4, 16.3%, 46.9%)" }}
+          tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }}
           axisLine={false}
           tickLine={false}
-          width={56}
+          width={52}
         />
-        <Tooltip content={<CustomTooltip />} cursor={{ stroke: "hsl(221.2, 83.2%, 53.3%)", strokeWidth: 1, strokeDasharray: "4 4" }} />
+        <Tooltip
+          content={<CustomTooltip />}
+          cursor={{ stroke: "rgba(255,255,255,0.08)", strokeWidth: 1, strokeDasharray: "4 4" }}
+        />
         <Area
           type="monotone"
           dataKey="amount"
-          stroke="hsl(221.2, 83.2%, 53.3%)"
+          stroke="hsl(258, 88%, 66%)"
           strokeWidth={2}
           fill="url(#revenueGradient)"
           dot={false}
-          activeDot={{ r: 4, strokeWidth: 0, fill: "hsl(221.2, 83.2%, 53.3%)" }}
+          activeDot={{
+            r: 4,
+            strokeWidth: 0,
+            fill: "hsl(258, 88%, 66%)",
+            filter: "drop-shadow(0 0 6px hsl(258 88% 66% / 0.8))",
+          }}
+          filter="url(#revenueGlow)"
         />
       </AreaChart>
     </ResponsiveContainer>

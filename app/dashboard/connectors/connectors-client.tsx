@@ -10,12 +10,12 @@ import {
   Link2,
   X,
   AlertCircle,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn, formatDate } from "@/lib/utils";
 import type { Connector } from "@/lib/supabase/types";
 
@@ -119,7 +119,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
 
-  // CSV state
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
@@ -142,7 +141,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     const headers = firstLine.split(",").map((h) => h.trim().replace(/^"|"$/g, ""));
     setCsvHeaders(headers);
 
-    // Auto-detect common header names
     const autoMap: Record<string, string> = {};
     headers.forEach((h) => {
       const lower = h.toLowerCase();
@@ -237,124 +235,116 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   };
 
   return (
-    <div className="space-y-6 max-w-[1400px]">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Connectors</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
+    <div className="space-y-5 max-w-[1400px]">
+      <div className="animate-enter">
+        <h1 className="text-xl font-bold text-white/85">Connectors</h1>
+        <p className="text-sm text-white/30 mt-0.5">
           Connect your payment gateways and accounting software
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {CONNECTOR_DEFS.map((def) => {
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {CONNECTOR_DEFS.map((def, i) => {
           const existing = getConnectorStatus(def.type);
           const isConnected = existing?.status === "active";
           const isError = existing?.status === "error";
 
           return (
-            <Card
+            <div
               key={def.type}
               className={cn(
-                "relative transition-shadow hover:shadow-md",
-                isConnected && "ring-1 ring-green-500/30"
+                "relative rounded-2xl border bg-card p-5 transition-all duration-200 hover:border-white/[0.1] hover:-translate-y-0.5 shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
+                isConnected
+                  ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
+                  : isError
+                  ? "border-red-500/20"
+                  : "border-border/60"
               )}
+              style={{ animationDelay: `${i * 0.04}s` }}
             >
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{def.icon}</span>
-                    <div>
-                      <CardTitle className="text-sm">{def.name}</CardTitle>
-                      <p className="text-xs text-muted-foreground mt-0.5">{def.description}</p>
-                    </div>
-                  </div>
-                  {isConnected ? (
-                    <Badge variant="success" className="flex-shrink-0">
-                      <CheckCircle2 className="h-3 w-3 mr-1" />
-                      Connected
-                    </Badge>
-                  ) : isError ? (
-                    <Badge variant="destructive" className="flex-shrink-0">
-                      <XCircle className="h-3 w-3 mr-1" />
-                      Error
-                    </Badge>
-                  ) : (
-                    <Badge variant="secondary" className="flex-shrink-0">
-                      Not connected
-                    </Badge>
-                  )}
+              {/* Connected glow indicator */}
+              {isConnected && (
+                <div className="absolute top-4 right-4 flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
+                  <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
                 </div>
-              </CardHeader>
-              <CardContent>
-                {existing?.last_synced_at && (
-                  <p className="text-xs text-muted-foreground mb-3">
-                    Last synced: {formatDate(existing.last_synced_at)}
-                  </p>
+              )}
+
+              <div className="flex items-start gap-3 mb-4">
+                <span className="text-2xl leading-none mt-0.5">{def.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-white/80">{def.name}</p>
+                  <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
+                </div>
+              </div>
+
+              {existing?.last_synced_at && (
+                <p className="text-[11px] text-white/20 mb-3">
+                  Synced {formatDate(existing.last_synced_at)}
+                </p>
+              )}
+
+              <div className="flex gap-2">
+                {isConnected ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12] transition-all"
+                    onClick={() => handleSync(existing)}
+                    disabled={syncingId === existing.id}
+                  >
+                    <RefreshCw
+                      className={cn("h-3.5 w-3.5", syncingId === existing.id && "animate-spin")}
+                    />
+                    {syncingId === existing.id ? "Syncing…" : "Sync Now"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="gap-1.5 flex-1 transition-all"
+                    onClick={() => handleOpenModal(def)}
+                  >
+                    {def.isCSV ? (
+                      <>
+                        <Upload className="h-3.5 w-3.5" />
+                        Upload
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="h-3.5 w-3.5" />
+                        Connect
+                      </>
+                    )}
+                  </Button>
                 )}
-                <div className="flex gap-2">
-                  {isConnected ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5 flex-1"
-                      onClick={() => handleSync(existing)}
-                      disabled={syncingId === existing.id}
-                    >
-                      <RefreshCw
-                        className={cn(
-                          "h-3.5 w-3.5",
-                          syncingId === existing.id && "animate-spin"
-                        )}
-                      />
-                      {syncingId === existing.id ? "Syncing…" : "Sync Now"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      className="gap-1.5 flex-1"
-                      onClick={() => handleOpenModal(def)}
-                    >
-                      {def.isCSV ? (
-                        <>
-                          <Upload className="h-3.5 w-3.5" />
-                          Upload
-                        </>
-                      ) : (
-                        <>
-                          <Link2 className="h-3.5 w-3.5" />
-                          Connect
-                        </>
-                      )}
-                    </Button>
-                  )}
-                  {(isConnected || isError) && !def.isCSV && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleOpenModal(def)}
-                      title="Reconfigure"
-                    >
-                      <AlertCircle className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                {(isConnected || isError) && !def.isCSV && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleOpenModal(def)}
+                    title="Reconfigure"
+                    className="text-white/25 hover:text-white/60 hover:bg-white/[0.04]"
+                  >
+                    <AlertCircle className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
           );
         })}
       </div>
 
-      {/* Connect / CSV Modal */}
+      {/* Modal */}
       <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && setOpenModal(null)}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm" />
-          <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-card border border-border rounded-xl shadow-xl p-6 focus:outline-none">
+          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
+          <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] p-6 focus:outline-none animate-scale-in">
             <div className="flex items-center justify-between mb-5">
-              <Dialog.Title className="text-base font-semibold text-foreground">
+              <Dialog.Title className="text-base font-semibold text-white/85">
                 {openModal?.isCSV ? `Upload ${openModal.name}` : `Connect ${openModal?.name}`}
               </Dialog.Title>
               <Dialog.Close asChild>
-                <button className="text-muted-foreground hover:text-foreground transition-colors rounded-md p-1 hover:bg-muted">
+                <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
                   <X className="h-4 w-4" />
                 </button>
               </Dialog.Close>
@@ -370,12 +360,12 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
               />
             ) : (
               <div className="space-y-4">
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-white/35 leading-relaxed">
                   Enter your {openModal?.name} API credentials. They are encrypted and stored securely.
                 </p>
                 {openModal?.fields?.map((field) => (
                   <div key={field.key}>
-                    <label className="text-sm font-medium text-foreground block mb-1.5">
+                    <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
                       {field.label}
                     </label>
                     <Input
@@ -385,23 +375,23 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                       onChange={(e) =>
                         setFormValues((prev) => ({ ...prev, [field.key]: e.target.value }))
                       }
+                      className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
                     />
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex gap-2 mt-6">
+            <div className="flex gap-2.5 mt-6">
               <Dialog.Close asChild>
-                <Button variant="outline" className="flex-1">
+                <Button
+                  variant="outline"
+                  className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                >
                   Cancel
                 </Button>
               </Dialog.Close>
-              <Button
-                className="flex-1"
-                onClick={handleConnect}
-                disabled={loading}
-              >
+              <Button className="flex-1" onClick={handleConnect} disabled={loading}>
                 {loading ? (
                   <>
                     <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
@@ -443,25 +433,25 @@ function CSVUploadForm({
       <div
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors",
+          "border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200",
           csvFile
-            ? "border-green-500 bg-green-50 dark:bg-green-900/10"
-            : "border-border hover:border-primary/50 hover:bg-muted/30"
+            ? "border-emerald-500/30 bg-emerald-500/[0.06]"
+            : "border-white/[0.07] hover:border-primary/30 hover:bg-primary/[0.03]"
         )}
       >
         {csvFile ? (
-          <div className="flex flex-col items-center gap-1">
-            <CheckCircle2 className="h-6 w-6 text-green-600 mb-1" />
-            <p className="text-sm font-medium text-foreground">{csvFile.name}</p>
-            <p className="text-xs text-muted-foreground">
+          <div className="flex flex-col items-center gap-1.5">
+            <CheckCircle2 className="h-6 w-6 text-emerald-400 mb-1" />
+            <p className="text-sm font-medium text-white/75">{csvFile.name}</p>
+            <p className="text-xs text-white/30">
               {(csvFile.size / 1024).toFixed(1)} KB · Click to change
             </p>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-1">
-            <Upload className="h-6 w-6 text-muted-foreground mb-1" />
-            <p className="text-sm font-medium text-foreground">Click to upload CSV</p>
-            <p className="text-xs text-muted-foreground">CSV, XLS, XLSX accepted</p>
+          <div className="flex flex-col items-center gap-1.5">
+            <Upload className="h-6 w-6 text-white/25 mb-1" />
+            <p className="text-sm font-medium text-white/55">Click to upload CSV</p>
+            <p className="text-xs text-white/25">CSV, XLS, XLSX accepted</p>
           </div>
         )}
         <input
@@ -478,27 +468,26 @@ function CSVUploadForm({
 
       {csvHeaders.length > 0 && (
         <div>
-          <p className="text-sm font-medium text-foreground mb-2">Column Mapping</p>
-          <p className="text-xs text-muted-foreground mb-3">
+          <p className="text-xs font-medium text-white/55 mb-1.5 uppercase tracking-wide">Column Mapping</p>
+          <p className="text-xs text-white/25 mb-3">
             Auto-detected {Object.values(csvMapping).filter(Boolean).length} of {csvHeaders.length} columns.
-            Adjust as needed.
           </p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {csvHeaders.map((header) => (
               <div key={header} className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-28 truncate flex-shrink-0 font-mono bg-muted px-1.5 py-0.5 rounded">
+                <span className="text-xs text-white/30 w-28 truncate flex-shrink-0 font-mono bg-white/[0.04] border border-white/[0.06] px-1.5 py-0.5 rounded-md">
                   {header}
                 </span>
-                <span className="text-xs text-muted-foreground">→</span>
+                <span className="text-xs text-white/20">→</span>
                 <select
                   value={csvMapping[header] ?? ""}
                   onChange={(e) =>
                     onMappingChange({ ...csvMapping, [header]: e.target.value })
                   }
-                  className="flex-1 text-xs rounded border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+                  className="flex-1 text-xs rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/60 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
                 >
                   {CSV_COLUMN_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
+                    <option key={opt.value} value={opt.value} className="bg-[#0c1221]">
                       {opt.label}
                     </option>
                   ))}

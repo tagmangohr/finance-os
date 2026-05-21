@@ -30,14 +30,14 @@ function CustomTooltip({ active, payload, label }: TooltipProps<number, string>)
   }
 
   return (
-    <div className="bg-card border border-border rounded-lg shadow-lg px-3 py-2.5 text-sm min-w-[160px]">
-      <p className="text-muted-foreground mb-2 font-medium">{displayDate}</p>
+    <div className="rounded-xl border border-white/[0.08] bg-[#0d1428]/90 backdrop-blur-md px-3.5 py-2.5 text-sm shadow-xl min-w-[160px]">
+      <p className="text-white/40 text-xs font-medium mb-2">{displayDate}</p>
       {payload.map((entry) => (
-        <div key={entry.name} className="flex justify-between gap-4 mb-0.5">
-          <span style={{ color: entry.color }} className="capitalize">
-            {entry.name}
+        <div key={entry.name} className="flex justify-between gap-4 mb-1">
+          <span className="text-xs" style={{ color: entry.color }}>
+            {(entry.name as string).charAt(0).toUpperCase() + (entry.name as string).slice(1)}
           </span>
-          <span className="font-semibold text-foreground">
+          <span className="text-xs font-semibold text-white/80">
             {formatCurrency((entry.value as number) ?? 0, "INR", true)}
           </span>
         </div>
@@ -61,10 +61,30 @@ function formatXAxis(value: string): string {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function CustomLegend({ payload }: { payload?: any[] }) {
+  if (!payload) return null;
+  return (
+    <div className="flex items-center justify-center gap-5 pt-3">
+      {payload.map((entry: { color: string; value: string }) => (
+        <div key={entry.value} className="flex items-center gap-1.5">
+          <span
+            className="inline-block h-2 w-2 rounded-sm"
+            style={{ backgroundColor: entry.color }}
+          />
+          <span className="text-[11px] text-white/35">
+            {entry.value.charAt(0).toUpperCase() + entry.value.slice(1)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CashFlowChart({ data }: CashFlowChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-64 text-white/25 text-sm">
         No cash flow data available
       </div>
     );
@@ -74,12 +94,12 @@ export function CashFlowChart({ data }: CashFlowChartProps) {
 
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <ComposedChart data={displayData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="hsl(214.3, 31.8%, 91.4%)" vertical={false} />
+      <ComposedChart data={displayData} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" vertical={false} />
         <XAxis
           dataKey="date"
           tickFormatter={formatXAxis}
-          tick={{ fontSize: 11, fill: "hsl(215.4, 16.3%, 46.9%)" }}
+          tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }}
           axisLine={false}
           tickLine={false}
           dy={8}
@@ -87,28 +107,35 @@ export function CashFlowChart({ data }: CashFlowChartProps) {
         />
         <YAxis
           tickFormatter={formatYAxis}
-          tick={{ fontSize: 11, fill: "hsl(215.4, 16.3%, 46.9%)" }}
+          tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }}
           axisLine={false}
           tickLine={false}
-          width={56}
+          width={52}
         />
         <Tooltip content={<CustomTooltip />} />
-        <Legend
-          wrapperStyle={{ fontSize: "12px", paddingTop: "12px" }}
-          formatter={(value) =>
-            value.charAt(0).toUpperCase() + value.slice(1)
-          }
+        <Legend content={<CustomLegend />} />
+        <Bar
+          dataKey="inflow"
+          name="Inflow"
+          fill="hsl(158, 64%, 48%)"
+          opacity={0.7}
+          radius={[3, 3, 0, 0]}
         />
-        <Bar dataKey="inflow" name="Inflow" fill="hsl(142.1, 76.2%, 36.3%)" opacity={0.8} radius={[2, 2, 0, 0]} />
-        <Bar dataKey="outflow" name="Outflow" fill="hsl(0, 84.2%, 60.2%)" opacity={0.8} radius={[2, 2, 0, 0]} />
+        <Bar
+          dataKey="outflow"
+          name="Outflow"
+          fill="hsl(0, 72%, 56%)"
+          opacity={0.7}
+          radius={[3, 3, 0, 0]}
+        />
         <Line
           type="monotone"
           dataKey="balance"
           name="Balance"
-          stroke="hsl(221.2, 83.2%, 53.3%)"
+          stroke="hsl(258, 88%, 66%)"
           strokeWidth={2}
           dot={false}
-          activeDot={{ r: 4, strokeWidth: 0 }}
+          activeDot={{ r: 4, strokeWidth: 0, fill: "hsl(258, 88%, 66%)" }}
         />
       </ComposedChart>
     </ResponsiveContainer>
