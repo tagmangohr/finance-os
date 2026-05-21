@@ -1,0 +1,397 @@
+"use client";
+
+import * as React from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import {
+  RefreshCw,
+  X,
+  CheckCircle2,
+  AlertCircle,
+  ChevronDown,
+  ArrowRight,
+  Database,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import type { SyncResult } from "@/app/api/sync/route";
+
+// ─── Date range presets ───────────────────────────────────────────────────────
+
+const PRESETS = [
+  { label: "30 days", days: 30 },
+  { label: "90 days", days: 90 },
+  { label: "6 months", days: 180 },
+  { label: "1 year", days: 365 },
+];
+
+function toDateInputValue(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function ResultRow({ r }: { r: SyncResult }) {
+  const [open, setOpen] = React.useState(false);
+  const hasError = !!r.error;
+  const isNew = r.inserted > 0;
+
+  return (
+    <div className={cn(
+      "rounded-xl border transition-all duration-150",
+      hasError ? "border-red-500/20 bg-red-500/[0.04]" : "border-white/[0.07] bg-white/[0.02]"
+    )}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {hasError ? (
+          <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
+        ) : (
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+        )}
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white/80 capitalize">{r.connector_name}</span>
+            <span className="text-[10px] text-white/25 uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.05]">
+              {r.type}
+            </span>
+          </div>
+          {!hasError && (
+            <p className="text-xs text-white/35 mt-0.5">
+              <span className={cn("font-semibold", isNew ? "text-emerald-400" : "text-white/40")}>
+                {r.inserted} new
+              </span>
+              {" · "}
+              {r.fetched} fetched
+              {r.skipped > 0 && ` · ${r.skipped} already existed`}
+            </p>
+          )}
+          {hasError && (
+            <p className="text-xs text-red-400/70 mt-0.5 truncate">{r.error}</p>
+          )}
+        </div>
+
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 text-white/25 transition-transform duration-150 flex-shrink-0",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+
+      {open && (
+        <div className="px-4 pb-3 pt-0 border-t border-white/[0.05]">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mt-3">
+            <DetailRow label="Fetched from API" value={String(r.fetched)} />
+            <DetailRow label="New inserted" value={String(r.inserted)} highlight={r.inserted > 0} />
+            <DetailRow label="Already existed" value={String(r.skipped)} />
+            <DetailRow
+              label="Date range"
+              value={`${new Date(r.from).toLocaleDateString("en-IN", { day: "numeric", month: "short" })} → ${new Date(r.to).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] text-white/25">{label}</span>
+      <span className={cn("text-[11px] font-semibold", highlight ? "text-emerald-400" : "text-white/50")}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ─── Main modal ───────────────────────────────────────────────────────────────
+
+interface SyncModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  orgId: string;
+  onSyncComplete?: () => void;
+}
+
+type SyncState = "idle" | "syncing" | "done" | "error";
+
+interface SyncResponse {
+  results: SyncResult[];
+  total_fetched: number;
+  total_inserted: number;
+  total_skipped: number;
+  from: string;
+  to: string;
+  error?: string;
+}
+
+export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncModalProps) {
+  const today = new Date();
+  const [toDate, setToDate] = React.useState(toDateInputValue(today));
+  const [fromDate, setFromDate] = React.useState(
+    toDateInputValue(new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000))
+  );
+  const [activePreset, setActivePreset] = React.useState<number>(30);
+  const [state, setState] = React.useState<SyncState>("idle");
+  const [response, setResponse] = React.useState<SyncResponse | null>(null);
+
+  function applyPreset(days: number) {
+    const to = new Date();
+    const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
+    setToDate(toDateInputValue(to));
+    setFromDate(toDateInputValue(from));
+    setActivePreset(days);
+  }
+
+  function handleFromChange(v: string) {
+    setFromDate(v);
+    setActivePreset(0); // custom
+  }
+
+  function handleToChange(v: string) {
+    setToDate(v);
+    setActivePreset(0); // custom
+  }
+
+  async function handleSync() {
+    setState("syncing");
+    setResponse(null);
+
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          org_id: orgId,
+          from_date: new Date(fromDate).toISOString(),
+          to_date: new Date(toDate + "T23:59:59").toISOString(),
+        }),
+      });
+
+      const data: SyncResponse = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Sync failed");
+
+      setResponse(data);
+      setState("done");
+      if (data.total_inserted > 0) onSyncComplete?.();
+    } catch (err) {
+      setResponse({ results: [], total_fetched: 0, total_inserted: 0, total_skipped: 0, from: fromDate, to: toDate, error: err instanceof Error ? err.message : "Unknown error" });
+      setState("error");
+    }
+  }
+
+  function handleClose() {
+    if (state === "done" && response?.total_inserted && response.total_inserted > 0) {
+      window.location.reload();
+    }
+    onOpenChange(false);
+    // Reset for next open
+    setTimeout(() => { setState("idle"); setResponse(null); }, 300);
+  }
+
+  const daysDiff = Math.round(
+    (new Date(toDate).getTime() - new Date(fromDate).getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  return (
+    <Dialog.Root open={open} onOpenChange={handleClose}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
+        <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] focus:outline-none animate-scale-in">
+
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/[0.05]">
+            <div className="flex items-center gap-2.5">
+              <div className="h-8 w-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center">
+                <Database className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <Dialog.Title className="text-sm font-semibold text-white/85">Sync Data</Dialog.Title>
+                <p className="text-[11px] text-white/30">Pull transactions from connected sources</p>
+              </div>
+            </div>
+            <Dialog.Close asChild>
+              <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+                <X className="h-4 w-4" />
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <div className="px-6 py-5 space-y-5">
+
+            {/* Date range section */}
+            <div>
+              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-3">Date Range</p>
+
+              {/* Presets */}
+              <div className="flex gap-1.5 mb-3">
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.days}
+                    onClick={() => applyPreset(p.days)}
+                    disabled={state === "syncing"}
+                    className={cn(
+                      "flex-1 h-7 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-40",
+                      activePreset === p.days
+                        ? "bg-primary/15 border border-primary/30 text-primary"
+                        : "bg-white/[0.03] border border-white/[0.07] text-white/35 hover:text-white/60 hover:bg-white/[0.06]"
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setActivePreset(0)}
+                  disabled={state === "syncing"}
+                  className={cn(
+                    "flex-1 h-7 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-40",
+                    activePreset === 0
+                      ? "bg-primary/15 border border-primary/30 text-primary"
+                      : "bg-white/[0.03] border border-white/[0.07] text-white/35 hover:text-white/60 hover:bg-white/[0.06]"
+                  )}
+                >
+                  Custom
+                </button>
+              </div>
+
+              {/* Date inputs */}
+              <div className="flex items-center gap-2">
+                <div className="flex-1">
+                  <label className="text-[10px] text-white/25 block mb-1">From</label>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    max={toDate}
+                    onChange={(e) => handleFromChange(e.target.value)}
+                    disabled={state === "syncing"}
+                    className="w-full h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 text-xs text-white/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
+                  />
+                </div>
+                <ArrowRight className="h-3.5 w-3.5 text-white/20 flex-shrink-0 mt-4" />
+                <div className="flex-1">
+                  <label className="text-[10px] text-white/25 block mb-1">To</label>
+                  <input
+                    type="date"
+                    value={toDate}
+                    min={fromDate}
+                    max={toDateInputValue(new Date())}
+                    onChange={(e) => handleToChange(e.target.value)}
+                    disabled={state === "syncing"}
+                    className="w-full h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 text-xs text-white/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
+                  />
+                </div>
+              </div>
+
+              {daysDiff > 0 && (
+                <p className="text-[11px] text-white/25 mt-2">
+                  Pulling <span className="text-white/50 font-medium">{daysDiff} days</span> of data
+                  {daysDiff > 90 && (
+                    <span className="text-amber-400/60 ml-2">· may take a moment for large datasets</span>
+                  )}
+                </p>
+              )}
+            </div>
+
+            {/* Results */}
+            {state !== "idle" && (
+              <div>
+                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-3">Results</p>
+
+                {state === "syncing" && (
+                  <div className="flex items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-4">
+                    <RefreshCw className="h-4 w-4 text-primary animate-spin flex-shrink-0" />
+                    <div>
+                      <p className="text-sm text-white/60 font-medium">Syncing…</p>
+                      <p className="text-xs text-white/25 mt-0.5">Fetching from all connected sources</p>
+                    </div>
+                  </div>
+                )}
+
+                {(state === "done" || state === "error") && response && (
+                  <div className="space-y-2">
+                    {/* Error (no connectors / network error) */}
+                    {response.error && (
+                      <div className="flex items-center gap-2.5 rounded-xl border border-red-500/20 bg-red-500/[0.04] px-4 py-3">
+                        <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
+                        <p className="text-sm text-red-400/80">{response.error}</p>
+                      </div>
+                    )}
+
+                    {/* No connectors */}
+                    {!response.error && response.results.length === 0 && (
+                      <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-4 text-center">
+                        <p className="text-sm text-white/35">No active connectors found.</p>
+                        <p className="text-xs text-white/20 mt-1">Connect Razorpay or Stripe first.</p>
+                      </div>
+                    )}
+
+                    {/* Per-connector rows */}
+                    {response.results.map((r) => (
+                      <ResultRow key={r.connector_id} r={r} />
+                    ))}
+
+                    {/* Summary */}
+                    {response.results.length > 0 && (
+                      <div className="flex items-center justify-between rounded-xl bg-white/[0.025] border border-white/[0.05] px-4 py-3 mt-1">
+                        <span className="text-xs text-white/30">Total</span>
+                        <div className="flex items-center gap-4 text-xs">
+                          <span className="text-white/35">{response.total_fetched} fetched</span>
+                          <span className={cn("font-semibold", response.total_inserted > 0 ? "text-emerald-400" : "text-white/40")}>
+                            {response.total_inserted} new
+                          </span>
+                          {response.total_skipped > 0 && (
+                            <span className="text-white/25">{response.total_skipped} skipped</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="flex gap-2.5 px-6 pb-5">
+            <Dialog.Close asChild>
+              <Button
+                variant="outline"
+                className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+              >
+                {state === "done" ? "Close" : "Cancel"}
+              </Button>
+            </Dialog.Close>
+            {state !== "done" && (
+              <Button
+                className="flex-1 shadow-[0_0_16px_hsl(258_88%_66%/0.2)]"
+                onClick={handleSync}
+                disabled={state === "syncing" || !fromDate || !toDate}
+              >
+                {state === "syncing" ? (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 mr-2 animate-spin" />
+                    Syncing…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-3.5 w-3.5 mr-2" />
+                    Start Sync
+                  </>
+                )}
+              </Button>
+            )}
+            {state === "done" && response && response.total_inserted > 0 && (
+              <Button className="flex-1" onClick={handleClose}>
+                Reload dashboard
+              </Button>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

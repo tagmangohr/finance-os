@@ -5,36 +5,40 @@ import { StripeConnector } from "@/lib/connectors/stripe";
 import { NormalizedTransaction } from "@/lib/normalizer";
 import type { Database } from "@/lib/supabase/types";
 
-type TransactionInsert =
-  Database["public"]["Tables"]["transactions"]["Insert"];
+type TransactionInsert = Database["public"]["Tables"]["transactions"]["Insert"];
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
-type SyncResult = {
+export type SyncResult = {
   connector_id: string;
+  connector_name: string;
   type: string;
-  synced: number;
+  fetched: number;    // total transactions returned by the API
+  inserted: number;   // new rows actually added to DB
+  skipped: number;    // already existed — not re-inserted
+  from: string;
+  to: string;
   error?: string;
 };
 
 // ─── POST /api/sync ───────────────────────────────────────────────────────────
-// Body: { org_id: string }
+// Body: { org_id: string; from_date?: string; to_date?: string }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  let body: { org_id?: string };
+  let body: { org_id?: string; from_date?: string; to_date?: string };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { org_id } = body;
+  const { org_id, from_date, to_date } = body;
   if (!org_id) {
     return NextResponse.json({ error: "org_id is required" }, { status: 400 });
   }
 
   const supabase = await createServiceClient();
 
-  // ── Fetch all active connectors for this org ──────────────────────────────
+  // ── Fetch all active connectors ───────────────────────────────────────────
   const { data: connectors, error: connErr } = await supabase
     .from("connectors")
     .select("*")
@@ -50,25 +54,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   if (!connectors || connectors.length === 0) {
-    return NextResponse.json({ results: [] });
+    return NextResponse.json({ results: [], total_fetched: 0, total_inserted: 0, total_skipped: 0 });
   }
 
-  // Sync window: last 30 days
-  const toDate = new Date();
-  const fromDate = new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+  // ── Resolve date range ────────────────────────────────────────────────────
+  const toDate = to_date ? new Date(to_date) : new Date();
+  const fromDate = from_date
+    ? new Date(from_date)
+    : new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
   // ── Sync each connector in parallel ──────────────────────────────────────
-  const syncPromises = connectors.map(
-    (connector: ConnectorRow): Promise<SyncResult> =>
-      syncConnector(connector, org_id, fromDate, toDate, supabase)
+  const results = await Promise.all(
+    connectors.map((c: ConnectorRow) => syncConnector(c, org_id, fromDate, toDate, supabase))
   );
 
-  const results = await Promise.all(syncPromises);
+  const total_fetched = results.reduce((s, r) => s + r.fetched, 0);
+  const total_inserted = results.reduce((s, r) => s + r.inserted, 0);
+  const total_skipped = results.reduce((s, r) => s + r.skipped, 0);
 
-  return NextResponse.json({ results });
+  return NextResponse.json({
+    results,
+    total_fetched,
+    total_inserted,
+    total_skipped,
+    from: fromDate.toISOString(),
+    to: toDate.toISOString(),
+  });
 }
 
-// ─── Per-connector sync logic ─────────────────────────────────────────────────
+// ─── Per-connector sync ───────────────────────────────────────────────────────
 
 async function syncConnector(
   connector: ConnectorRow,
@@ -80,8 +94,13 @@ async function syncConnector(
 ): Promise<SyncResult> {
   const result: SyncResult = {
     connector_id: connector.id,
+    connector_name: connector.name,
     type: connector.type,
-    synced: 0,
+    fetched: 0,
+    inserted: 0,
+    skipped: 0,
+    from: fromDate.toISOString(),
+    to: toDate.toISOString(),
   };
 
   try {
@@ -90,9 +109,7 @@ async function syncConnector(
 
     if (connector.type === "razorpay") {
       const { key_id, key_secret } = config;
-      if (!key_id || !key_secret) {
-        throw new Error("Missing key_id or key_secret");
-      }
+      if (!key_id || !key_secret) throw new Error("Missing key_id or key_secret");
       const razorpay = new RazorpayConnector(key_id, key_secret);
       const [payments, payouts] = await Promise.all([
         razorpay.fetchPayments(fromDate, toDate),
@@ -101,9 +118,7 @@ async function syncConnector(
       transactions = [...payments, ...payouts];
     } else if (connector.type === "stripe") {
       const { secret_key } = config;
-      if (!secret_key) {
-        throw new Error("Missing secret_key");
-      }
+      if (!secret_key) throw new Error("Missing secret_key");
       const stripe = new StripeConnector(secret_key);
       const [charges, payouts] = await Promise.all([
         stripe.fetchCharges(fromDate, toDate),
@@ -113,6 +128,8 @@ async function syncConnector(
     } else {
       throw new Error(`Unsupported connector type: ${connector.type}`);
     }
+
+    result.fetched = transactions.length;
 
     if (transactions.length > 0) {
       const rows: TransactionInsert[] = transactions.map((tx) => ({
@@ -133,9 +150,7 @@ async function syncConnector(
         metadata: tx.metadata as import("@/lib/supabase/types").Json,
       }));
 
-      // The DB has a partial unique index (WHERE external_id IS NOT NULL) which
-      // PostgREST can't resolve via onConflict column list. Instead: fetch
-      // already-synced external_ids, then insert only the truly new rows.
+      // Fetch already-synced external_ids to avoid duplicate inserts
       const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
       let existingIds = new Set<string>();
       if (externalIds.length > 0) {
@@ -145,20 +160,21 @@ async function syncConnector(
           .eq("org_id", orgId)
           .eq("connector_id", connector.id)
           .in("external_id", externalIds);
-        existingIds = new Set((existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? ""));
+        existingIds = new Set(
+          (existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? "")
+        );
       }
 
       const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
+      result.skipped = rows.length - newRows.length;
 
       if (newRows.length > 0) {
         const { error: insertErr, count } = await supabase
           .from("transactions")
           .insert(newRows, { count: "exact" });
 
-        if (insertErr) {
-          throw new Error(`Insert failed: ${insertErr.message}`);
-        }
-        result.synced = count ?? newRows.length;
+        if (insertErr) throw new Error(`Insert failed: ${insertErr.message}`);
+        result.inserted = count ?? newRows.length;
       }
     }
 
@@ -167,10 +183,9 @@ async function syncConnector(
       .from("connectors")
       .update({ last_synced_at: new Date().toISOString() })
       .eq("id", connector.id);
+
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
-
-    // Mark connector as error state
     await supabase
       .from("connectors")
       .update({ status: "error" })
