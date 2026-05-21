@@ -4,10 +4,12 @@ import {
   RazorpayPayout,
   RazorpayRefund,
   RazorpaySettlement,
+  RazorpayDispute,
   normalizeRazorpayPayment,
   normalizeRazorpayPayout,
   normalizeRazorpayRefund,
   normalizeRazorpaySettlement,
+  normalizeRazorpayDispute,
 } from "@/lib/normalizer";
 
 const RAZORPAY_BASE = "https://api.razorpay.com/v1";
@@ -175,6 +177,38 @@ export class RazorpayConnector {
       const items: RazorpaySettlement[] = data.items ?? [];
       for (const settlement of items) {
         results.push(normalizeRazorpaySettlement(settlement));
+      }
+
+      if (items.length < PAGE_SIZE) break;
+      skip += PAGE_SIZE;
+    }
+
+    return results;
+  }
+
+  // ─── Disputes / Chargebacks ───────────────────────────────────────────────
+
+  async fetchDisputes(
+    fromDate: Date,
+    toDate: Date
+  ): Promise<NormalizedTransaction[]> {
+    const results: NormalizedTransaction[] = [];
+    let skip = 0;
+
+    while (true) {
+      const data = await this.get<{ items: RazorpayDispute[]; count: number }>(
+        "/disputes",
+        {
+          from: Math.floor(fromDate.getTime() / 1000),
+          to: Math.floor(toDate.getTime() / 1000),
+          count: PAGE_SIZE,
+          skip,
+        }
+      );
+
+      const items: RazorpayDispute[] = data.items ?? [];
+      for (const dispute of items) {
+        results.push(normalizeRazorpayDispute(dispute));
       }
 
       if (items.length < PAGE_SIZE) break;

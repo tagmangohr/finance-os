@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { RazorpayConnector } from "@/lib/connectors/razorpay";
 import { StripeConnector } from "@/lib/connectors/stripe";
 import { NormalizedTransaction } from "@/lib/normalizer";
+import { getExistingExternalIds } from "@/lib/db/dedup";
 import type { Database } from "@/lib/supabase/types";
 
 type TransactionInsert = Database["public"]["Tables"]["transactions"]["Insert"];
@@ -113,12 +114,14 @@ async function syncConnector(
       if (!key_id || !key_secret) throw new Error("Missing key_id or key_secret");
       const razorpay = new RazorpayConnector(key_id, key_secret);
 
-      const [paymentsRes, payoutsRes, refundsRes, settlementsRes] = await Promise.allSettled([
-        razorpay.fetchPayments(fromDate, toDate),
-        razorpay.fetchPayouts(fromDate, toDate),
-        razorpay.fetchRefunds(fromDate, toDate),
-        razorpay.fetchSettlements(fromDate, toDate),
-      ]);
+      const [paymentsRes, payoutsRes, refundsRes, settlementsRes, disputesRes] =
+        await Promise.allSettled([
+          razorpay.fetchPayments(fromDate, toDate),
+          razorpay.fetchPayouts(fromDate, toDate),
+          razorpay.fetchRefunds(fromDate, toDate),
+          razorpay.fetchSettlements(fromDate, toDate),
+          razorpay.fetchDisputes(fromDate, toDate),
+        ]);
 
       const addWarning = (label: string, reason: unknown) => {
         const msg = reason instanceof Error ? reason.message : String(reason);
@@ -140,6 +143,9 @@ async function syncConnector(
 
       if (settlementsRes.status === "fulfilled") transactions.push(...settlementsRes.value);
       else addWarning("settlements", settlementsRes.reason);
+
+      if (disputesRes.status === "fulfilled") transactions.push(...disputesRes.value);
+      else addWarning("disputes", disputesRes.reason);
     } else if (connector.type === "stripe") {
       const { secret_key } = config;
       if (!secret_key) throw new Error("Missing secret_key");
@@ -174,20 +180,13 @@ async function syncConnector(
         metadata: tx.metadata as import("@/lib/supabase/types").Json,
       }));
 
-      // Fetch already-synced external_ids to avoid duplicate inserts
+      // Batched dedup — throws if DB query fails (so we surface the error
+      // rather than silently treating every row as new and re-inserting)
       const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
-      let existingIds = new Set<string>();
-      if (externalIds.length > 0) {
-        const { data: existing } = await supabase
-          .from("transactions")
-          .select("external_id")
-          .eq("org_id", orgId)
-          .eq("connector_id", connector.id)
-          .in("external_id", externalIds);
-        existingIds = new Set(
-          (existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? "")
-        );
-      }
+      const existingIds =
+        externalIds.length > 0
+          ? await getExistingExternalIds(supabase, orgId, connector.id, externalIds)
+          : new Set<string>();
 
       const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
       result.skipped = rows.length - newRows.length;

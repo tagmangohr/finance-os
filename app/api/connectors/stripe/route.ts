@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { StripeConnector } from "@/lib/connectors/stripe";
 import { NormalizedTransaction } from "@/lib/normalizer";
+import { getExistingExternalIds } from "@/lib/db/dedup";
 import type { Database } from "@/lib/supabase/types";
 
 type TransactionInsert =
@@ -113,18 +114,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       metadata: tx.metadata as import("@/lib/supabase/types").Json,
     }));
 
-    // Fetch already-synced external_ids to avoid duplicate inserts
+    // Batched dedup — throws if DB query fails
     const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
-    let existingIds = new Set<string>();
-    if (externalIds.length > 0) {
-      const { data: existing } = await supabase
-        .from("transactions")
-        .select("external_id")
-        .eq("org_id", org_id)
-        .eq("connector_id", connector_id)
-        .in("external_id", externalIds);
-      existingIds = new Set((existing ?? []).map((r: { external_id: string | null }) => r.external_id ?? ""));
-    }
+    const existingIds =
+      externalIds.length > 0
+        ? await getExistingExternalIds(supabase, org_id, connector_id, externalIds)
+        : new Set<string>();
 
     const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
 

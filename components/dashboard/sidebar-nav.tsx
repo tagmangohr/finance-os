@@ -7,9 +7,9 @@ import {
   LayoutDashboard,
   DollarSign,
   ArrowLeftRight,
-  Users,
   Brain,
   Plug,
+  Table2,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +25,7 @@ const navItems = [
   { href: "/dashboard/collections", label: "Collections", icon: DollarSign },
   { href: "/dashboard/intelligence", label: "AI Intelligence", icon: Brain },
   { href: "/dashboard/connectors", label: "Connectors", icon: Plug },
+  { href: "/dashboard/data", label: "Raw Data", icon: Table2 },
 ];
 
 interface SidebarNavProps {

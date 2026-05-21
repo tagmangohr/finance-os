@@ -13,6 +13,7 @@ const PAGE_TITLES: Record<string, { title: string; emoji: string }> = {
   "/dashboard/collections": { title: "Collections", emoji: "📬" },
   "/dashboard/intelligence": { title: "AI Intelligence", emoji: "🧠" },
   "/dashboard/connectors": { title: "Connectors", emoji: "🔌" },
+  "/dashboard/data": { title: "Raw Data", emoji: "🗄️" },
 };
 
 interface TopBarProps {

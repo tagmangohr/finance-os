@@ -56,6 +56,21 @@ export type RazorpayPayout = {
   notes: Record<string, unknown>;
 };
 
+export type RazorpayDispute = {
+  id: string;
+  entity: string;
+  payment_id: string;
+  amount: number; // in paise
+  currency: string;
+  created_at: number;
+  status: string; // open | under_review | won | lost | closed | accepted
+  reason_code: string | null;
+  reason_description: string | null;
+  phase: string | null; // chargeback | pre_arbitration | arbitration
+  respondby: number | null;
+  comments: string | null;
+};
+
 export type RazorpayRefund = {
   id: string;
   entity: string;
@@ -260,6 +275,48 @@ export function normalizeRazorpayPayout(
       tax: payout.tax / 100,
       processed_at: payout.processed_at,
       notes: payout.notes,
+    },
+  };
+}
+
+export function normalizeRazorpayDispute(
+  dispute: RazorpayDispute
+): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  switch (dispute.status) {
+    case "won":
+    case "closed":
+      status = "completed"; // resolved in merchant's favour
+      break;
+    case "lost":
+    case "accepted":
+      status = "failed"; // merchant lost the chargeback
+      break;
+    default:
+      status = "pending"; // open | under_review
+  }
+
+  const reason =
+    dispute.reason_description ?? dispute.reason_code ?? "Unknown reason";
+
+  return {
+    external_id: dispute.id,
+    type: "debit",
+    amount: dispute.amount / 100,
+    currency: (dispute.currency ?? "INR").toUpperCase(),
+    category: "dispute",
+    counterparty_name: null,
+    description: `Dispute (${dispute.phase ?? "chargeback"}): ${reason} · payment ${dispute.payment_id}`,
+    source: "razorpay_dispute",
+    status,
+    transaction_date: unixToDateString(dispute.created_at),
+    metadata: {
+      payment_id: dispute.payment_id,
+      phase: dispute.phase,
+      reason_code: dispute.reason_code,
+      reason_description: dispute.reason_description,
+      respondby: dispute.respondby,
+      comments: dispute.comments,
     },
   };
 }

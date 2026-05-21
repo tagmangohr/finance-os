@@ -4,20 +4,21 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   CheckCircle2,
-  XCircle,
   RefreshCw,
   Upload,
-  Link2,
   X,
   AlertCircle,
   Zap,
+  Trash2,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { cn, formatDate } from "@/lib/utils";
 import type { Connector } from "@/lib/supabase/types";
+
+// ─── Connector definitions ────────────────────────────────────────────────────
 
 interface ConnectorDef {
   type: Connector["type"];
@@ -32,7 +33,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   {
     type: "razorpay",
     name: "Razorpay",
-    description: "Auto-sync payments, settlements, refunds",
+    description: "Payments, refunds, settlements, disputes",
     icon: "💳",
     fields: [
       { key: "key_id", label: "Key ID", placeholder: "rzp_live_..." },
@@ -42,7 +43,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   {
     type: "stripe",
     name: "Stripe",
-    description: "Pull charges, payouts, and invoices",
+    description: "Charges, payouts, and invoices",
     icon: "⚡",
     fields: [
       { key: "secret_key", label: "Secret Key", type: "password", placeholder: "sk_live_..." },
@@ -51,7 +52,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   {
     type: "zoho",
     name: "Zoho Books",
-    description: "Import invoices, bills, and journal entries",
+    description: "Invoices, bills, and journal entries",
     icon: "📚",
     fields: [
       { key: "client_id", label: "Client ID", placeholder: "1000.XXXX..." },
@@ -62,7 +63,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   {
     type: "quickbooks",
     name: "QuickBooks",
-    description: "Sync P&L, balance sheet, transactions",
+    description: "P&L, balance sheet, transactions",
     icon: "🟢",
     fields: [
       { key: "client_id", label: "Client ID", placeholder: "ABc1234..." },
@@ -73,7 +74,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   {
     type: "tally",
     name: "Tally",
-    description: "Import Tally ERP vouchers and ledgers",
+    description: "Tally ERP vouchers and ledgers",
     icon: "🧾",
     fields: [
       { key: "host", label: "Tally Host", placeholder: "localhost" },
@@ -107,28 +108,39 @@ const CSV_COLUMN_OPTIONS = [
   { value: "counterparty", label: "Counterparty / Name" },
 ];
 
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface ConnectorsClientProps {
   orgId: string;
   connectors: Connector[];
 }
 
+// ─── Main component ───────────────────────────────────────────────────────────
+
 export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
   const [openModal, setOpenModal] = React.useState<ConnectorDef | null>(null);
+  // formValues holds both the "name" key and any API credential keys
   const [formValues, setFormValues] = React.useState<Record<string, string>>({});
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
+  const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
 
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
 
-  const getConnectorStatus = (type: Connector["type"]) =>
-    activeConnectors.find((c) => c.type === type);
+  // All connected instances of a given type
+  const getConnectorsOfType = (type: Connector["type"]) =>
+    activeConnectors.filter((c) => c.type === type);
 
   const handleOpenModal = (def: ConnectorDef) => {
     setOpenModal(def);
-    setFormValues({});
+    // Pre-fill name so the user can just change the number/label
+    const existingCount = getConnectorsOfType(def.type).length;
+    setFormValues({
+      name: existingCount === 0 ? def.name : `${def.name} ${existingCount + 1}`,
+    });
     setCsvFile(null);
     setCsvHeaders([]);
     setCsvMapping({});
@@ -161,8 +173,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     setLoading(true);
 
     try {
-      let body: Record<string, unknown> = { type: openModal.type, org_id: orgId };
-
       if (openModal.isCSV) {
         if (!csvFile) {
           toast.error("Please upload a file first");
@@ -184,26 +194,28 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         return;
       }
 
-      // /api/connectors/manage requires: { org_id, type, name, config, status }
-      body = { ...body, name: openModal.name, config: formValues, status: "active" };
+      // Extract name from formValues, pass the rest as config
+      const { name: connectorName, ...credFields } = formValues;
+      const body = {
+        org_id: orgId,
+        type: openModal.type,
+        name: connectorName?.trim() || openModal.name,
+        config: credFields,
+        status: "active",
+      };
+
       const res = await fetch("/api/connectors/manage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(await res.text());
-      // manage route returns the connector row directly (not wrapped in { connector })
       const connector = await res.json();
 
-      setActiveConnectors((prev) => {
-        const existing = prev.find((c) => c.type === openModal.type);
-        if (existing) {
-          return prev.map((c) => (c.type === openModal.type ? { ...c, status: "active" } : c));
-        }
-        return [...prev, connector];
-      });
+      // Always append — never replace — so multiple accounts work
+      setActiveConnectors((prev) => [...prev, connector]);
 
-      toast.success(`${openModal.name} connected successfully`);
+      toast.success(`${connectorName || openModal.name} connected`);
       setOpenModal(null);
     } catch (err) {
       toast.error(`Failed to connect: ${err instanceof Error ? err.message : "Unknown error"}`);
@@ -215,7 +227,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const handleSync = async (connector: Connector) => {
     setSyncingId(connector.id);
     try {
-      // Route each connector type to its dedicated sync endpoint
       const syncEndpoints: Partial<Record<Connector["type"], string>> = {
         razorpay: "/api/connectors/razorpay",
         stripe: "/api/connectors/stripe",
@@ -224,7 +235,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 
       let synced = 0;
       if (endpoint) {
-        // Type-specific endpoint needs connector_id + org_id
         const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -234,7 +244,6 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         const data = await res.json();
         synced = data.synced ?? 0;
       } else {
-        // Fallback: bulk sync for org (covers tally, zoho, etc.)
         const res = await fetch("/api/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -242,21 +251,35 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        synced = data.total_synced ?? 0;
+        synced = data.total_inserted ?? 0;
       }
 
       setActiveConnectors((prev) =>
         prev.map((c) =>
-          c.id === connector.id
-            ? { ...c, last_synced_at: new Date().toISOString() }
-            : c
+          c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c
         )
       );
-      toast.success(`Synced ${synced} transactions`);
+      toast.success(`Synced ${synced} new transactions`);
     } catch (err) {
       toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  const handleDisconnect = async (connectorId: string) => {
+    setDisconnectingId(connectorId);
+    try {
+      const res = await fetch(`/api/connectors/manage?id=${connectorId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setActiveConnectors((prev) => prev.filter((c) => c.id !== connectorId));
+      toast.success("Connector removed");
+    } catch (err) {
+      toast.error(`Failed to disconnect: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setDisconnectingId(null);
     }
   };
 
@@ -265,102 +288,132 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       <div className="animate-enter">
         <h1 className="text-xl font-bold text-white/85">Connectors</h1>
         <p className="text-sm text-white/30 mt-0.5">
-          Connect your payment gateways and accounting software
+          Connect payment gateways and accounting tools — multiple accounts per source supported
         </p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {CONNECTOR_DEFS.map((def, i) => {
-          const existing = getConnectorStatus(def.type);
-          const isConnected = existing?.status === "active";
-          const isError = existing?.status === "error";
+          const instances = getConnectorsOfType(def.type);
+          const hasActive = instances.some((c) => c.status === "active");
 
           return (
             <div
               key={def.type}
               className={cn(
-                "relative rounded-2xl border bg-card p-5 transition-all duration-200 hover:border-white/[0.1] hover:-translate-y-0.5 shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
-                isConnected
+                "relative rounded-2xl border bg-card p-5 transition-all duration-200 hover:border-white/[0.1] hover:-translate-y-0.5 shadow-[0_1px_3px_rgba(0,0,0,0.4)] flex flex-col gap-4",
+                hasActive
                   ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
-                  : isError
-                  ? "border-red-500/20"
                   : "border-border/60"
               )}
               style={{ animationDelay: `${i * 0.04}s` }}
             >
-              {/* Connected glow indicator */}
-              {isConnected && (
-                <div className="absolute top-4 right-4 flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-                  <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
-                </div>
-              )}
-
-              <div className="flex items-start gap-3 mb-4">
+              {/* Header row */}
+              <div className="flex items-start gap-3">
                 <span className="text-2xl leading-none mt-0.5">{def.icon}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white/80">{def.name}</p>
                   <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
                 </div>
+                {hasActive && (
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
+                    <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
+                  </div>
+                )}
               </div>
 
-              {existing?.last_synced_at && (
-                <p className="text-[11px] text-white/20 mb-3">
-                  Synced {formatDate(existing.last_synced_at)}
-                </p>
+              {/* Connected instances list */}
+              {instances.length > 0 && (
+                <div className="space-y-1.5">
+                  {instances.map((inst) => (
+                    <div
+                      key={inst.id}
+                      className={cn(
+                        "flex items-center gap-2 rounded-xl px-3 py-2 border",
+                        inst.status === "error"
+                          ? "border-red-500/20 bg-red-500/[0.04]"
+                          : "border-white/[0.06] bg-white/[0.025]"
+                      )}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
+                        {inst.last_synced_at ? (
+                          <p className="text-[10px] text-white/25">
+                            Synced {formatDate(inst.last_synced_at)}
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-white/20">Never synced</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        {inst.status === "error" && (
+                          <AlertCircle className="h-3.5 w-3.5 text-red-400" />
+                        )}
+                        <button
+                          onClick={() => handleSync(inst)}
+                          disabled={syncingId === inst.id}
+                          title="Sync now"
+                          className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-40"
+                        >
+                          <RefreshCw
+                            className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")}
+                          />
+                        </button>
+                        <button
+                          onClick={() => handleDisconnect(inst.id)}
+                          disabled={disconnectingId === inst.id}
+                          title="Remove"
+                          className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
 
-              <div className="flex gap-2">
-                {isConnected ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5 flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12] transition-all"
-                    onClick={() => handleSync(existing)}
-                    disabled={syncingId === existing.id}
-                  >
-                    <RefreshCw
-                      className={cn("h-3.5 w-3.5", syncingId === existing.id && "animate-spin")}
-                    />
-                    {syncingId === existing.id ? "Syncing…" : "Sync Now"}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    className="gap-1.5 flex-1 transition-all"
-                    onClick={() => handleOpenModal(def)}
-                  >
-                    {def.isCSV ? (
-                      <>
-                        <Upload className="h-3.5 w-3.5" />
-                        Upload
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="h-3.5 w-3.5" />
-                        Connect
-                      </>
-                    )}
-                  </Button>
-                )}
-                {(isConnected || isError) && !def.isCSV && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleOpenModal(def)}
-                    title="Reconfigure"
-                    className="text-white/25 hover:text-white/60 hover:bg-white/[0.04]"
-                  >
-                    <AlertCircle className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
+              {/* Add / Connect button */}
+              {!def.isCSV ? (
+                <Button
+                  size="sm"
+                  variant={instances.length > 0 ? "outline" : "default"}
+                  className={cn(
+                    "gap-1.5 w-full transition-all",
+                    instances.length > 0 &&
+                      "border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                  )}
+                  onClick={() => handleOpenModal(def)}
+                >
+                  {instances.length > 0 ? (
+                    <>
+                      <Plus className="h-3.5 w-3.5" />
+                      Add Account
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-3.5 w-3.5" />
+                      Connect
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="gap-1.5 w-full transition-all"
+                  onClick={() => handleOpenModal(def)}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  Upload File
+                </Button>
+              )}
             </div>
           );
         })}
       </div>
 
-      {/* Modal */}
+      {/* Connect / Upload Modal */}
       <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && setOpenModal(null)}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
@@ -387,8 +440,26 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             ) : (
               <div className="space-y-4">
                 <p className="text-sm text-white/35 leading-relaxed">
-                  Enter your {openModal?.name} API credentials. They are encrypted and stored securely.
+                  Enter your {openModal?.name} API credentials. Stored encrypted, never logged.
                 </p>
+
+                {/* Account name field */}
+                <div>
+                  <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
+                    Account Label
+                  </label>
+                  <Input
+                    type="text"
+                    placeholder={`e.g. ${openModal?.name} Production`}
+                    value={formValues.name ?? ""}
+                    onChange={(e) =>
+                      setFormValues((prev) => ({ ...prev, name: e.target.value }))
+                    }
+                    className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
+                  />
+                </div>
+
+                {/* Credential fields */}
                 {openModal?.fields?.map((field) => (
                   <div key={field.key}>
                     <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
@@ -436,6 +507,8 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     </div>
   );
 }
+
+// ─── CSV upload form ──────────────────────────────────────────────────────────
 
 interface CSVUploadFormProps {
   csvFile: File | null;
@@ -496,7 +569,8 @@ function CSVUploadForm({
         <div>
           <p className="text-xs font-medium text-white/55 mb-1.5 uppercase tracking-wide">Column Mapping</p>
           <p className="text-xs text-white/25 mb-3">
-            Auto-detected {Object.values(csvMapping).filter(Boolean).length} of {csvHeaders.length} columns.
+            Auto-detected {Object.values(csvMapping).filter(Boolean).length} of{" "}
+            {csvHeaders.length} columns.
           </p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {csvHeaders.map((header) => (
@@ -507,9 +581,7 @@ function CSVUploadForm({
                 <span className="text-xs text-white/20">→</span>
                 <select
                   value={csvMapping[header] ?? ""}
-                  onChange={(e) =>
-                    onMappingChange({ ...csvMapping, [header]: e.target.value })
-                  }
+                  onChange={(e) => onMappingChange({ ...csvMapping, [header]: e.target.value })}
                   className="flex-1 text-xs rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/60 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
                 >
                   {CSV_COLUMN_OPTIONS.map((opt) => (
