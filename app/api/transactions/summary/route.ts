@@ -1,0 +1,72 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase/server";
+
+/**
+ * GET /api/transactions/summary
+ * Same filter params as /api/transactions.
+ * Returns aggregate counts + amounts per source type plus total fees.
+ */
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  const { searchParams } = req.nextUrl;
+  const orgId       = searchParams.get("org_id");
+  if (!orgId) return NextResponse.json({ error: "org_id required" }, { status: 400 });
+
+  const connectorId = searchParams.get("connector_id") ?? null;
+  const source      = searchParams.get("source") ?? null;
+  const type        = searchParams.get("type") ?? null;
+  const from        = searchParams.get("from") ?? null;
+  const to          = searchParams.get("to") ?? null;
+  const search      = searchParams.get("search") ?? null;
+
+  const supabase = await createServiceClient();
+
+  // Fetch only the columns we need for aggregation — no pagination limit
+  let query = supabase
+    .from("transactions")
+    .select("source, type, amount, metadata")
+    .eq("org_id", orgId);
+
+  if (connectorId) query = query.eq("connector_id", connectorId);
+  if (source)      query = query.eq("source", source);
+  if (type)        query = query.eq("type", type);
+  if (from)        query = query.gte("transaction_date", from.slice(0, 10));
+  if (to)          query = query.lte("transaction_date", to.slice(0, 10));
+  if (search) {
+    query = query.or(
+      `external_id.ilike.%${search}%,description.ilike.%${search}%,counterparty_name.ilike.%${search}%`
+    );
+  }
+
+  const { data, error } = await query;
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Aggregate
+  const groups: Record<string, { count: number; amount: number }> = {};
+  let totalFees = 0;
+  let totalCredits = 0;
+  let totalDebits = 0;
+
+  for (const row of data ?? []) {
+    const key = row.source as string;
+    if (!groups[key]) groups[key] = { count: 0, amount: 0 };
+    groups[key].count++;
+    groups[key].amount += row.amount ?? 0;
+
+    if (row.type === "credit") totalCredits += row.amount ?? 0;
+    else totalDebits += row.amount ?? 0;
+
+    // Extract fees from metadata
+    const meta = row.metadata as Record<string, unknown> ?? {};
+    const fee = Number(meta.fee ?? meta.fees ?? 0);
+    if (!isNaN(fee)) totalFees += fee;
+  }
+
+  return NextResponse.json({
+    groups,
+    totalCredits,
+    totalDebits,
+    totalFees,
+    net: totalCredits - totalDebits,
+    total: (data ?? []).length,
+  });
+}

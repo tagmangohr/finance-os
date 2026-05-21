@@ -46,6 +46,15 @@ interface ApiResponse {
   offset: number;
 }
 
+interface SummaryResponse {
+  groups: Record<string, { count: number; amount: number }>;
+  totalCredits: number;
+  totalDebits: number;
+  totalFees: number;
+  net: number;
+  total: number;
+}
+
 // ─── Source badge colours ─────────────────────────────────────────────────────
 
 const SOURCE_COLOURS: Record<string, string> = {
@@ -107,6 +116,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const [rows, setRows] = React.useState<TxRow[]>([]);
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
+  const [summary, setSummary] = React.useState<SummaryResponse | null>(null);
 
   // Expanded metadata rows
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
@@ -122,23 +132,27 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     setOffset(0);
   }, [connectorId, source, txType, from, to, debouncedSearch, sortCol, sortAsc]);
 
-  // Fetch
+  // Build shared filter params (used by both table + summary fetches)
+  const buildFilterParams = React.useCallback(() => {
+    const params = new URLSearchParams({ org_id: orgId });
+    if (connectorId)     params.set("connector_id", connectorId);
+    if (source)          params.set("source", source);
+    if (txType)          params.set("type", txType);
+    if (from)            params.set("from", from);
+    if (to)              params.set("to", to);
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    return params;
+  }, [orgId, connectorId, source, txType, from, to, debouncedSearch]);
+
+  // Fetch table rows
   const fetchData = React.useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({
-        org_id: orgId,
-        limit: String(PAGE_SIZE),
-        offset: String(offset),
-        sort: sortCol,
-        order: sortAsc ? "asc" : "desc",
-      });
-      if (connectorId) params.set("connector_id", connectorId);
-      if (source)      params.set("source", source);
-      if (txType)      params.set("type", txType);
-      if (from)        params.set("from", from);
-      if (to)          params.set("to", to);
-      if (debouncedSearch) params.set("search", debouncedSearch);
+      const params = buildFilterParams();
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
+      params.set("sort", sortCol);
+      params.set("order", sortAsc ? "asc" : "desc");
 
       const res = await fetch(`/api/transactions?${params}`);
       if (!res.ok) throw new Error(await res.text());
@@ -150,9 +164,21 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     } finally {
       setLoading(false);
     }
-  }, [orgId, offset, sortCol, sortAsc, connectorId, source, txType, from, to, debouncedSearch]);
+  }, [buildFilterParams, offset, sortCol, sortAsc]);
+
+  // Fetch summary cards — re-runs whenever filters change (not pagination/sort)
+  const fetchSummary = React.useCallback(async () => {
+    try {
+      const params = buildFilterParams();
+      const res = await fetch(`/api/transactions/summary?${params}`);
+      if (!res.ok) return;
+      const data: SummaryResponse = await res.json();
+      setSummary(data);
+    } catch { /* non-critical */ }
+  }, [buildFilterParams]);
 
   React.useEffect(() => { fetchData(); }, [fetchData]);
+  React.useEffect(() => { fetchSummary(); }, [fetchSummary]);
 
   // CSV export
   const handleExport = async () => {
@@ -322,6 +348,51 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           </button>
         </div>
       </div>
+
+      {/* Summary cards */}
+      {summary && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+          <SummaryCard
+            label="Payments"
+            count={summary.groups["razorpay"]?.count ?? summary.groups["stripe"]?.count ?? (
+              (summary.groups["razorpay"]?.count ?? 0) + (summary.groups["stripe"]?.count ?? 0)
+            )}
+            amount={(summary.groups["razorpay"]?.amount ?? 0) + (summary.groups["stripe"]?.amount ?? 0)}
+            colour="text-emerald-400"
+          />
+          <SummaryCard
+            label="Settlements"
+            count={(summary.groups["razorpay_settlement"]?.count ?? 0) + (summary.groups["stripe_payout"]?.count ?? 0)}
+            amount={(summary.groups["razorpay_settlement"]?.amount ?? 0) + (summary.groups["stripe_payout"]?.amount ?? 0)}
+            colour="text-violet-400"
+          />
+          <SummaryCard
+            label="Refunds"
+            count={summary.groups["razorpay_refund"]?.count ?? 0}
+            amount={summary.groups["razorpay_refund"]?.amount ?? 0}
+            colour="text-orange-400"
+          />
+          <SummaryCard
+            label="Disputes"
+            count={summary.groups["razorpay_dispute"]?.count ?? 0}
+            amount={summary.groups["razorpay_dispute"]?.amount ?? 0}
+            colour="text-red-400"
+          />
+          <SummaryCard
+            label="Fees Charged"
+            count={null}
+            amount={summary.totalFees}
+            colour="text-amber-400"
+          />
+          <SummaryCard
+            label="Net Flow"
+            count={null}
+            amount={summary.net}
+            colour={summary.net >= 0 ? "text-emerald-400" : "text-red-400"}
+            showSign
+          />
+        </div>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-white/[0.07] bg-white/[0.01]">
@@ -521,6 +592,42 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
 }
 
 // ─── Helper components ────────────────────────────────────────────────────────
+
+function SummaryCard({
+  label,
+  count,
+  amount,
+  colour,
+  showSign = false,
+}: {
+  label: string;
+  count: number | null;
+  amount: number;
+  colour: string;
+  showSign?: boolean;
+}) {
+  const fmt = (n: number) =>
+    new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(
+      Math.abs(n)
+    );
+  const sign = showSign ? (amount >= 0 ? "+" : "−") : "";
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+      <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-1.5">
+        {label}
+      </p>
+      {count !== null && (
+        <p className="text-[11px] text-white/30 mb-0.5">
+          {count.toLocaleString("en-IN")} txns
+        </p>
+      )}
+      <p className={cn("text-base font-bold tabular-nums leading-none", colour)}>
+        {sign}₹{fmt(amount)}
+      </p>
+    </div>
+  );
+}
 
 function FilterSelect({
   value,

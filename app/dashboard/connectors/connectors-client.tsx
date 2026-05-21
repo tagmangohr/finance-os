@@ -7,10 +7,10 @@ import {
   RefreshCw,
   Upload,
   X,
-  AlertCircle,
   Zap,
   Trash2,
   Plus,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -20,12 +20,21 @@ import type { Connector } from "@/lib/supabase/types";
 
 // ─── Connector definitions ────────────────────────────────────────────────────
 
+interface FieldDef {
+  key: string;
+  label: string;
+  type?: string;
+  placeholder?: string;
+  isPassword?: boolean;
+  isOptional?: boolean;
+}
+
 interface ConnectorDef {
   type: Connector["type"];
   name: string;
   description: string;
   icon: string;
-  fields?: { key: string; label: string; type?: string; placeholder?: string }[];
+  fields?: FieldDef[];
   isCSV?: boolean;
 }
 
@@ -36,8 +45,10 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Payments, refunds, settlements, disputes",
     icon: "💳",
     fields: [
-      { key: "key_id", label: "Key ID", placeholder: "rzp_live_..." },
-      { key: "key_secret", label: "Key Secret", type: "password", placeholder: "••••••••••••••••" },
+      { key: "key_id",     label: "Key ID",      placeholder: "rzp_live_..." },
+      { key: "key_secret", label: "Key Secret",  isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "email",      label: "Account Email", placeholder: "you@company.com", isOptional: true },
+      { key: "mid",        label: "Merchant ID (MID)", placeholder: "MID12345", isOptional: true },
     ],
   },
   {
@@ -46,7 +57,9 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Charges, payouts, and invoices",
     icon: "⚡",
     fields: [
-      { key: "secret_key", label: "Secret Key", type: "password", placeholder: "sk_live_..." },
+      { key: "secret_key", label: "Secret Key", isPassword: true, placeholder: "sk_live_..." },
+      { key: "email",      label: "Account Email", placeholder: "you@company.com", isOptional: true },
+      { key: "mid",        label: "Account ID",    placeholder: "acct_xxx", isOptional: true },
     ],
   },
   {
@@ -55,9 +68,10 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Invoices, bills, and journal entries",
     icon: "📚",
     fields: [
-      { key: "client_id", label: "Client ID", placeholder: "1000.XXXX..." },
-      { key: "client_secret", label: "Client Secret", type: "password", placeholder: "••••••••" },
-      { key: "org_id", label: "Organisation ID", placeholder: "20XXXXXXXX" },
+      { key: "client_id",     label: "Client ID",     placeholder: "1000.XXXX..." },
+      { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••" },
+      { key: "org_id",        label: "Organisation ID", placeholder: "20XXXXXXXX" },
+      { key: "email",         label: "Account Email",   placeholder: "you@company.com", isOptional: true },
     ],
   },
   {
@@ -66,9 +80,10 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "P&L, balance sheet, transactions",
     icon: "🟢",
     fields: [
-      { key: "client_id", label: "Client ID", placeholder: "ABc1234..." },
-      { key: "client_secret", label: "Client Secret", type: "password", placeholder: "••••••••" },
-      { key: "realm_id", label: "Realm ID", placeholder: "1234567890" },
+      { key: "client_id",     label: "Client ID",     placeholder: "ABc1234..." },
+      { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••" },
+      { key: "realm_id",      label: "Realm ID",      placeholder: "1234567890" },
+      { key: "email",         label: "Account Email",  placeholder: "you@company.com", isOptional: true },
     ],
   },
   {
@@ -77,8 +92,10 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Tally ERP vouchers and ledgers",
     icon: "🧾",
     fields: [
-      { key: "host", label: "Tally Host", placeholder: "localhost" },
-      { key: "port", label: "Port", placeholder: "9000" },
+      { key: "host",  label: "Tally Host", placeholder: "localhost" },
+      { key: "port",  label: "Port",       placeholder: "9000" },
+      { key: "email", label: "Account Email", placeholder: "you@company.com", isOptional: true },
+      { key: "mid",   label: "Company ID",    placeholder: "COMP01", isOptional: true },
     ],
   },
   {
@@ -115,13 +132,18 @@ interface ConnectorsClientProps {
   connectors: Connector[];
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
+
+  // Modal state
   const [openModal, setOpenModal] = React.useState<ConnectorDef | null>(null);
-  // formValues holds both the "name" key and any API credential keys
+  const [editingConnector, setEditingConnector] = React.useState<Connector | null>(null);
+
+  // formValues persists across modal open/close — cleared only on confirm/cancel
   const [formValues, setFormValues] = React.useState<Record<string, string>>({});
+
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
@@ -130,13 +152,18 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
 
-  // All connected instances of a given type
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
   const getConnectorsOfType = (type: Connector["type"]) =>
     activeConnectors.filter((c) => c.type === type);
 
-  const handleOpenModal = (def: ConnectorDef) => {
+  const defFor = (type: Connector["type"]) =>
+    CONNECTOR_DEFS.find((d) => d.type === type)!;
+
+  // ── Open for new connection ────────────────────────────────────────────────
+  const handleOpenNew = (def: ConnectorDef) => {
+    setEditingConnector(null);
     setOpenModal(def);
-    // Pre-fill name so the user can just change the number/label
     const existingCount = getConnectorsOfType(def.type).length;
     setFormValues({
       name: existingCount === 0 ? def.name : `${def.name} ${existingCount + 1}`,
@@ -146,6 +173,30 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     setCsvMapping({});
   };
 
+  // ── Open for editing an existing connector ─────────────────────────────────
+  const handleOpenEdit = (inst: Connector) => {
+    const def = defFor(inst.type);
+    setEditingConnector(inst);
+    setOpenModal(def);
+    const cfg = (inst.config ?? {}) as Record<string, string>;
+    // Pre-fill all non-password fields; leave password fields blank
+    // (user can leave blank = keep existing secret)
+    const prefilled: Record<string, string> = { name: inst.name };
+    for (const field of def.fields ?? []) {
+      if (!field.isPassword) {
+        prefilled[field.key] = cfg[field.key] ?? "";
+      }
+      // Password fields intentionally left blank — placeholder explains
+    }
+    setFormValues(prefilled);
+  };
+
+  const handleCloseModal = () => {
+    setOpenModal(null);
+    setEditingConnector(null);
+  };
+
+  // ── CSV upload ─────────────────────────────────────────────────────────────
   const handleCSVUpload = async (file: File) => {
     setCsvFile(file);
     const text = await file.text();
@@ -168,72 +219,101 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     setCsvMapping(autoMap);
   };
 
-  const handleConnect = async () => {
+  // ── Connect (create) or Save (edit) ────────────────────────────────────────
+  const handleSave = async () => {
     if (!openModal) return;
     setLoading(true);
 
     try {
+      // ── CSV import ──
       if (openModal.isCSV) {
-        if (!csvFile) {
-          toast.error("Please upload a file first");
-          setLoading(false);
-          return;
-        }
+        if (!csvFile) { toast.error("Please upload a file first"); setLoading(false); return; }
         const formData = new FormData();
         formData.append("file", csvFile);
         formData.append("type", openModal.type);
         formData.append("org_id", orgId);
         formData.append("mapping", JSON.stringify(csvMapping));
-
         const res = await fetch("/api/connectors/csv", { method: "POST", body: formData });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         toast.success(`Imported ${data.imported ?? 0} transactions`);
-        setOpenModal(null);
+        handleCloseModal();
         setLoading(false);
         return;
       }
 
-      // Extract name from formValues, pass the rest as config
       const { name: connectorName, ...credFields } = formValues;
-      const body = {
-        org_id: orgId,
-        type: openModal.type,
-        name: connectorName?.trim() || openModal.name,
-        config: credFields,
-        status: "active",
-      };
 
-      const res = await fetch("/api/connectors/manage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const connector = await res.json();
+      if (editingConnector) {
+        // ── PATCH: update existing connector ──
+        // Only include password fields if the user typed something
+        const def = defFor(editingConnector.type);
+        const existingCfg = (editingConnector.config ?? {}) as Record<string, string>;
+        const updatedCfg: Record<string, string> = { ...existingCfg };
 
-      // Always append — never replace — so multiple accounts work
-      setActiveConnectors((prev) => [...prev, connector]);
+        for (const field of def.fields ?? []) {
+          const val = credFields[field.key];
+          if (field.isPassword) {
+            // Only update if user typed something (non-empty)
+            if (val && val.trim()) updatedCfg[field.key] = val.trim();
+          } else {
+            if (val !== undefined) updatedCfg[field.key] = val;
+          }
+        }
 
-      toast.success(`${connectorName || openModal.name} connected`);
-      setOpenModal(null);
+        const res = await fetch(`/api/connectors/manage?id=${editingConnector.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: connectorName?.trim() || editingConnector.name,
+            config: updatedCfg,
+            status: "active",
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const updated = await res.json();
+        setActiveConnectors((prev) =>
+          prev.map((c) => (c.id === editingConnector.id ? updated : c))
+        );
+        toast.success("Connector updated");
+      } else {
+        // ── POST: create new connector ──
+        const res = await fetch("/api/connectors/manage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            org_id: orgId,
+            type: openModal.type,
+            name: connectorName?.trim() || openModal.name,
+            config: credFields,
+            status: "active",
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const connector = await res.json();
+        setActiveConnectors((prev) => [...prev, connector]);
+        toast.success(`${connectorName || openModal.name} connected`);
+      }
+
+      handleCloseModal();
     } catch (err) {
-      toast.error(`Failed to connect: ${err instanceof Error ? err.message : "Unknown error"}`);
+      toast.error(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Per-connector sync ─────────────────────────────────────────────────────
   const handleSync = async (connector: Connector) => {
     setSyncingId(connector.id);
     try {
-      const syncEndpoints: Partial<Record<Connector["type"], string>> = {
+      const endpoints: Partial<Record<Connector["type"], string>> = {
         razorpay: "/api/connectors/razorpay",
-        stripe: "/api/connectors/stripe",
+        stripe:   "/api/connectors/stripe",
       };
-      const endpoint = syncEndpoints[connector.type];
-
+      const endpoint = endpoints[connector.type];
       let synced = 0;
+
       if (endpoint) {
         const res = await fetch(endpoint, {
           method: "POST",
@@ -267,12 +347,11 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     }
   };
 
+  // ── Disconnect ─────────────────────────────────────────────────────────────
   const handleDisconnect = async (connectorId: string) => {
     setDisconnectingId(connectorId);
     try {
-      const res = await fetch(`/api/connectors/manage?id=${connectorId}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(`/api/connectors/manage?id=${connectorId}`, { method: "DELETE" });
       if (!res.ok) throw new Error(await res.text());
       setActiveConnectors((prev) => prev.filter((c) => c.id !== connectorId));
       toast.success("Connector removed");
@@ -282,6 +361,8 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       setDisconnectingId(null);
     }
   };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-5 max-w-[1400px]">
@@ -301,14 +382,14 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             <div
               key={def.type}
               className={cn(
-                "relative rounded-2xl border bg-card p-5 transition-all duration-200 hover:border-white/[0.1] hover:-translate-y-0.5 shadow-[0_1px_3px_rgba(0,0,0,0.4)] flex flex-col gap-4",
+                "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-white/[0.1] shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
                 hasActive
                   ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
                   : "border-border/60"
               )}
               style={{ animationDelay: `${i * 0.04}s` }}
             >
-              {/* Header row */}
+              {/* Header */}
               <div className="flex items-start gap-3">
                 <span className="text-2xl leading-none mt-0.5">{def.icon}</span>
                 <div className="flex-1 min-w-0">
@@ -323,54 +404,62 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                 )}
               </div>
 
-              {/* Connected instances list */}
+              {/* Connected instances */}
               {instances.length > 0 && (
                 <div className="space-y-1.5">
-                  {instances.map((inst) => (
-                    <div
-                      key={inst.id}
-                      className={cn(
-                        "flex items-center gap-2 rounded-xl px-3 py-2 border",
-                        inst.status === "error"
-                          ? "border-red-500/20 bg-red-500/[0.04]"
-                          : "border-white/[0.06] bg-white/[0.025]"
-                      )}
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
-                        {inst.last_synced_at ? (
-                          <p className="text-[10px] text-white/25">
-                            Synced {formatDate(inst.last_synced_at)}
-                          </p>
-                        ) : (
-                          <p className="text-[10px] text-white/20">Never synced</p>
+                  {instances.map((inst) => {
+                    const cfg = (inst.config ?? {}) as Record<string, string>;
+                    const subtitle = cfg.email || cfg.mid
+                      ? [cfg.email, cfg.mid].filter(Boolean).join(" · ")
+                      : inst.last_synced_at
+                      ? `Synced ${formatDate(inst.last_synced_at)}`
+                      : "Never synced";
+
+                    return (
+                      <div
+                        key={inst.id}
+                        className={cn(
+                          "flex items-center gap-2 rounded-xl px-3 py-2.5 border",
+                          inst.status === "error"
+                            ? "border-red-500/20 bg-red-500/[0.04]"
+                            : "border-white/[0.06] bg-white/[0.025]"
                         )}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
+                          <p className="text-[10px] text-white/25 truncate">{subtitle}</p>
+                        </div>
+                        <div className="flex items-center gap-0.5 flex-shrink-0">
+                          {/* Edit */}
+                          <button
+                            onClick={() => handleOpenEdit(inst)}
+                            title="Edit credentials"
+                            className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          {/* Sync */}
+                          <button
+                            onClick={() => handleSync(inst)}
+                            disabled={syncingId === inst.id}
+                            title="Sync now"
+                            className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-40"
+                          >
+                            <RefreshCw className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")} />
+                          </button>
+                          {/* Disconnect */}
+                          <button
+                            onClick={() => handleDisconnect(inst.id)}
+                            disabled={disconnectingId === inst.id}
+                            title="Remove"
+                            className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 flex-shrink-0">
-                        {inst.status === "error" && (
-                          <AlertCircle className="h-3.5 w-3.5 text-red-400" />
-                        )}
-                        <button
-                          onClick={() => handleSync(inst)}
-                          disabled={syncingId === inst.id}
-                          title="Sync now"
-                          className="p-1.5 rounded-lg text-white/30 hover:text-white/70 hover:bg-white/[0.06] transition-all disabled:opacity-40"
-                        >
-                          <RefreshCw
-                            className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")}
-                          />
-                        </button>
-                        <button
-                          onClick={() => handleDisconnect(inst.id)}
-                          disabled={disconnectingId === inst.id}
-                          title="Remove"
-                          className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -384,28 +473,16 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                     instances.length > 0 &&
                       "border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
                   )}
-                  onClick={() => handleOpenModal(def)}
+                  onClick={() => handleOpenNew(def)}
                 >
-                  {instances.length > 0 ? (
-                    <>
-                      <Plus className="h-3.5 w-3.5" />
-                      Add Account
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="h-3.5 w-3.5" />
-                      Connect
-                    </>
-                  )}
+                  {instances.length > 0
+                    ? <><Plus className="h-3.5 w-3.5" /> Add Account</>
+                    : <><Zap className="h-3.5 w-3.5" /> Connect</>
+                  }
                 </Button>
               ) : (
-                <Button
-                  size="sm"
-                  className="gap-1.5 w-full transition-all"
-                  onClick={() => handleOpenModal(def)}
-                >
-                  <Upload className="h-3.5 w-3.5" />
-                  Upload File
+                <Button size="sm" className="gap-1.5 w-full" onClick={() => handleOpenNew(def)}>
+                  <Upload className="h-3.5 w-3.5" /> Upload File
                 </Button>
               )}
             </div>
@@ -413,15 +490,27 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         })}
       </div>
 
-      {/* Connect / Upload Modal */}
-      <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && setOpenModal(null)}>
+      {/* ── Modal ──────────────────────────────────────────────────────────── */}
+      <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && handleCloseModal()}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
           <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] p-6 focus:outline-none animate-scale-in">
+
             <div className="flex items-center justify-between mb-5">
-              <Dialog.Title className="text-base font-semibold text-white/85">
-                {openModal?.isCSV ? `Upload ${openModal.name}` : `Connect ${openModal?.name}`}
-              </Dialog.Title>
+              <div>
+                <Dialog.Title className="text-base font-semibold text-white/85">
+                  {editingConnector
+                    ? `Edit ${openModal?.name}`
+                    : openModal?.isCSV
+                    ? `Upload ${openModal?.name}`
+                    : `Connect ${openModal?.name}`}
+                </Dialog.Title>
+                {editingConnector && (
+                  <p className="text-xs text-white/30 mt-0.5">
+                    Leave password fields blank to keep existing credentials
+                  </p>
+                )}
+              </div>
               <Dialog.Close asChild>
                 <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
                   <X className="h-4 w-4" />
@@ -438,44 +527,59 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                 onMappingChange={setCsvMapping}
               />
             ) : (
-              <div className="space-y-4">
-                <p className="text-sm text-white/35 leading-relaxed">
-                  Enter your {openModal?.name} API credentials. Stored encrypted, never logged.
-                </p>
+              <div className="space-y-3">
+                {/* Account label */}
+                <FormField
+                  label="Account Label"
+                  placeholder={`e.g. ${openModal?.name} Production`}
+                  value={formValues.name ?? ""}
+                  onChange={(v) => setFormValues((p) => ({ ...p, name: v }))}
+                />
 
-                {/* Account name field */}
-                <div>
-                  <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
-                    Account Label
-                  </label>
-                  <Input
-                    type="text"
-                    placeholder={`e.g. ${openModal?.name} Production`}
-                    value={formValues.name ?? ""}
-                    onChange={(e) =>
-                      setFormValues((prev) => ({ ...prev, name: e.target.value }))
-                    }
-                    className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
-                  />
+                {/* Divider */}
+                <div className="flex items-center gap-2 py-1">
+                  <div className="flex-1 h-px bg-white/[0.05]" />
+                  <span className="text-[10px] text-white/20 uppercase tracking-widest">Credentials</span>
+                  <div className="flex-1 h-px bg-white/[0.05]" />
                 </div>
 
-                {/* Credential fields */}
-                {openModal?.fields?.map((field) => (
-                  <div key={field.key}>
-                    <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
-                      {field.label}
-                    </label>
-                    <Input
-                      type={field.type ?? "text"}
-                      placeholder={field.placeholder}
-                      value={formValues[field.key] ?? ""}
-                      onChange={(e) =>
-                        setFormValues((prev) => ({ ...prev, [field.key]: e.target.value }))
-                      }
-                      className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
-                    />
-                  </div>
+                {/* API credential fields */}
+                {openModal?.fields?.filter((f) => !f.isOptional).map((field) => (
+                  <FormField
+                    key={field.key}
+                    label={field.label}
+                    type={field.isPassword ? "password" : "text"}
+                    placeholder={
+                      editingConnector && field.isPassword
+                        ? "Leave blank to keep existing"
+                        : field.placeholder
+                    }
+                    value={formValues[field.key] ?? ""}
+                    onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
+                  />
                 ))}
+
+                {/* Optional context fields */}
+                {openModal?.fields?.some((f) => f.isOptional) && (
+                  <>
+                    <div className="flex items-center gap-2 py-1">
+                      <div className="flex-1 h-px bg-white/[0.05]" />
+                      <span className="text-[10px] text-white/20 uppercase tracking-widest">
+                        Optional info
+                      </span>
+                      <div className="flex-1 h-px bg-white/[0.05]" />
+                    </div>
+                    {openModal?.fields?.filter((f) => f.isOptional).map((field) => (
+                      <FormField
+                        key={field.key}
+                        label={field.label}
+                        placeholder={field.placeholder}
+                        value={formValues[field.key] ?? ""}
+                        onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
+                      />
+                    ))}
+                  </>
+                )}
               </div>
             )}
 
@@ -488,22 +592,51 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                   Cancel
                 </Button>
               </Dialog.Close>
-              <Button className="flex-1" onClick={handleConnect} disabled={loading}>
+              <Button className="flex-1" onClick={handleSave} disabled={loading}>
                 {loading ? (
-                  <>
-                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                    {openModal?.isCSV ? "Importing…" : "Connecting…"}
+                  <><RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    {editingConnector ? "Saving…" : openModal?.isCSV ? "Importing…" : "Connecting…"}
                   </>
-                ) : openModal?.isCSV ? (
-                  "Import"
-                ) : (
-                  "Connect"
-                )}
+                ) : editingConnector ? "Save Changes"
+                  : openModal?.isCSV ? "Import"
+                  : "Connect"
+                }
               </Button>
             </div>
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+    </div>
+  );
+}
+
+// ─── Small helpers ────────────────────────────────────────────────────────────
+
+function FormField({
+  label,
+  value,
+  onChange,
+  type = "text",
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+  placeholder?: string;
+}) {
+  return (
+    <div>
+      <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
+        {label}
+      </label>
+      <Input
+        type={type}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
+      />
     </div>
   );
 }
@@ -518,13 +651,7 @@ interface CSVUploadFormProps {
   onMappingChange: (mapping: Record<string, string>) => void;
 }
 
-function CSVUploadForm({
-  csvFile,
-  csvHeaders,
-  csvMapping,
-  onFileChange,
-  onMappingChange,
-}: CSVUploadFormProps) {
+function CSVUploadForm({ csvFile, csvHeaders, csvMapping, onFileChange, onMappingChange }: CSVUploadFormProps) {
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   return (
@@ -542,9 +669,7 @@ function CSVUploadForm({
           <div className="flex flex-col items-center gap-1.5">
             <CheckCircle2 className="h-6 w-6 text-emerald-400 mb-1" />
             <p className="text-sm font-medium text-white/75">{csvFile.name}</p>
-            <p className="text-xs text-white/30">
-              {(csvFile.size / 1024).toFixed(1)} KB · Click to change
-            </p>
+            <p className="text-xs text-white/30">{(csvFile.size / 1024).toFixed(1)} KB · Click to change</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-1.5">
@@ -553,24 +678,15 @@ function CSVUploadForm({
             <p className="text-xs text-white/25">CSV, XLS, XLSX accepted</p>
           </div>
         )}
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv,.xls,.xlsx"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) onFileChange(file);
-          }}
-        />
+        <input ref={inputRef} type="file" accept=".csv,.xls,.xlsx" className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) onFileChange(f); }} />
       </div>
 
       {csvHeaders.length > 0 && (
         <div>
           <p className="text-xs font-medium text-white/55 mb-1.5 uppercase tracking-wide">Column Mapping</p>
           <p className="text-xs text-white/25 mb-3">
-            Auto-detected {Object.values(csvMapping).filter(Boolean).length} of{" "}
-            {csvHeaders.length} columns.
+            Auto-detected {Object.values(csvMapping).filter(Boolean).length} of {csvHeaders.length} columns.
           </p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {csvHeaders.map((header) => (
@@ -582,12 +698,10 @@ function CSVUploadForm({
                 <select
                   value={csvMapping[header] ?? ""}
                   onChange={(e) => onMappingChange({ ...csvMapping, [header]: e.target.value })}
-                  className="flex-1 text-xs rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/60 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
+                  className="flex-1 text-xs rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/60 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30"
                 >
                   {CSV_COLUMN_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value} className="bg-[#0c1221]">
-                      {opt.label}
-                    </option>
+                    <option key={opt.value} value={opt.value} className="bg-[#0c1221]">{opt.label}</option>
                   ))}
                 </select>
               </div>

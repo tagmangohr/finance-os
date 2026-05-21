@@ -1,23 +1,30 @@
 /**
- * Batched deduplication helper.
+ * Global deduplication helper.
  *
- * Why batched?
- *   Supabase PostgREST passes `.in()` as a URL query parameter.  For large
- *   arrays the URL can exceed server limits (~8 KB), causing the request to
- *   fail.  Batching into chunks of ≤ 500 keeps each request well within
- *   limits and below PostgREST's default 1 000-row response cap.
+ * WHY global (org-level, not connector-level)?
+ *   A payment_id like `pay_xxx` is globally unique in Razorpay.  If the
+ *   same Razorpay account is connected as two different connectors (e.g.
+ *   during a reconnect), each connector would pass the old per-connector
+ *   check and re-insert the same transaction.  Checking by (org_id,
+ *   external_id) globally prevents any duplicate regardless of which
+ *   connector produced it.
  *
- * Why throw instead of swallow?
- *   If the query silently returns null/error we default to an empty set,
- *   which makes every row look "new" → duplicate inserts on every sync.
- *   Throwing surfaces the real problem immediately.
+ * WHY batched?
+ *   Supabase PostgREST passes `.in()` as a URL query string.  For large
+ *   arrays the URL can exceed server limits (~8 KB), causing the request
+ *   to fail silently.  Batching into ≤ 500 IDs per request keeps each
+ *   call well within limits and below PostgREST's 1 000-row response cap.
+ *
+ * WHY throw instead of defaulting to empty?
+ *   If the query fails and we default to an empty set, every row looks
+ *   "new" → duplicate inserts on every sync.  Throwing surfaces the real
+ *   problem immediately so it can be diagnosed and fixed.
  */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function getExistingExternalIds(
   supabase: any,
   orgId: string,
-  connectorId: string,
   externalIds: string[]
 ): Promise<Set<string>> {
   const BATCH_SIZE = 500;
@@ -30,7 +37,7 @@ export async function getExistingExternalIds(
       .from("transactions")
       .select("external_id")
       .eq("org_id", orgId)
-      .eq("connector_id", connectorId)
+      // No connector_id filter — deduplicate globally within the org
       .in("external_id", batch);
 
     if (error) {

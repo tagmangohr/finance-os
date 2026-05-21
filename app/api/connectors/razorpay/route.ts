@@ -130,7 +130,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
     const existingIds =
       externalIds.length > 0
-        ? await getExistingExternalIds(supabase, org_id, connector_id, externalIds)
+        ? await getExistingExternalIds(supabase, org_id, externalIds)
         : new Set<string>();
 
     const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));

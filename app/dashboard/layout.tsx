@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
 import { TopBar } from "@/components/dashboard/top-bar";
 import { MobileSidebarWrapper } from "@/components/dashboard/mobile-sidebar-wrapper";
+import { AutoRefresh } from "@/components/dashboard/auto-refresh";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -32,6 +33,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <TopBar orgId={org.id} orgName={org.name} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 bg-background">
+          <AutoRefresh />
           {children}
         </main>
       </div>

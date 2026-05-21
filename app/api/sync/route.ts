@@ -185,7 +185,7 @@ async function syncConnector(
       const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
       const existingIds =
         externalIds.length > 0
-          ? await getExistingExternalIds(supabase, orgId, connector.id, externalIds)
+          ? await getExistingExternalIds(supabase, orgId, externalIds)
           : new Set<string>();
 
       const newRows = rows.filter((r) => !r.external_id || !existingIds.has(r.external_id));
