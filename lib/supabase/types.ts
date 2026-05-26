@@ -27,7 +27,7 @@ export interface Database {
         Row: {
           id: string;
           org_id: string;
-          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement";
+          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz";
           name: string;
           status: "active" | "inactive" | "error";
           config: Json;

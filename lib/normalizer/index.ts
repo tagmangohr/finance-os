@@ -495,6 +495,256 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
   "XPF",
 ]);
 
+// ─── Cashfree raw types ───────────────────────────────────────────────────────
+
+export type CashfreeOrder = {
+  cf_order_id: number | string;
+  order_id: string;
+  order_amount: number;               // full INR units
+  order_currency: string;
+  order_status: string;               // ACTIVE | PAID | EXPIRED | CANCELLED
+  order_note: string | null;
+  customer_details: {
+    customer_name: string | null;
+    customer_email: string | null;
+    customer_phone: string | null;
+  } | null;
+  created_at: string;                 // ISO 8601
+};
+
+export type CashfreeSettlement = {
+  cf_settlement_id: number | string;
+  settlement_currency: string;
+  settlement_amount: number;          // full INR units
+  order_id: string;
+  order_amount: number;
+  service_charge: number;
+  service_tax: number;
+  order_settled_time: string;         // ISO 8601
+  transfer_utr: string | null;
+};
+
+export type CashfreeRefund = {
+  cf_refund_id: string;
+  order_id: string;
+  refund_amount: number;              // full INR units
+  refund_currency: string;
+  refund_status: string;              // SUCCESS | PENDING | CANCELLED | ONHOLD
+  refund_note: string | null;
+  created_at: string;                 // ISO 8601
+  cf_payment_id: number | string;
+};
+
+// ─── PayU raw types ───────────────────────────────────────────────────────────
+
+export type PayUTransaction = {
+  mihpayid: string;
+  txnid: string;
+  amount: string;                     // e.g. "500.00"
+  net_amount_debit: string | null;    // amount after deductions
+  status: string;                     // success | failure | pending | refunded
+  firstname: string | null;
+  email: string | null;
+  phone: string | null;
+  productinfo: string | null;
+  addedon: string;                    // "YYYY-MM-DD HH:mm:ss"
+  mode: string | null;                // payment method
+  bank_ref_no: string | null;
+  unmappedstatus: string | null;
+  discount: string | null;
+};
+
+// ─── Paytm raw types ─────────────────────────────────────────────────────────
+
+export type PaytmTransaction = {
+  orderId: string;
+  txnId: string | null;
+  txnAmount: string;                  // e.g. "500.00" (paise-denominated string? No — full units)
+  txnDate: string;                    // "YYYY-MM-DD HH:mm:ss"
+  status: string;                     // TXN_SUCCESS | TXN_FAILURE | PENDING
+  paymentMode: string | null;
+  bankTxnId: string | null;
+  bankName: string | null;
+  custId: string | null;
+  responseCode: string | null;
+  responseMsg: string | null;
+};
+
+// ─── Easebuzz raw types ───────────────────────────────────────────────────────
+
+export type EasebuzzTransaction = {
+  txnid: string;
+  mihpayid: string | null;
+  amount: string;                     // e.g. "500.00"
+  net_amount_debit: string | null;
+  status: string;                     // success | failure | pending
+  firstname: string | null;
+  email: string | null;
+  phone: string | null;
+  productinfo: string | null;
+  addedon: string;                    // "YYYY-MM-DD HH:mm:ss"
+  mode: string | null;
+  bank_ref_no: string | null;
+  unmappedstatus: string | null;
+};
+
+// ─── Cashfree normalizers ─────────────────────────────────────────────────────
+
+export function normalizeCashfreeOrder(order: CashfreeOrder): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  switch (order.order_status?.toUpperCase()) {
+    case "PAID":       status = "completed"; break;
+    case "EXPIRED":
+    case "CANCELLED":  status = "failed";    break;
+    default:           status = "pending";
+  }
+
+  const cust = order.customer_details;
+  const counterparty = cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null;
+
+  return {
+    external_id: `cf_order_${order.cf_order_id}`,
+    type: "credit",
+    amount: order.order_amount,
+    currency: (order.order_currency ?? "INR").toUpperCase(),
+    category: null,
+    counterparty_name: counterparty,
+    description: order.order_note ?? `Order ${order.order_id}`,
+    source: "cashfree",
+    status,
+    transaction_date: order.created_at.slice(0, 10),
+    metadata: { order_id: order.order_id, cf_order_id: order.cf_order_id },
+  };
+}
+
+export function normalizeCashfreeSettlement(s: CashfreeSettlement): NormalizedTransaction {
+  return {
+    external_id: `cf_settlement_${s.cf_settlement_id}`,
+    type: "credit",
+    amount: s.settlement_amount,
+    currency: (s.settlement_currency ?? "INR").toUpperCase(),
+    category: "settlement",
+    counterparty_name: "Cashfree",
+    description: `Settlement for order ${s.order_id}${s.transfer_utr ? ` · UTR ${s.transfer_utr}` : ""}`,
+    source: "cashfree_settlement",
+    status: "completed",
+    transaction_date: s.order_settled_time.slice(0, 10),
+    metadata: { order_id: s.order_id, order_amount: s.order_amount, service_charge: s.service_charge, service_tax: s.service_tax, utr: s.transfer_utr },
+  };
+}
+
+export function normalizeCashfreeRefund(r: CashfreeRefund): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  switch (r.refund_status?.toUpperCase()) {
+    case "SUCCESS":  status = "completed"; break;
+    case "CANCELLED": status = "failed";  break;
+    default:         status = "pending";
+  }
+  return {
+    external_id: `cf_refund_${r.cf_refund_id}`,
+    type: "debit",
+    amount: r.refund_amount,
+    currency: (r.refund_currency ?? "INR").toUpperCase(),
+    category: "refund",
+    counterparty_name: null,
+    description: r.refund_note ?? `Refund for order ${r.order_id}`,
+    source: "cashfree_refund",
+    status,
+    transaction_date: r.created_at.slice(0, 10),
+    metadata: { order_id: r.order_id, cf_payment_id: r.cf_payment_id },
+  };
+}
+
+// ─── PayU normalizers ─────────────────────────────────────────────────────────
+
+export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  let type: "credit" | "debit" = "credit";
+  switch (tx.status?.toLowerCase()) {
+    case "success":                   status = "completed"; break;
+    case "refunded":                  status = "refunded"; type = "debit"; break;
+    case "failure": case "failed":    status = "failed";   break;
+    default:                          status = "pending";
+  }
+
+  const amount = parseFloat(tx.amount ?? "0") || 0;
+  const dateStr = tx.addedon ? tx.addedon.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const counterparty = tx.firstname ?? tx.email ?? tx.phone ?? null;
+
+  return {
+    external_id: `payu_${tx.mihpayid}`,
+    type,
+    amount,
+    currency: "INR",
+    category: null,
+    counterparty_name: counterparty,
+    description: tx.productinfo ?? `PayU txn ${tx.txnid}`,
+    source: "payu",
+    status,
+    transaction_date: dateStr,
+    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit },
+  };
+}
+
+// ─── Paytm normalizers ────────────────────────────────────────────────────────
+
+export function normalizePaytmTransaction(tx: PaytmTransaction): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  switch (tx.status?.toUpperCase()) {
+    case "TXN_SUCCESS":  status = "completed"; break;
+    case "TXN_FAILURE":  status = "failed";    break;
+    default:             status = "pending";
+  }
+
+  const amount = parseFloat(tx.txnAmount ?? "0") || 0;
+  const dateStr = tx.txnDate ? tx.txnDate.slice(0, 10) : new Date().toISOString().slice(0, 10);
+
+  return {
+    external_id: `paytm_${tx.txnId ?? tx.orderId}`,
+    type: "credit",
+    amount,
+    currency: "INR",
+    category: null,
+    counterparty_name: tx.custId ?? null,
+    description: `Paytm order ${tx.orderId}`,
+    source: "paytm",
+    status,
+    transaction_date: dateStr,
+    metadata: { orderId: tx.orderId, txnId: tx.txnId, paymentMode: tx.paymentMode, bankTxnId: tx.bankTxnId, responseCode: tx.responseCode },
+  };
+}
+
+// ─── Easebuzz normalizers ─────────────────────────────────────────────────────
+
+export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): NormalizedTransaction {
+  let status: NormalizedTransaction["status"];
+  let type: "credit" | "debit" = "credit";
+  switch (tx.status?.toLowerCase()) {
+    case "success":                   status = "completed"; break;
+    case "refunded":                  status = "refunded"; type = "debit"; break;
+    case "failure": case "failed":    status = "failed";   break;
+    default:                          status = "pending";
+  }
+
+  const amount = parseFloat(tx.amount ?? "0") || 0;
+  const dateStr = tx.addedon ? tx.addedon.slice(0, 10) : new Date().toISOString().slice(0, 10);
+  const counterparty = tx.firstname ?? tx.email ?? tx.phone ?? null;
+
+  return {
+    external_id: `eb_${tx.txnid}`,
+    type,
+    amount,
+    currency: "INR",
+    category: null,
+    counterparty_name: counterparty,
+    description: tx.productinfo ?? `Easebuzz txn ${tx.txnid}`,
+    source: "easebuzz",
+    status,
+    transaction_date: dateStr,
+    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit },
+  };
+}
+
 // ─── CSV / Excel normalizer ───────────────────────────────────────────────────
 
 export function normalizeCsvRow(
