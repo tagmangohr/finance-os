@@ -99,6 +99,50 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     ],
   },
   {
+    type: "cashfree",
+    name: "Cashfree",
+    description: "Orders, settlements, and refunds",
+    icon: "🔵",
+    fields: [
+      { key: "client_id",     label: "Client ID",     placeholder: "CF_CLIENT_ID_XXXX" },
+      { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "email",         label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
+    type: "payu",
+    name: "PayU",
+    description: "Payments and transaction history",
+    icon: "🟠",
+    fields: [
+      { key: "key",   label: "Merchant Key",  placeholder: "abcXYZ" },
+      { key: "salt",  label: "Merchant Salt", isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "email", label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
+    type: "paytm",
+    name: "Paytm",
+    description: "Merchant transaction history",
+    icon: "🔷",
+    fields: [
+      { key: "merchant_id",  label: "Merchant ID",  placeholder: "YOURME12345678901234" },
+      { key: "merchant_key", label: "Merchant Key", isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "email",        label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
+    type: "easebuzz",
+    name: "Easebuzz",
+    description: "Payments and transaction reports",
+    icon: "🟡",
+    fields: [
+      { key: "key",   label: "API Key",  placeholder: "EasebuzzKey" },
+      { key: "salt",  label: "API Salt", isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "email", label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
     type: "bank_statement",
     name: "Bank Statement",
     description: "Upload bank statement CSV/Excel",
@@ -311,6 +355,10 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       const endpoints: Partial<Record<Connector["type"], string>> = {
         razorpay: "/api/connectors/razorpay",
         stripe:   "/api/connectors/stripe",
+        cashfree: "/api/connectors/cashfree",
+        payu:     "/api/connectors/payu",
+        paytm:    "/api/connectors/paytm",
+        easebuzz: "/api/connectors/easebuzz",
       };
       const endpoint = endpoints[connector.type];
       let synced = 0;
@@ -530,8 +578,8 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       {/* ── Modal ──────────────────────────────────────────────────────────── */}
       <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && handleCloseModal()}>
         <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
-          <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] p-6 focus:outline-none animate-scale-in">
+          <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
+          <Dialog.Content className="fixed z-[201] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] p-6 focus:outline-none animate-scale-in">
 
             <div className="flex items-center justify-between mb-5">
               <div>
@@ -673,6 +721,14 @@ function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>):
       return cfg.realm_id ? `Realm ${cfg.realm_id}` : null;
     case "tally":
       return cfg.host ? `${cfg.host}:${cfg.port ?? "9000"}` : null;
+    case "cashfree":
+      return cfg.client_id ? maskKey(cfg.client_id) : null;
+    case "payu":
+      return cfg.key ? maskKey(cfg.key) : null;
+    case "paytm":
+      return cfg.merchant_id ? maskKey(cfg.merchant_id) : null;
+    case "easebuzz":
+      return cfg.key ? maskKey(cfg.key) : null;
     default:
       return null;
   }
