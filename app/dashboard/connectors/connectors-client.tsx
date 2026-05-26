@@ -11,6 +11,8 @@ import {
   Trash2,
   Plus,
   Pencil,
+  Landmark,
+  FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -33,9 +35,54 @@ interface ConnectorDef {
   type: Connector["type"];
   name: string;
   description: string;
-  icon: string;
+  icon: React.ReactNode;
   fields?: FieldDef[];
   isCSV?: boolean;
+}
+
+// ─── Logo helpers ─────────────────────────────────────────────────────────────
+
+/** White Simple Icons logo on a brand-colored rounded square. */
+function SiIcon({ slug, bg }: { slug: string; bg: string }) {
+  return (
+    <div
+      className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0"
+      style={{ background: bg }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`https://cdn.simpleicons.org/${slug}/ffffff`}
+        alt={slug}
+        width={22}
+        height={22}
+        style={{ width: 22, height: 22 }}
+      />
+    </div>
+  );
+}
+
+/** Letter-mark logo for gateways not in Simple Icons. */
+function LetterIcon({ letters, bg }: { letters: string; bg: string }) {
+  return (
+    <div
+      className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-[11px] tracking-tight text-white select-none"
+      style={{ background: bg }}
+    >
+      {letters}
+    </div>
+  );
+}
+
+/** Lucide icon on a tinted rounded square (for upload-type connectors). */
+function LucideIcon({ icon, bg }: { icon: React.ReactNode; bg: string }) {
+  return (
+    <div
+      className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0"
+      style={{ background: bg }}
+    >
+      {icon}
+    </div>
+  );
 }
 
 const CONNECTOR_DEFS: ConnectorDef[] = [
@@ -43,7 +90,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "razorpay",
     name: "Razorpay",
     description: "Payments, refunds, settlements, disputes",
-    icon: "💳",
+    icon: <SiIcon slug="razorpay" bg="#2D81F7" />,
     fields: [
       { key: "key_id",     label: "Key ID",      placeholder: "rzp_live_..." },
       { key: "key_secret", label: "Key Secret",  isPassword: true, placeholder: "••••••••••••••••" },
@@ -55,7 +102,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "stripe",
     name: "Stripe",
     description: "Charges, payouts, and invoices",
-    icon: "⚡",
+    icon: <SiIcon slug="stripe" bg="#635BFF" />,
     fields: [
       { key: "secret_key", label: "Secret Key", isPassword: true, placeholder: "sk_live_..." },
       { key: "email",      label: "Account Email", placeholder: "you@company.com", isOptional: true },
@@ -66,7 +113,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "zoho",
     name: "Zoho Books",
     description: "Invoices, bills, and journal entries",
-    icon: "📚",
+    icon: <SiIcon slug="zoho" bg="#E42527" />,
     fields: [
       { key: "client_id",     label: "Client ID",     placeholder: "1000.XXXX..." },
       { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••" },
@@ -78,7 +125,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "quickbooks",
     name: "QuickBooks",
     description: "P&L, balance sheet, transactions",
-    icon: "🟢",
+    icon: <SiIcon slug="quickbooks" bg="#2CA01C" />,
     fields: [
       { key: "client_id",     label: "Client ID",     placeholder: "ABc1234..." },
       { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••" },
@@ -90,7 +137,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "tally",
     name: "Tally",
     description: "Tally ERP vouchers and ledgers",
-    icon: "🧾",
+    icon: <LetterIcon letters="T" bg="#F2542D" />,
     fields: [
       { key: "host",  label: "Tally Host", placeholder: "localhost" },
       { key: "port",  label: "Port",       placeholder: "9000" },
@@ -102,7 +149,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "cashfree",
     name: "Cashfree",
     description: "Orders, settlements, and refunds",
-    icon: "🔵",
+    icon: <SiIcon slug="cashfree" bg="#1B2CC1" />,
     fields: [
       { key: "client_id",     label: "Client ID",     placeholder: "CF_CLIENT_ID_XXXX" },
       { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••••••••••" },
@@ -113,7 +160,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "payu",
     name: "PayU",
     description: "Payments and transaction history",
-    icon: "🟠",
+    icon: <SiIcon slug="payu" bg="#EA5A0B" />,
     fields: [
       { key: "key",   label: "Merchant Key",  placeholder: "abcXYZ" },
       { key: "salt",  label: "Merchant Salt", isPassword: true, placeholder: "••••••••••••••••" },
@@ -124,7 +171,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "paytm",
     name: "Paytm",
     description: "Merchant transaction history",
-    icon: "🔷",
+    icon: <SiIcon slug="paytm" bg="#002970" />,
     fields: [
       { key: "merchant_id",  label: "Merchant ID",  placeholder: "YOURME12345678901234" },
       { key: "merchant_key", label: "Merchant Key", isPassword: true, placeholder: "••••••••••••••••" },
@@ -135,7 +182,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "easebuzz",
     name: "Easebuzz",
     description: "Payments and transaction reports",
-    icon: "🟡",
+    icon: <LetterIcon letters="EB" bg="#7C3AED" />,
     fields: [
       { key: "key",   label: "API Key",  placeholder: "EasebuzzKey" },
       { key: "salt",  label: "API Salt", isPassword: true, placeholder: "••••••••••••••••" },
@@ -146,14 +193,14 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "bank_statement",
     name: "Bank Statement",
     description: "Upload bank statement CSV/Excel",
-    icon: "🏦",
+    icon: <LucideIcon bg="#1B3A5C" icon={<Landmark className="h-[18px] w-[18px] text-white/80" />} />,
     isCSV: true,
   },
   {
     type: "csv",
     name: "Generic CSV",
     description: "Upload any CSV with transactions",
-    icon: "📄",
+    icon: <LucideIcon bg="#1A3A28" icon={<FileSpreadsheet className="h-[18px] w-[18px] text-white/80" />} />,
     isCSV: true,
   },
 ];
@@ -444,7 +491,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             >
               {/* Header */}
               <div className="flex items-start gap-3">
-                <span className="text-2xl leading-none mt-0.5">{def.icon}</span>
+                {def.icon}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-white/80">{def.name}</p>
                   <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
