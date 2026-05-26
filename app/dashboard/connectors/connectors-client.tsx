@@ -13,6 +13,7 @@ import {
   Pencil,
   Landmark,
   FileSpreadsheet,
+  GripVertical,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -42,8 +43,23 @@ interface ConnectorDef {
 
 // ─── Logo helpers ─────────────────────────────────────────────────────────────
 
-/** White Simple Icons logo on a brand-colored rounded square. */
+/** White Simple Icons logo on a brand-colored rounded square.
+ *  Falls back to a letter-mark if the CDN doesn't have the slug. */
 function SiIcon({ slug, bg }: { slug: string; bg: string }) {
+  const [broken, setBroken] = React.useState(false);
+  const letters = slug.slice(0, 2).toUpperCase();
+
+  if (broken) {
+    return (
+      <div
+        className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 font-bold text-[11px] tracking-tight text-white select-none"
+        style={{ background: bg }}
+      >
+        {letters}
+      </div>
+    );
+  }
+
   return (
     <div
       className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -56,6 +72,7 @@ function SiIcon({ slug, bg }: { slug: string; bg: string }) {
         width={22}
         height={22}
         style={{ width: 22, height: 22 }}
+        onError={() => setBroken(true)}
       />
     </div>
   );
@@ -149,7 +166,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "cashfree",
     name: "Cashfree",
     description: "Orders, settlements, and refunds",
-    icon: <SiIcon slug="cashfree" bg="#1B2CC1" />,
+    icon: <LetterIcon letters="CF" bg="#1B2CC1" />,
     fields: [
       { key: "client_id",     label: "Client ID",     placeholder: "CF_CLIENT_ID_XXXX" },
       { key: "client_secret", label: "Client Secret", isPassword: true, placeholder: "••••••••••••••••" },
@@ -160,7 +177,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "payu",
     name: "PayU",
     description: "Payments and transaction history",
-    icon: <SiIcon slug="payu" bg="#EA5A0B" />,
+    icon: <LetterIcon letters="PU" bg="#EA5A0B" />,
     fields: [
       { key: "key",   label: "Merchant Key",  placeholder: "abcXYZ" },
       { key: "salt",  label: "Merchant Salt", isPassword: true, placeholder: "••••••••••••••••" },
@@ -243,6 +260,53 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
+
+  // ── Draggable dialog ───────────────────────────────────────────────────────
+
+  const [dialogPos, setDialogPos] = React.useState<{ x: number; y: number } | null>(null);
+  const dialogContentRef = React.useRef<HTMLDivElement>(null);
+  const dragOrigin = React.useRef<{ mouseX: number; mouseY: number; elemX: number; elemY: number } | null>(null);
+
+  // Reset to center whenever a different modal opens
+  React.useEffect(() => { setDialogPos(null); }, [openModal]);
+
+  const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Don't steal clicks on interactive children (buttons, inputs)
+    if ((e.target as HTMLElement).closest("button, input, select, textarea, a")) return;
+    e.preventDefault();
+
+    const el = dialogContentRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+
+    dragOrigin.current = {
+      mouseX: e.clientX,
+      mouseY: e.clientY,
+      elemX: rect.left,
+      elemY: rect.top,
+    };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragOrigin.current || !dialogContentRef.current) return;
+      const dx = ev.clientX - dragOrigin.current.mouseX;
+      const dy = ev.clientY - dragOrigin.current.mouseY;
+      const W = dialogContentRef.current.offsetWidth;
+      const H = dialogContentRef.current.offsetHeight;
+      setDialogPos({
+        x: Math.max(8, Math.min(window.innerWidth  - W - 8, dragOrigin.current.elemX + dx)),
+        y: Math.max(8, Math.min(window.innerHeight - H - 8, dragOrigin.current.elemY + dy)),
+      });
+    };
+
+    const onUp = () => {
+      dragOrigin.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
+  };
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -626,96 +690,119 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && handleCloseModal()}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
-          <Dialog.Content className="fixed z-[201] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] p-6 focus:outline-none animate-scale-in">
 
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <Dialog.Title className="text-base font-semibold text-white/85">
-                  {editingConnector
-                    ? `Edit ${openModal?.name}`
-                    : openModal?.isCSV
-                    ? `Upload ${openModal?.name}`
-                    : `Connect ${openModal?.name}`}
-                </Dialog.Title>
-                {editingConnector && (
-                  <p className="text-xs text-white/30 mt-0.5">
-                    Leave password fields blank to keep existing credentials
-                  </p>
-                )}
+          {/* Draggable dialog — positioning via inline style so we can switch between
+              centered (null) and free-floating (pixel coords) without class conflicts */}
+          <Dialog.Content
+            ref={dialogContentRef}
+            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+            style={
+              dialogPos
+                ? { left: dialogPos.x, top: dialogPos.y, transform: "none", maxHeight: "calc(100vh - 32px)" }
+                : { left: "50%", top: "50%", transform: "translate(-50%, -50%)", maxHeight: "calc(100vh - 32px)" }
+            }
+          >
+            {/* ── Drag-handle header ─────────────────────────────────────── */}
+            <div
+              className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 cursor-grab active:cursor-grabbing select-none border-b border-white/[0.05]"
+              onMouseDown={handleDragStart}
+            >
+              <div className="flex items-start gap-2.5">
+                <GripVertical className="h-4 w-4 text-white/15 mt-0.5 flex-shrink-0" />
+                <div>
+                  <Dialog.Title className="text-[14px] font-semibold text-white/85 leading-snug">
+                    {editingConnector
+                      ? `Edit ${openModal?.name}`
+                      : openModal?.isCSV
+                      ? `Upload ${openModal?.name}`
+                      : `Connect ${openModal?.name}`}
+                  </Dialog.Title>
+                  {editingConnector && (
+                    <p className="text-[11px] text-white/30 mt-0.5">
+                      Leave password fields blank to keep existing credentials
+                    </p>
+                  )}
+                </div>
               </div>
+              {/* stopPropagation so clicking × doesn't start a drag */}
               <Dialog.Close asChild>
-                <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+                <button
+                  className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06] flex-shrink-0"
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
                   <X className="h-4 w-4" />
                 </button>
               </Dialog.Close>
             </div>
 
-            {openModal?.isCSV ? (
-              <CSVUploadForm
-                csvFile={csvFile}
-                csvHeaders={csvHeaders}
-                csvMapping={csvMapping}
-                onFileChange={handleCSVUpload}
-                onMappingChange={setCsvMapping}
-              />
-            ) : (
-              <div className="space-y-3">
-                {/* Account label */}
-                <FormField
-                  label="Account Label"
-                  placeholder={`e.g. ${openModal?.name} Production`}
-                  value={formValues.name ?? ""}
-                  onChange={(v) => setFormValues((p) => ({ ...p, name: v }))}
+            {/* ── Scrollable body ────────────────────────────────────────── */}
+            <div className="px-5 py-4 overflow-y-auto flex-1">
+              {openModal?.isCSV ? (
+                <CSVUploadForm
+                  csvFile={csvFile}
+                  csvHeaders={csvHeaders}
+                  csvMapping={csvMapping}
+                  onFileChange={handleCSVUpload}
+                  onMappingChange={setCsvMapping}
                 />
-
-                {/* Divider */}
-                <div className="flex items-center gap-2 py-1">
-                  <div className="flex-1 h-px bg-white/[0.05]" />
-                  <span className="text-[10px] text-white/20 uppercase tracking-widest">Credentials</span>
-                  <div className="flex-1 h-px bg-white/[0.05]" />
-                </div>
-
-                {/* API credential fields */}
-                {openModal?.fields?.filter((f) => !f.isOptional).map((field) => (
+              ) : (
+                <div className="space-y-3">
+                  {/* Account label */}
                   <FormField
-                    key={field.key}
-                    label={field.label}
-                    type={field.isPassword ? "password" : "text"}
-                    placeholder={
-                      editingConnector && field.isPassword
-                        ? "Leave blank to keep existing"
-                        : field.placeholder
-                    }
-                    value={formValues[field.key] ?? ""}
-                    onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
+                    label="Account Label"
+                    placeholder={`e.g. ${openModal?.name} Production`}
+                    value={formValues.name ?? ""}
+                    onChange={(v) => setFormValues((p) => ({ ...p, name: v }))}
                   />
-                ))}
 
-                {/* Optional context fields */}
-                {openModal?.fields?.some((f) => f.isOptional) && (
-                  <>
-                    <div className="flex items-center gap-2 py-1">
-                      <div className="flex-1 h-px bg-white/[0.05]" />
-                      <span className="text-[10px] text-white/20 uppercase tracking-widest">
-                        Optional info
-                      </span>
-                      <div className="flex-1 h-px bg-white/[0.05]" />
-                    </div>
-                    {openModal?.fields?.filter((f) => f.isOptional).map((field) => (
-                      <FormField
-                        key={field.key}
-                        label={field.label}
-                        placeholder={field.placeholder}
-                        value={formValues[field.key] ?? ""}
-                        onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
-                      />
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
+                  {/* Credentials divider */}
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="flex-1 h-px bg-white/[0.05]" />
+                    <span className="text-[10px] text-white/20 uppercase tracking-widest">Credentials</span>
+                    <div className="flex-1 h-px bg-white/[0.05]" />
+                  </div>
 
-            <div className="flex gap-2.5 mt-6">
+                  {/* Required credential fields */}
+                  {openModal?.fields?.filter((f) => !f.isOptional).map((field) => (
+                    <FormField
+                      key={field.key}
+                      label={field.label}
+                      type={field.isPassword ? "password" : "text"}
+                      placeholder={
+                        editingConnector && field.isPassword
+                          ? "Leave blank to keep existing"
+                          : field.placeholder
+                      }
+                      value={formValues[field.key] ?? ""}
+                      onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
+                    />
+                  ))}
+
+                  {/* Optional fields */}
+                  {openModal?.fields?.some((f) => f.isOptional) && (
+                    <>
+                      <div className="flex items-center gap-2 py-1">
+                        <div className="flex-1 h-px bg-white/[0.05]" />
+                        <span className="text-[10px] text-white/20 uppercase tracking-widest">Optional info</span>
+                        <div className="flex-1 h-px bg-white/[0.05]" />
+                      </div>
+                      {openModal?.fields?.filter((f) => f.isOptional).map((field) => (
+                        <FormField
+                          key={field.key}
+                          label={field.label}
+                          placeholder={field.placeholder}
+                          value={formValues[field.key] ?? ""}
+                          onChange={(v) => setFormValues((p) => ({ ...p, [field.key]: v }))}
+                        />
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ── Sticky footer — always visible ─────────────────────────── */}
+            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
               <Dialog.Close asChild>
                 <Button
                   variant="outline"
