@@ -698,8 +698,10 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
             style={
               dialogPos
-                ? { left: dialogPos.x, top: dialogPos.y, transform: "none", maxHeight: "calc(100vh - 32px)" }
-                : { left: "50%", top: "50%", transform: "translate(-50%, -50%)", maxHeight: "calc(100vh - 32px)" }
+                // Dragging: explicit pixel position, clear inset constraints
+                ? { top: dialogPos.y, left: dialogPos.x, right: "auto", bottom: "auto", margin: 0, maxHeight: "calc(100vh - 32px)" }
+                // Centered: inset:0 + margin:auto — doesn't use transform, so animation can't clobber it
+                : { top: 0, left: 0, right: 0, bottom: 0, margin: "auto", maxHeight: "calc(100vh - 32px)" }
             }
           >
             {/* ── Drag-handle header ─────────────────────────────────────── */}
