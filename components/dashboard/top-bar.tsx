@@ -1,19 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
-import { RefreshCw, Bell } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { RefreshCw, Bell, Search } from "lucide-react";
 import { SyncModal } from "@/components/dashboard/sync-modal";
+import { CommandPalette, useCommandPalette } from "@/components/dashboard/command-palette";
 
-const PAGE_TITLES: Record<string, { title: string; emoji: string }> = {
-  "/dashboard": { title: "War Room", emoji: "⚡" },
-  "/dashboard/revenue": { title: "Revenue", emoji: "📈" },
-  "/dashboard/cashflow": { title: "Cash Flow", emoji: "💧" },
-  "/dashboard/collections": { title: "Collections", emoji: "📬" },
-  "/dashboard/intelligence": { title: "AI Intelligence", emoji: "🧠" },
-  "/dashboard/connectors": { title: "Connectors", emoji: "🔌" },
-  "/dashboard/data": { title: "Raw Data", emoji: "🗄️" },
+const PAGE_META: Record<string, { label: string }> = {
+  "/dashboard":              { label: "War Room" },
+  "/dashboard/revenue":      { label: "Revenue" },
+  "/dashboard/cashflow":     { label: "Cash Flow" },
+  "/dashboard/collections":  { label: "Collections" },
+  "/dashboard/intelligence": { label: "Intelligence" },
+  "/dashboard/connectors":   { label: "Connectors" },
+  "/dashboard/data":         { label: "Raw Data" },
 };
 
 interface TopBarProps {
@@ -23,43 +23,80 @@ interface TopBarProps {
 
 export function TopBar({ orgId, orgName }: TopBarProps) {
   const pathname = usePathname();
-  const [modalOpen, setModalOpen] = useState(false);
-  const page = PAGE_TITLES[pathname] ?? { title: "Finance OS", emoji: "✦" };
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [clock, setClock] = useState("");
+  const { open: cmdOpen, setOpen: setCmdOpen, close: closeCmd } = useCommandPalette();
+
+  const page = PAGE_META[pathname] ?? { label: "Finance OS" };
+
+  useEffect(() => {
+    const update = () => {
+      const now = new Date();
+      setClock(
+        now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false }) +
+        " IST · " +
+        now.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })
+      );
+    };
+    update();
+    const id = setInterval(update, 30000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <>
-      <header className="sticky top-0 z-10 h-14 flex items-center justify-between px-6 border-b border-white/[0.05] bg-[#060a14]/80 backdrop-blur-xl">
-        <div className="flex items-center gap-2.5">
-          <span className="text-base leading-none">{page.emoji}</span>
-          <div>
-            <h1 className="font-semibold text-sm text-white/90 leading-none">{page.title}</h1>
-            <p className="text-[11px] text-white/25 mt-0.5">{orgName}</p>
+      <header
+        className="sticky top-0 z-[5] h-12 flex items-center gap-3 px-4 border-b border-white/[0.06] flex-shrink-0"
+        style={{ background: "rgba(4,7,15,0.75)", backdropFilter: "blur(20px)" }}
+      >
+        {/* Left: breadcrumb + LIVE pill + clock */}
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 text-[12px]">
+            <span className="text-white/30">{orgName}</span>
+            <span className="text-white/20">/</span>
+            <span className="font-semibold text-white/85">{page.label}</span>
           </div>
+
+          <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10.5px] font-semibold border bg-emerald-500/10 text-emerald-400 border-emerald-500/25">
+            <span className="w-1 h-1 rounded-full bg-emerald-400" />
+            LIVE
+          </span>
+
+          {clock && (
+            <span className="num text-[11px] text-white/25 hidden md:block">{clock}</span>
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Right: ⌘K search + refresh + bell */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           <button
-            onClick={() => setModalOpen(true)}
-            className={cn(
-              "flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-all duration-150",
-              "border border-white/[0.08] bg-white/[0.03] text-white/50 hover:bg-white/[0.06] hover:text-white/75 hover:border-white/[0.12]"
-            )}
+            onClick={() => setCmdOpen(true)}
+            className="hidden sm:flex items-center gap-2 h-[30px] w-[260px] px-2.5 rounded-lg text-[12px] cursor-pointer transition-all"
+            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.10)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.06)"; }}
+          >
+            <Search className="h-3 w-3 flex-shrink-0" />
+            <span className="flex-1 text-left">Ask anything or jump to…</span>
+            <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded text-white/30"
+              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>⌘K</kbd>
+          </button>
+
+          <button
+            onClick={() => setSyncOpen(true)}
+            className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-white/35 hover:text-white/70 hover:bg-white/[0.04] transition-all"
           >
             <RefreshCw className="w-3.5 h-3.5" />
-            Sync
           </button>
-          <button className="relative w-8 h-8 rounded-lg border border-white/[0.08] bg-white/[0.03] flex items-center justify-center hover:bg-white/[0.06] hover:border-white/[0.12] transition-all duration-150 text-white/40 hover:text-white/70">
+
+          <button className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-white/35 hover:text-white/70 hover:bg-white/[0.04] transition-all">
             <Bell className="w-3.5 h-3.5" />
           </button>
         </div>
       </header>
 
-      <SyncModal
-        open={modalOpen}
-        onOpenChange={setModalOpen}
-        orgId={orgId}
-        onSyncComplete={() => {/* dashboard will reload on close */}}
-      />
+      <SyncModal open={syncOpen} onOpenChange={setSyncOpen} orgId={orgId} onSyncComplete={() => {}} />
+      <CommandPalette open={cmdOpen} onClose={closeCmd} />
     </>
   );
 }

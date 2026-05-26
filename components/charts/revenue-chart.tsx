@@ -1,13 +1,12 @@
 "use client";
 
 import {
-  AreaChart,
-  Area,
+  BarChart,
+  Bar,
   XAxis,
-  YAxis,
-  CartesianGrid,
   Tooltip,
   ResponsiveContainer,
+  Cell,
   type TooltipProps,
 } from "recharts";
 import { format, parseISO } from "date-fns";
@@ -15,33 +14,27 @@ import { formatCurrency } from "@/lib/utils";
 
 interface RevenueChartProps {
   data: { month: string; amount: number }[];
+  height?: number;
 }
 
 function CustomTooltip({ active, payload, label }: TooltipProps<number, string>) {
   if (!active || !payload?.length) return null;
 
-  let displayDate = label;
+  let displayDate = label as string;
   try {
-    displayDate = format(parseISO(label + "-01"), "MMMM yyyy");
+    displayDate = format(parseISO((label as string) + "-01"), "MMMM yyyy");
   } catch {
-    displayDate = label;
+    displayDate = label as string;
   }
 
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-[#0d1428]/90 backdrop-blur-md px-3.5 py-2.5 text-sm shadow-xl">
-      <p className="text-white/40 text-xs mb-1.5">{displayDate}</p>
-      <p className="font-bold text-white/90 text-base">
+    <div className="rounded-xl border border-white/[0.08] bg-[#0d1428]/95 backdrop-blur-md px-3.5 py-2.5 shadow-xl">
+      <p className="text-white/40 text-[10.5px] font-bold tracking-[0.1em] uppercase mb-1.5">{displayDate}</p>
+      <p className="num font-bold text-white/90 text-[15px]">
         {formatCurrency(payload[0].value ?? 0, "INR", false)}
       </p>
     </div>
   );
-}
-
-function formatYAxis(value: number): string {
-  if (Math.abs(value) >= 10000000) return `₹${(value / 10000000).toFixed(1)}Cr`;
-  if (Math.abs(value) >= 100000) return `₹${(value / 100000).toFixed(1)}L`;
-  if (Math.abs(value) >= 1000) return `₹${(value / 1000).toFixed(0)}K`;
-  return `₹${value}`;
 }
 
 function formatXAxis(value: string): string {
@@ -52,72 +45,42 @@ function formatXAxis(value: string): string {
   }
 }
 
-export function RevenueChart({ data }: RevenueChartProps) {
+export function RevenueChart({ data, height = 260 }: RevenueChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-white/25 text-sm">
+      <div className="flex items-center justify-center text-white/25 text-sm" style={{ height }}>
         No revenue data available
       </div>
     );
   }
 
+  const lastIdx = data.length - 1;
+
   return (
-    <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={data} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0.3} />
-            <stop offset="60%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0.06} />
-            <stop offset="100%" stopColor="hsl(258, 88%, 66%)" stopOpacity={0} />
-          </linearGradient>
-          <filter id="revenueGlow">
-            <feGaussianBlur stdDeviation="2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
-        <CartesianGrid
-          strokeDasharray="3 3"
-          stroke="rgba(255,255,255,0.04)"
-          vertical={false}
-        />
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }} barCategoryGap="30%">
         <XAxis
           dataKey="month"
           tickFormatter={formatXAxis}
-          tick={{ fontSize: 11, fill: "rgba(255,255,255,0.3)" }}
+          tick={{ fontSize: 10.5, fill: "rgba(255,255,255,0.28)", fontFamily: "inherit" }}
           axisLine={false}
           tickLine={false}
           dy={8}
         />
-        <YAxis
-          tickFormatter={formatYAxis}
-          tick={{ fontSize: 10, fill: "rgba(255,255,255,0.25)" }}
-          axisLine={false}
-          tickLine={false}
-          width={52}
-        />
         <Tooltip
           content={<CustomTooltip />}
-          cursor={{ stroke: "rgba(255,255,255,0.08)", strokeWidth: 1, strokeDasharray: "4 4" }}
+          cursor={{ fill: "rgba(255,255,255,0.03)", radius: 4 }}
         />
-        <Area
-          type="monotone"
-          dataKey="amount"
-          stroke="hsl(258, 88%, 66%)"
-          strokeWidth={2}
-          fill="url(#revenueGradient)"
-          dot={false}
-          activeDot={{
-            r: 4,
-            strokeWidth: 0,
-            fill: "hsl(258, 88%, 66%)",
-            filter: "drop-shadow(0 0 6px hsl(258 88% 66% / 0.8))",
-          }}
-          filter="url(#revenueGlow)"
-        />
-      </AreaChart>
+        <Bar dataKey="amount" radius={[3, 3, 0, 0]}>
+          {data.map((_, index) => (
+            <Cell
+              key={index}
+              fill="#7c52f0"
+              opacity={index === lastIdx ? 0.95 : 0.38}
+            />
+          ))}
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   );
 }

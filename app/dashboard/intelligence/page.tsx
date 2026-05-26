@@ -2,8 +2,7 @@
 
 import * as React from "react";
 import { useSearchParams } from "next/navigation";
-import { Send, Sparkles, User, Bot, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Send, Sparkles, Loader2, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Message {
@@ -24,37 +23,43 @@ const QUICK_ASKS = [
   "Am I at risk of missing payroll?",
 ];
 
+// ── Message bubble ────────────────────────────────────────────────────
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
   return (
-    <div className={cn("flex gap-3 mb-4 animate-enter", isUser ? "flex-row-reverse" : "flex-row")}>
+    <div className={cn("flex gap-2.5 mb-3 animate-enter", isUser ? "flex-row-reverse" : "flex-row")}>
+      {/* Avatar */}
       <div
         className={cn(
-          "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center",
+          "flex-shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-[10px] font-bold",
           isUser
             ? "bg-primary/20 border border-primary/30 text-primary"
-            : "bg-white/[0.04] border border-white/[0.07] text-white/40"
+            : "bg-white/[0.04] border border-white/[0.08] text-white/30"
         )}
       >
-        {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+        {isUser ? "U" : <Sparkles className="h-3 w-3" />}
       </div>
+
+      {/* Bubble */}
       <div
         className={cn(
-          "max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed",
+          "max-w-[82%] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed",
           isUser
-            ? "bg-primary/15 border border-primary/20 text-white/85 rounded-tr-sm"
+            ? "bg-primary/[0.14] border border-primary/[0.18] text-white/85 rounded-tr-sm"
             : "bg-white/[0.04] border border-white/[0.07] text-white/75 rounded-tl-sm"
         )}
       >
-        {formatAssistantMessage(message.content, isUser)}
+        {isUser ? (
+          <span>{message.content}</span>
+        ) : (
+          formatAssistantMessage(message.content)
+        )}
       </div>
     </div>
   );
 }
 
-function formatAssistantMessage(content: string, isUser: boolean) {
-  if (isUser) return <span>{content}</span>;
-
+function formatAssistantMessage(content: string) {
   const parts = content.split(/(\*\*[^*]+\*\*)/g);
   return (
     <span>
@@ -70,19 +75,28 @@ function formatAssistantMessage(content: string, isUser: boolean) {
 
 function TypingIndicator() {
   return (
-    <div className="flex gap-3 mb-4">
-      <div className="flex-shrink-0 h-8 w-8 rounded-full bg-white/[0.04] border border-white/[0.07] flex items-center justify-center">
-        <Bot className="h-3.5 w-3.5 text-white/30" />
+    <div className="flex gap-2.5 mb-3">
+      <div className="flex-shrink-0 h-7 w-7 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
+        <Sparkles className="h-3 w-3 text-white/25" />
       </div>
-      <div className="bg-white/[0.04] border border-white/[0.07] rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 rounded-full bg-primary/50 animate-bounce [animation-delay:0ms]" />
-        <span className="h-1.5 w-1.5 rounded-full bg-primary/50 animate-bounce [animation-delay:150ms]" />
-        <span className="h-1.5 w-1.5 rounded-full bg-primary/50 animate-bounce [animation-delay:300ms]" />
+      <div className="bg-white/[0.04] border border-white/[0.07] rounded-xl rounded-tl-sm px-3.5 py-2.5 flex items-center gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="h-1.5 w-1.5 rounded-full"
+            style={{
+              background: "#7c52f0",
+              opacity: 0.6,
+              animation: `t-typing 1.2s ease-in-out ${i * 0.2}s infinite`,
+            }}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
+// ── Page ─────────────────────────────────────────────────────────────
 export default function IntelligencePage() {
   const searchParams = useSearchParams();
   const [messages, setMessages] = React.useState<Message[]>([
@@ -99,7 +113,7 @@ export default function IntelligencePage() {
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
-    const ask = searchParams.get("ask");
+    const ask = searchParams.get("ask") ?? searchParams.get("q");
     if (ask) {
       setInput(ask);
       textareaRef.current?.focus();
@@ -137,8 +151,8 @@ export default function IntelligencePage() {
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
       const data = await res.json();
+
       setMessages((prev) => [
         ...prev,
         {
@@ -171,26 +185,76 @@ export default function IntelligencePage() {
   };
 
   return (
-    <div className="flex gap-4 h-[calc(100vh-theme(spacing.14)-theme(spacing.10))] max-w-[1400px]">
-      {/* Chat panel */}
-      <div className="flex flex-col flex-1 min-w-0 bg-card border border-border/60 rounded-2xl overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.4)] animate-scale-in">
+    <div className="flex gap-3 max-w-[1400px]" style={{ height: "calc(100vh - 48px - 30px - 36px - 20px)" }}>
+
+      {/* ── Left panel: quick asks / insight seeds ─────────────────────── */}
+      <div className="hidden lg:flex flex-col gap-2 w-[220px] flex-shrink-0 overflow-y-auto">
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-white/[0.05] flex-shrink-0 bg-white/[0.01]">
-          <div className="h-8 w-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center shadow-[0_0_12px_hsl(258_88%_66%/0.2)]">
-            <Sparkles className="h-4 w-4 text-primary" />
+        <div
+          className="rounded-xl border border-white/[0.06] p-3.5"
+          style={{ background: "hsl(220 40% 7%)" }}
+        >
+          <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/25 mb-2.5">Quick Asks</p>
+          <div className="space-y-0.5">
+            {QUICK_ASKS.map((ask) => (
+              <button
+                key={ask}
+                onClick={() => sendMessage(ask)}
+                disabled={isLoading}
+                className="w-full text-left flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11.5px] text-white/40 hover:text-white/75 hover:bg-white/[0.04] transition-all duration-150 disabled:opacity-40 group"
+              >
+                <ChevronRight className="h-2.5 w-2.5 text-primary/40 group-hover:text-primary/70 flex-shrink-0" />
+                {ask}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Tip */}
+        <div
+          className="rounded-xl border border-primary/[0.12] p-3"
+          style={{ background: "rgba(124,82,240,0.04)" }}
+        >
+          <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-primary/50 mb-1.5">Pro tip</p>
+          <p className="text-[11px] text-white/30 leading-relaxed">
+            Ask follow-up questions in context. Try{" "}
+            <span className="text-white/55 font-medium">"Why?"</span> after any answer to dig deeper.
+          </p>
+        </div>
+      </div>
+
+      {/* ── Main chat panel ──────────────────────────────────────────── */}
+      <div
+        className="flex flex-col flex-1 min-w-0 rounded-xl border border-white/[0.06] overflow-hidden animate-scale-in"
+        style={{ background: "hsl(220 40% 7%)" }}
+      >
+        {/* Chat header */}
+        <div
+          className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.05] flex-shrink-0"
+          style={{ background: "rgba(255,255,255,0.012)" }}
+        >
+          <div
+            className="h-8 w-8 rounded-xl flex items-center justify-center"
+            style={{
+              background: "linear-gradient(135deg, rgba(124,82,240,0.35), rgba(124,82,240,0.12))",
+              border: "1px solid rgba(124,82,240,0.35)",
+              boxShadow: "0 0 12px rgba(124,82,240,0.25)",
+            }}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-white" />
           </div>
           <div>
-            <p className="text-sm font-semibold text-white/85">Finance Intelligence</p>
-            <p className="text-[11px] text-white/30">Powered by Claude</p>
+            <p className="text-[13px] font-semibold text-white/85">Finance Intelligence</p>
+            <p className="text-[10.5px] text-white/30">Powered by Claude</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-            <span className="text-[11px] text-white/30">Online</span>
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" style={{ boxShadow: "0 0 6px rgba(29,184,132,0.8)" }} />
+            <span className="text-[10.5px] text-white/30">Online</span>
           </div>
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto px-4 py-4">
           {messages.map((message) => (
             <MessageBubble key={message.id} message={message} />
           ))}
@@ -199,8 +263,25 @@ export default function IntelligencePage() {
         </div>
 
         {/* Input */}
-        <div className="border-t border-white/[0.05] p-4 flex-shrink-0 bg-white/[0.01]">
-          <div className="flex gap-2.5 items-end">
+        <div
+          className="px-4 pb-4 pt-3 border-t border-white/[0.05] flex-shrink-0"
+          style={{ background: "rgba(255,255,255,0.012)" }}
+        >
+          {/* Mobile quick asks */}
+          <div className="lg:hidden flex gap-1.5 overflow-x-auto pb-2 mb-2 scrollbar-none">
+            {QUICK_ASKS.slice(0, 4).map((ask) => (
+              <button
+                key={ask}
+                onClick={() => sendMessage(ask)}
+                disabled={isLoading}
+                className="flex-shrink-0 h-6 px-2.5 rounded-full border border-white/[0.07] bg-white/[0.02] text-[10.5px] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-all disabled:opacity-40"
+              >
+                {ask}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-2 items-end">
             <textarea
               ref={textareaRef}
               value={input}
@@ -208,52 +289,32 @@ export default function IntelligencePage() {
               onKeyDown={handleKeyDown}
               placeholder="Ask about your finances… (Enter to send)"
               rows={2}
-              className="flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-3 text-sm text-white/80 placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/30 disabled:opacity-50 transition-all duration-150"
+              className="flex-1 resize-none rounded-xl text-[13px] text-white/80 placeholder:text-white/20 focus:outline-none disabled:opacity-50 transition-all duration-150"
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                padding: "10px 14px",
+              }}
+              onFocus={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(124,82,240,0.35)"; }}
+              onBlur={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(255,255,255,0.08)"; }}
               disabled={isLoading}
             />
-            <Button
-              size="icon"
+            <button
               onClick={() => sendMessage()}
               disabled={isLoading || !input.trim()}
-              className="flex-shrink-0 h-11 w-11 rounded-xl shadow-[0_0_16px_hsl(258_88%_66%/0.25)] disabled:opacity-30 disabled:shadow-none transition-all duration-150"
+              className="flex-shrink-0 h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-150 disabled:opacity-30"
+              style={{
+                background: "rgba(124,82,240,0.9)",
+                boxShadow: "0 0 16px rgba(124,82,240,0.35)",
+              }}
             >
               {isLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="h-4 w-4 text-white animate-spin" />
               ) : (
-                <Send className="h-4 w-4" />
+                <Send className="h-4 w-4 text-white" />
               )}
-            </Button>
+            </button>
           </div>
-        </div>
-      </div>
-
-      {/* Quick asks panel */}
-      <div className="w-60 flex-shrink-0 hidden md:flex flex-col gap-3 animate-enter-delay-1">
-        <div className="bg-card border border-border/60 rounded-2xl p-4 shadow-[0_1px_3px_rgba(0,0,0,0.4)]">
-          <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-3">
-            Quick Asks
-          </p>
-          <div className="space-y-1">
-            {QUICK_ASKS.map((ask) => (
-              <button
-                key={ask}
-                onClick={() => sendMessage(ask)}
-                disabled={isLoading}
-                className="w-full text-left text-xs px-3 py-2 rounded-lg hover:bg-white/[0.04] hover:text-white/75 transition-all duration-150 text-white/40 disabled:opacity-40 group"
-              >
-                <span className="text-primary/50 mr-1.5 group-hover:text-primary/70">→</span>
-                {ask}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-primary/[0.06] border border-primary/15 rounded-2xl p-4">
-          <p className="text-[10px] font-semibold text-primary/60 uppercase tracking-widest mb-2">Pro tip</p>
-          <p className="text-xs text-white/30 leading-relaxed">
-            Ask follow-up questions in context. Try{" "}
-            <span className="text-white/55 font-medium">"Why?"</span> after any answer to dig deeper.
-          </p>
         </div>
       </div>
     </div>

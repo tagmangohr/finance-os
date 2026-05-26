@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type RunwaySeverity = "good" | "warning" | "critical";
@@ -9,138 +8,137 @@ interface RunwayCardProps {
   formattedValue: string;
   burnRate: number;
   formattedBurn: string;
+  cashBalance?: number;
+  formattedCash?: string;
   severity: RunwaySeverity;
   className?: string;
 }
 
-const severityConfig: Record<
-  RunwaySeverity,
-  { bar: string; glow: string; label: string; icon: string; fill: string }
-> = {
-  good: {
-    bar: "bg-gradient-to-r from-emerald-500 to-emerald-400",
-    glow: "shadow-[0_0_30px_hsl(158_64%_48%/0.18)]",
-    label: "text-emerald-400",
-    icon: "bg-emerald-400/10 text-emerald-400 border-emerald-400/20",
-    fill: "bg-emerald-400",
-  },
-  warning: {
-    bar: "bg-gradient-to-r from-amber-500 to-amber-400",
-    glow: "shadow-[0_0_30px_hsl(38_92%_56%/0.18)]",
-    label: "text-amber-400",
-    icon: "bg-amber-400/10 text-amber-400 border-amber-400/20",
-    fill: "bg-amber-400",
-  },
-  critical: {
-    bar: "bg-gradient-to-r from-red-500 to-red-400",
-    glow: "shadow-[0_0_30px_hsl(0_72%_56%/0.18)]",
-    label: "text-red-400",
-    icon: "bg-red-400/10 text-red-400 border-red-400/20",
-    fill: "bg-red-400",
-  },
+const severityConfig: Record<RunwaySeverity, { ring: string; glow: string; pill: string; pillText: string; label: string }> = {
+  good:    { ring: "#1db884", glow: "rgba(29,184,132,0.25)", pill: "rgba(29,184,132,0.12)", pillText: "#1db884", label: "Healthy — aim for 12+ months before next raise" },
+  warning: { ring: "#f59116", glow: "rgba(245,145,22,0.25)",  pill: "rgba(245,145,22,0.12)",  pillText: "#f59116", label: "Getting tight — start extending runway now" },
+  critical:{ ring: "#e83a3a", glow: "rgba(232,58,58,0.25)",   pill: "rgba(232,58,58,0.12)",   pillText: "#e83a3a", label: "Critical — immediate action required" },
 };
 
-// Max runway we display on the meter = 365 days (12 months)
 const MAX_DAYS = 365;
 
-function getRunwayMonths(days: number): string {
-  if (days <= 0) return "Critical — No runway";
-  const months = Math.floor(days / 30);
-  const remDays = days % 30;
-  if (months === 0) return `${days} days`;
-  if (remDays === 0) return `${months} month${months !== 1 ? "s" : ""}`;
-  return `${months}mo ${remDays}d`;
-}
+// Circumference for r=74: 2π×74 ≈ 464.9
+const R = 74;
+const CIRC = 2 * Math.PI * R;
 
 export function RunwayCard({
   days,
-  formattedValue,
   burnRate,
   formattedBurn,
+  cashBalance,
+  formattedCash,
   severity,
   className,
 }: RunwayCardProps) {
-  const config = severityConfig[severity];
-  const pct = Math.min((days / MAX_DAYS) * 100, 100);
+  const cfg = severityConfig[severity];
+  const pct = Math.min(days / MAX_DAYS, 1);
+  const dash = pct * CIRC;
+  const netBurn = burnRate; // monthly
 
-  const milestones = [
-    { label: "3mo", pct: (90 / MAX_DAYS) * 100 },
-    { label: "6mo", pct: (180 / MAX_DAYS) * 100 },
-    { label: "12mo", pct: (365 / MAX_DAYS) * 100 },
-  ];
+  const months = Math.floor(days / 30);
+  const remDays = days % 30;
+  const displayMonths = months > 0 ? `${months}mo${remDays > 0 ? ` ${remDays}d` : ""}` : `${days}d`;
 
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl bg-card border border-border/60 p-6 transition-all duration-300",
-        "before:absolute before:inset-0 before:rounded-2xl before:p-px before:bg-gradient-to-br before:from-white/[0.08] before:to-transparent before:-z-10",
-        config.glow,
+        "relative rounded-xl border border-white/[0.06] p-4 flex flex-col gap-3 overflow-hidden transition-all duration-200 hover:border-white/[0.10] hover:-translate-y-px",
         className
       )}
+      style={{ background: "hsl(220 40% 7%)" }}
     >
-      {/* Background texture */}
-      <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] via-transparent to-transparent pointer-events-none" />
+      {/* Ambient glow behind ring */}
+      <div
+        className="pointer-events-none absolute inset-0 opacity-20"
+        style={{ background: `radial-gradient(ellipse 60% 60% at 85% 50%, ${cfg.glow} 0%, transparent 70%)` }}
+      />
 
-      {/* Header row */}
-      <div className="flex items-start justify-between mb-5">
-        <div>
-          <p className="text-[10px] font-semibold text-white/35 uppercase tracking-[0.12em] mb-1">Runway</p>
-          <p
-            className={cn(
-              "text-[2.4rem] font-bold leading-none tracking-tight",
-              config.label
-            )}
-            style={{ fontVariantNumeric: "tabular-nums" }}
-          >
-            {getRunwayMonths(days)}
-          </p>
-          {burnRate > 0 && (
-            <p className="text-xs text-white/30 mt-2">
-              At <span className="text-white/50 font-medium">{formattedBurn}/mo</span> burn
-            </p>
-          )}
-        </div>
-        <div className={cn("w-11 h-11 rounded-xl border flex items-center justify-center flex-shrink-0", config.icon)}>
-          <Timer className="w-5 h-5" />
-        </div>
-      </div>
-
-      {/* Burn meter */}
-      <div className="space-y-2">
-        <div className="relative h-2 rounded-full bg-white/[0.06] overflow-hidden">
-          <div
-            className={cn("absolute left-0 top-0 h-full rounded-full transition-all duration-700", config.bar)}
-            style={{ width: `${pct}%` }}
-          />
+      <div className="relative flex items-center gap-5">
+        {/* SVG ring */}
+        <div className="flex-shrink-0 relative w-[100px] h-[100px]">
+          <svg width="100" height="100" viewBox="0 0 180 180" style={{ transform: "rotate(-90deg)" }}>
+            {/* track */}
+            <circle
+              cx="90" cy="90" r={R}
+              fill="none"
+              stroke="rgba(255,255,255,0.06)"
+              strokeWidth="10"
+            />
+            {/* progress */}
+            <circle
+              cx="90" cy="90" r={R}
+              fill="none"
+              stroke={cfg.ring}
+              strokeWidth="10"
+              strokeLinecap="round"
+              strokeDasharray={`${dash} ${CIRC}`}
+              style={{ filter: `drop-shadow(0 0 6px ${cfg.ring})`, transition: "stroke-dasharray 0.6s ease" }}
+            />
+          </svg>
+          {/* centre label */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/30">Runway</span>
+            <span className="num text-[11px] font-bold text-white/60 mt-0.5">{displayMonths}</span>
+          </div>
         </div>
 
-        {/* Milestone ticks */}
-        <div className="relative h-4">
-          {milestones.map(({ label, pct: tickPct }) => (
+        {/* Big number + meta */}
+        <div className="flex flex-col gap-3 flex-1 min-w-0">
+          {/* Main value */}
+          <div>
             <div
-              key={label}
-              className="absolute flex flex-col items-center"
-              style={{ left: `${tickPct}%`, transform: "translateX(-50%)" }}
+              className="num leading-none font-black tracking-[-0.04em]"
+              style={{
+                fontSize: "clamp(40px, 5vw, 64px)",
+                background: "linear-gradient(180deg, #ffffff 0%, rgba(245,145,22,0.65) 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
             >
-              <div className="h-1 w-px bg-white/15" />
-              <span className="text-[9px] text-white/20 mt-0.5">{label}</span>
+              {days > 0 ? days : "—"}
+              <span style={{ fontSize: "0.45em", opacity: 0.7 }}>d</span>
             </div>
-          ))}
+            <p className="text-[10px] text-white/25 mt-0.5">
+              Zero cash on{" "}
+              {days > 0
+                ? new Date(Date.now() + days * 864e5).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+                : "—"}
+            </p>
+          </div>
+
+          {/* Meta rows */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Burn</p>
+              <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedBurn}<span className="text-white/30">/mo</span></p>
+            </div>
+            {cashBalance !== undefined && formattedCash && (
+              <div>
+                <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Cash</p>
+                <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedCash}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Net Burn</p>
+              <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedBurn}<span className="text-white/30">/mo</span></p>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Cash remaining if we know it */}
-      {days > 0 && (
-        <div className="mt-4 pt-4 border-t border-white/[0.05] flex items-center justify-between">
-          <span className="text-[11px] text-white/25">Projected zero cash</span>
-          <span className="text-[11px] font-semibold text-white/50">
-            {new Date(Date.now() + days * 24 * 60 * 60 * 1000).toLocaleDateString("en-IN", {
-              month: "short",
-              year: "numeric",
-            })}
-          </span>
-        </div>
-      )}
+      {/* Health pill */}
+      <div
+        className="self-start text-[10.5px] font-semibold px-2.5 py-1 rounded-full"
+        style={{ background: cfg.pill, color: cfg.pillText }}
+      >
+        {cfg.label}
+      </div>
     </div>
   );
 }

@@ -9,7 +9,6 @@ import {
   Send,
   Search,
   Receipt,
-  ArrowRight,
   Zap,
   AlertCircle,
   AlertTriangle,
@@ -21,7 +20,6 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { RevenueChart } from "@/components/charts/revenue-chart";
 import { CashFlowChart } from "@/components/charts/cashflow-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   formatCurrency,
@@ -34,47 +32,75 @@ import type { IntelligenceAlert } from "@/lib/supabase/types";
 
 // ─── Alert severity icon map ────────────────────────────────────────
 const alertIcons = {
-  critical: { Icon: AlertCircle, color: "text-red-400", bg: "bg-red-400/10 border-red-400/20", dot: "bg-red-400" },
-  warning: { Icon: AlertTriangle, color: "text-amber-400", bg: "bg-amber-400/10 border-amber-400/20", dot: "bg-amber-400" },
-  info: { Icon: Info, color: "text-primary/70", bg: "bg-primary/10 border-primary/20", dot: "bg-primary/60" },
+  critical: { Icon: AlertCircle,  dot: "bg-red-400",   border: "border-red-400/20",   bg: "bg-red-400/[0.06]",   color: "text-red-400" },
+  warning:  { Icon: AlertTriangle, dot: "bg-amber-400", border: "border-amber-400/20", bg: "bg-amber-400/[0.06]", color: "text-amber-400" },
+  info:     { Icon: Info,          dot: "bg-primary/60", border: "border-primary/15",  bg: "bg-primary/[0.05]",   color: "text-primary/70" },
 };
 
 function AlertsCard({ alerts }: { alerts: IntelligenceAlert[] }) {
   const top = alerts.slice(0, 4);
   return (
-    <div className="rounded-2xl bg-card border border-border/60 p-5 flex flex-col h-full transition-all duration-300 hover:border-border hover:-translate-y-0.5">
-      <p className="text-[10px] font-semibold text-white/35 uppercase tracking-[0.12em] mb-3">
-        Active Alerts
-        {top.length > 0 && (
-          <span className="ml-2 inline-flex items-center justify-center h-4 w-4 rounded-full bg-amber-400/20 text-amber-400 text-[9px] font-bold">
+    <div
+      className="rounded-xl border border-white/[0.06] p-3.5 flex flex-col gap-1 transition-all duration-200 hover:border-white/[0.10] hover:-translate-y-px h-full"
+      style={{ background: "hsl(220 40% 7%)" }}
+    >
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/40">Active Alerts</span>
+        {alerts.length > 0 && (
+          <span className="inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-amber-400/20 text-amber-400 text-[9px] font-bold px-1">
             {alerts.length}
           </span>
         )}
-      </p>
+      </div>
+
       {top.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center py-4">
-          <div className="h-8 w-8 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center mb-2">
-            <span className="text-emerald-400 text-sm">✓</span>
+        <div className="flex-1 flex flex-col items-center justify-center py-4 gap-2">
+          <div className="h-7 w-7 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
+            <span className="text-emerald-400 text-xs">✓</span>
           </div>
-          <p className="text-xs text-white/25">All clear</p>
+          <p className="text-[11px] text-white/25">All clear</p>
         </div>
       ) : (
-        <div className="flex flex-col gap-2 flex-1">
+        <div className="flex flex-col gap-1.5 mt-1">
           {top.map((alert) => {
             const cfg = alertIcons[alert.severity];
-            const { Icon } = cfg;
             return (
-              <div key={alert.id} className={`flex items-start gap-2.5 rounded-xl border p-2.5 ${cfg.bg}`}>
+              <div key={alert.id} className={`flex items-start gap-2 rounded-lg border p-2 ${cfg.bg} ${cfg.border}`}>
                 <span className={`h-1.5 w-1.5 rounded-full mt-1.5 flex-shrink-0 ${cfg.dot}`} />
                 <div className="min-w-0">
-                  <p className={`text-xs font-semibold truncate ${cfg.color}`}>{alert.title}</p>
-                  <p className="text-[11px] text-white/30 mt-0.5 line-clamp-1">{alert.message}</p>
+                  <p className={`text-[11px] font-semibold truncate ${cfg.color}`}>{alert.title}</p>
+                  <p className="text-[10.5px] text-white/30 mt-0.5 line-clamp-1">{alert.message}</p>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Section card wrapper ─────────────────────────────────────────────
+function SectionCard({ title, subtitle, action, children, className }: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border border-white/[0.06] overflow-hidden transition-all duration-200 hover:border-white/[0.09]${className ? " " + className : ""}`}
+      style={{ background: "hsl(220 40% 7%)" }}
+    >
+      <div className="flex items-center justify-between px-4 pt-3.5 pb-0">
+        <div>
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/40">{title}</p>
+          {subtitle && <p className="text-[10.5px] text-white/20 mt-0.5">{subtitle}</p>}
+        </div>
+        {action}
+      </div>
+      <div className="px-4 pb-4 pt-2">{children}</div>
     </div>
   );
 }
@@ -108,15 +134,16 @@ export default async function DashboardPage() {
 
       {/* ── Empty state ─────────────────────────────────────────────── */}
       {!hasConnectors && (
-        <div className="rounded-2xl border border-dashed border-white/[0.07] p-12 text-center bg-white/[0.015] animate-fade-in">
-          <div className="mx-auto h-16 w-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-5 shadow-[0_0_30px_hsl(258_88%_66%/0.15)]">
-            <Receipt className="h-8 w-8 text-primary" />
+        <div className="rounded-xl border border-dashed border-white/[0.07] p-12 text-center bg-white/[0.015] animate-enter">
+          <div className="mx-auto h-14 w-14 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4"
+            style={{ boxShadow: "0 0 24px rgba(124,82,240,0.2)" }}>
+            <Receipt className="h-7 w-7 text-primary" />
           </div>
-          <h3 className="font-bold text-white/75 text-lg mb-2">Connect your data</h3>
-          <p className="text-sm text-white/30 mb-6 max-w-sm mx-auto leading-relaxed">
+          <h3 className="font-bold text-white/75 text-base mb-2">Connect your data</h3>
+          <p className="text-[13px] text-white/30 mb-5 max-w-sm mx-auto leading-relaxed">
             Link a payment gateway or accounting tool to unlock your financial intelligence dashboard.
           </p>
-          <Button asChild className="gap-2 shadow-[0_0_20px_hsl(258_88%_66%/0.3)]">
+          <Button asChild className="gap-2" style={{ boxShadow: "0 0 20px rgba(124,82,240,0.3)" }}>
             <Link href="/dashboard/connectors">
               <Zap className="h-4 w-4" />
               Connect a data source
@@ -125,43 +152,45 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* ── Row 1: Runway hero (2/3) + Cash Balance (1/3) ───────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter">
+      {/* ── Row 1: Runway hero (1.6fr) + metric cards (1fr) ─────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] gap-3 animate-enter">
         <RunwayCard
           days={runwayDays}
           formattedValue={formatRunway(runwayDays)}
           burnRate={burnRate}
           formattedBurn={formatCurrency(burnRate, "INR", true)}
+          cashBalance={cashBalance}
+          formattedCash={formatCurrency(cashBalance, "INR", true)}
           severity={runwaySeverity(runwayDays)}
-          className="lg:col-span-2"
         />
-        <MetricCard
-          title="Cash Balance"
-          value={formatCurrency(cashBalance, "INR", true)}
-          subtitle={snapshot ? `Updated ${formatDate(snapshot.snapshot_date)}` : "No data"}
-          icon={<Wallet className="h-4 w-4" />}
-          severity={
-            cashBalance < burnRate * 3 ? "critical"
-            : cashBalance < burnRate * 6 ? "warning"
-            : "good"
-          }
-          sparklineData={balanceSparkline.length >= 2 ? balanceSparkline : undefined}
-          sparklineColor="hsl(158, 64%, 48%)"
-        />
+        <div className="flex flex-col gap-3">
+          <MetricCard
+            title="Cash Balance"
+            value={formatCurrency(cashBalance, "INR", true)}
+            subtitle={snapshot ? `Updated ${formatDate(snapshot.snapshot_date)}` : "No data"}
+            severity={
+              cashBalance < burnRate * 3 ? "critical"
+              : cashBalance < burnRate * 6 ? "warning"
+              : "good"
+            }
+            sparklineData={balanceSparkline.length >= 2 ? balanceSparkline : undefined}
+            sparklineColor="#1db884"
+          />
+          <AlertsCard alerts={alerts} />
+        </div>
       </div>
 
-      {/* ── Row 2: MRR + Burn Rate + Alerts ──────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 animate-enter-delay-1">
+      {/* ── Row 2: MRR + Burn Rate + (2 more slots) ─────────────────── */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 animate-enter-delay-1">
         <MetricCard
           title="MRR"
           value={formatCurrency(mrr, "INR", true)}
           trend={mrrGrowth !== 0 ? mrrGrowth : undefined}
           trendLabel="MoM"
           subtitle={prevMrr === 0 ? "No prior period" : undefined}
-          icon={<TrendingUp className="h-4 w-4" />}
           severity={mrr > 0 ? "good" : "neutral"}
           sparklineData={mrrSparkline.length >= 2 ? mrrSparkline : undefined}
-          sparklineColor="hsl(158, 64%, 48%)"
+          sparklineColor="#1db884"
         />
         <MetricCard
           title="Burn Rate"
@@ -169,139 +198,113 @@ export default async function DashboardPage() {
           trend={burnChange !== 0 ? burnChange : undefined}
           trendLabel="MoM"
           subtitle={prevBurn === 0 ? "No prior period" : undefined}
-          icon={<Flame className="h-4 w-4" />}
           severity={burnChange > 40 ? "critical" : burnChange > 20 ? "warning" : "neutral"}
         />
-        <AlertsCard alerts={alerts} />
+        <MetricCard
+          title="ARR"
+          value={formatCurrency(mrr * 12, "INR", true)}
+          subtitle="Annual run rate"
+          severity={mrr > 0 ? "good" : "neutral"}
+        />
+        <MetricCard
+          title="Net Burn"
+          value={formatCurrency(burnRate, "INR", true) + "/mo"}
+          subtitle="Operating burn"
+          severity={burnRate > mrr * 1.5 ? "critical" : burnRate > mrr ? "warning" : "good"}
+        />
       </div>
 
       {/* ── Row 3: Revenue chart (2/3) + Top Debtors (1/3) ──────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-delay-2">
-        <Card className="lg:col-span-2 hover:border-border transition-all duration-300 hover:-translate-y-0.5">
-          <CardHeader>
-            <CardTitle>Revenue</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {revenueByMonth.length > 0 ? (
-              <RevenueChart data={revenueByMonth} />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <TrendingUp className="h-8 w-8 text-white/10 mb-3" />
-                <p className="text-sm text-white/25">No revenue data yet</p>
-                <Button variant="link" size="sm" asChild className="mt-1 text-primary/60 hover:text-primary">
-                  <Link href="/dashboard/connectors">Connect a source →</Link>
-                </Button>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="hover:border-border transition-all duration-300 hover:-translate-y-0.5">
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle>Top Debtors</CardTitle>
-              {topDebtors.length > 0 && (
-                <Link
-                  href="/dashboard/collections"
-                  className="text-[11px] text-white/30 hover:text-primary transition-colors"
-                >
-                  View all →
-                </Link>
-              )}
+        <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
+          {revenueByMonth.length > 0 ? (
+            <RevenueChart data={revenueByMonth} />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-52 text-center gap-3">
+              <TrendingUp className="h-7 w-7 text-white/10" />
+              <p className="text-[13px] text-white/25">No revenue data yet</p>
+              <Link href="/dashboard/connectors" className="text-[12px] text-primary/60 hover:text-primary transition-colors">
+                Connect a source →
+              </Link>
             </div>
-          </CardHeader>
-          <CardContent>
-            {topDebtors.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-48 text-center">
-                <div className="h-10 w-10 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center mb-3">
-                  <span className="text-emerald-400 text-lg">✓</span>
-                </div>
-                <p className="text-sm text-white/25">No outstanding receivables</p>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Top Debtors"
+          action={topDebtors.length > 0 ? (
+            <Link href="/dashboard/collections" className="text-[10.5px] text-white/25 hover:text-primary transition-colors">
+              View all →
+            </Link>
+          ) : undefined}
+        >
+          {topDebtors.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-[220px] gap-2">
+              <div className="h-9 w-9 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
+                <span className="text-emerald-400">✓</span>
               </div>
-            ) : (
-              <div className="space-y-2.5">
-                {topDebtors.slice(0, 5).map((debtor, idx) => (
-                  <div key={debtor.id} className="group flex items-center gap-3">
-                    <div
-                      className="h-7 w-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0"
-                      style={{
-                        background: `hsl(258 88% 66% / ${0.06 + idx * 0.02})`,
-                        color: `hsl(258 88% 66% / ${0.4 + idx * 0.05})`,
-                        border: `1px solid hsl(258 88% 66% / 0.12)`,
-                      }}
-                    >
-                      {idx + 1}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-white/70 truncate group-hover:text-white/90 transition-colors">
-                        {debtor.name}
-                      </p>
-                      <p className="text-[11px] text-white/25">
-                        {debtor.last_transaction_date
-                          ? `Last: ${formatDate(debtor.last_transaction_date)}`
-                          : "No transactions"}
-                      </p>
-                    </div>
-                    <div
-                      className="text-sm font-bold flex-shrink-0"
-                      style={{ fontVariantNumeric: "tabular-nums", color: "rgba(255,255,255,0.65)" }}
-                    >
-                      {formatCurrency(debtor.outstanding_amount, "INR", true)}
-                    </div>
+              <p className="text-[12px] text-white/25">No outstanding receivables</p>
+            </div>
+          ) : (
+            <div className="space-y-2 mt-1">
+              {topDebtors.slice(0, 5).map((debtor, idx) => (
+                <div key={debtor.id} className="flex items-center gap-2.5 group">
+                  <div
+                    className="h-6 w-6 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0"
+                    style={{
+                      background: `rgba(124,82,240,${0.06 + idx * 0.02})`,
+                      color: `rgba(124,82,240,${0.5 + idx * 0.05})`,
+                      border: "1px solid rgba(124,82,240,0.12)",
+                    }}
+                  >
+                    {idx + 1}
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                  <p className="text-[12px] text-white/55 truncate flex-1 group-hover:text-white/80 transition-colors">{debtor.name}</p>
+                  <p className="num text-[12px] font-semibold text-white/60 flex-shrink-0">
+                    {formatCurrency(debtor.outstanding_amount, "INR", true)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       {/* ── Row 4: Cash Flow + Expense ────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 animate-enter-delay-3">
-        <Card className="hover:border-border transition-all duration-300 hover:-translate-y-0.5">
-          <CardHeader>
-            <CardTitle>
-              Cash Flow
-              <span className="ml-2 text-white/20 font-normal text-xs">last 30 days</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {cashFlowData.length > 0 ? (
-              <CashFlowChart data={cashFlowData} />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <ArrowRight className="h-8 w-8 text-white/10 mb-3" />
-                <p className="text-sm text-white/25">No transaction data yet</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <SectionCard title="Cash Flow" subtitle="last 30 days">
+          {cashFlowData.length > 0 ? (
+            <CashFlowChart data={cashFlowData} />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-52 text-center gap-2">
+              <p className="text-[13px] text-white/25">No transaction data yet</p>
+            </div>
+          )}
+        </SectionCard>
 
-        <Card className="hover:border-border transition-all duration-300 hover:-translate-y-0.5">
-          <CardHeader>
-            <CardTitle>Expense Breakdown</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {categoryBreakdown.length > 0 ? (
-              <CategoryChart data={categoryBreakdown} />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-64 text-center">
-                <Receipt className="h-8 w-8 text-white/10 mb-3" />
-                <p className="text-sm text-white/25">No expense data yet</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <SectionCard title="Expense Breakdown">
+          {categoryBreakdown.length > 0 ? (
+            <CategoryChart data={categoryBreakdown} />
+          ) : (
+            <div className="flex flex-col items-center justify-center h-52 text-center gap-2">
+              <Receipt className="h-7 w-7 text-white/10" />
+              <p className="text-[13px] text-white/25">No expense data yet</p>
+            </div>
+          )}
+        </SectionCard>
       </div>
 
       {/* ── Row 5: Quick actions ──────────────────────────────────────── */}
-      <div className="rounded-2xl bg-card border border-border/60 p-5 animate-enter-delay-4 hover:border-border transition-all duration-300">
-        <p className="text-[10px] font-semibold text-white/25 uppercase tracking-[0.12em] mb-3">Quick Actions</p>
+      <div
+        className="rounded-xl border border-white/[0.06] p-3.5 animate-enter-delay-4"
+        style={{ background: "hsl(220 40% 7%)" }}
+      >
+        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/25 mb-2.5">Quick Actions</p>
         <div className="flex flex-wrap gap-2">
           {topDebtors.length > 0 && (
             <Link
               href="/dashboard/collections"
-              className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-medium border border-white/[0.07] bg-white/[0.02] text-white/40 hover:text-white/70 hover:bg-white/[0.05] hover:border-white/[0.12] transition-all duration-150"
+              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-white/[0.07] bg-white/[0.02] text-white/40 hover:text-white/70 hover:bg-white/[0.05] hover:border-white/[0.12] transition-all duration-150"
             >
               <Send className="h-3 w-3" />
               Collect from {topDebtors[0].name}
@@ -310,7 +313,7 @@ export default async function DashboardPage() {
           {alerts.some((a) => a.type === "anomaly") && (
             <Link
               href="/dashboard/intelligence"
-              className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-medium border border-amber-500/20 bg-amber-500/[0.05] text-amber-400/60 hover:text-amber-400 hover:bg-amber-500/[0.1] hover:border-amber-500/30 transition-all duration-150"
+              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-amber-500/20 bg-amber-500/[0.05] text-amber-400/60 hover:text-amber-400 hover:bg-amber-500/[0.1] hover:border-amber-500/30 transition-all duration-150"
             >
               <Search className="h-3 w-3" />
               Review anomaly
@@ -319,7 +322,7 @@ export default async function DashboardPage() {
           {alerts.some((a) => a.type === "tax_due") && (
             <Link
               href="/dashboard/intelligence"
-              className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-medium border border-white/[0.07] bg-white/[0.02] text-white/40 hover:text-white/70 hover:bg-white/[0.05] hover:border-white/[0.12] transition-all duration-150"
+              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-white/[0.07] bg-white/[0.02] text-white/40 hover:text-white/70 hover:bg-white/[0.05] hover:border-white/[0.12] transition-all duration-150"
             >
               <Receipt className="h-3 w-3" />
               Check tax position
@@ -327,7 +330,7 @@ export default async function DashboardPage() {
           )}
           <Link
             href="/dashboard/intelligence"
-            className="flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-xs font-medium border border-primary/20 bg-primary/[0.06] text-primary/60 hover:text-primary hover:bg-primary/[0.1] hover:border-primary/30 transition-all duration-150"
+            className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-primary/20 bg-primary/[0.06] text-primary/60 hover:text-primary hover:bg-primary/[0.10] hover:border-primary/30 transition-all duration-150"
           >
             <Search className="h-3 w-3" />
             Ask AI anything
