@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   CheckCircle2,
   RefreshCw,
@@ -233,6 +234,30 @@ const CSV_COLUMN_OPTIONS = [
   { value: "counterparty", label: "Counterparty / Name" },
 ];
 
+// ─── Sync date-range presets ──────────────────────────────────────────────────
+
+const SYNC_PRESETS = [
+  { label: "Last 30 days",  days: 30,   chunks: 1  },
+  { label: "Last 90 days",  days: 90,   chunks: 3  },
+  { label: "Last 6 months", days: 180,  chunks: 6  },
+  { label: "Last 1 year",   days: 365,  chunks: 13 },
+  { label: "Last 2 years",  days: 730,  chunks: 25 },
+  { label: "Last 3 years",  days: 1095, chunks: 37 },
+] as const;
+
+/** Split [from, to] into N-day chunks so no single API call times out. */
+function splitDateRange(from: Date, to: Date, chunkDays = 30): Array<{ from: Date; to: Date }> {
+  const chunks: Array<{ from: Date; to: Date }> = [];
+  let cursor = new Date(from);
+  const chunkMs = chunkDays * 24 * 60 * 60 * 1000;
+  while (cursor < to) {
+    const end = new Date(Math.min(cursor.getTime() + chunkMs, to.getTime()));
+    chunks.push({ from: new Date(cursor), to: end });
+    cursor = new Date(end.getTime() + 1); // +1 ms to avoid overlap
+  }
+  return chunks;
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface ConnectorsClientProps {
@@ -254,6 +279,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
+  const [syncProgress, setSyncProgress] = React.useState<{ connectorId: string; current: number; total: number } | null>(null);
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
@@ -459,31 +485,51 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
     }
   };
 
-  // ── Per-connector sync ─────────────────────────────────────────────────────
-  const handleSync = async (connector: Connector) => {
+  // ── Per-connector sync (chunked) ──────────────────────────────────────────
+  const handleSync = async (connector: Connector, fromDate: Date, toDate: Date) => {
+    const endpoints: Partial<Record<Connector["type"], string>> = {
+      razorpay: "/api/connectors/razorpay",
+      stripe:   "/api/connectors/stripe",
+      cashfree: "/api/connectors/cashfree",
+      payu:     "/api/connectors/payu",
+      paytm:    "/api/connectors/paytm",
+      easebuzz: "/api/connectors/easebuzz",
+    };
+    const endpoint = endpoints[connector.type];
+
     setSyncingId(connector.id);
+
     try {
-      const endpoints: Partial<Record<Connector["type"], string>> = {
-        razorpay: "/api/connectors/razorpay",
-        stripe:   "/api/connectors/stripe",
-        cashfree: "/api/connectors/cashfree",
-        payu:     "/api/connectors/payu",
-        paytm:    "/api/connectors/paytm",
-        easebuzz: "/api/connectors/easebuzz",
-      };
-      const endpoint = endpoints[connector.type];
-      let synced = 0;
+      let totalSynced = 0;
+      const chunkErrors: string[] = [];
 
       if (endpoint) {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ connector_id: connector.id, org_id: orgId }),
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        synced = data.synced ?? 0;
+        // ── Chunked sync: one 30-day window per request ──────────────────
+        const chunks = splitDateRange(fromDate, toDate);
+        setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
+
+        for (let i = 0; i < chunks.length; i++) {
+          setSyncProgress({ connectorId: connector.id, current: i + 1, total: chunks.length });
+          try {
+            const res = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                connector_id: connector.id,
+                org_id: orgId,
+                from_date: chunks[i].from.toISOString(),
+                to_date:   chunks[i].to.toISOString(),
+              }),
+            });
+            if (!res.ok) { chunkErrors.push(`chunk ${i + 1}: HTTP ${res.status}`); continue; }
+            const data = await res.json();
+            totalSynced += data.synced ?? 0;
+          } catch (e) {
+            chunkErrors.push(`chunk ${i + 1}: ${e instanceof Error ? e.message.slice(0, 60) : "error"}`);
+          }
+        }
       } else {
+        // ── Fallback for connectors without a dedicated route ────────────
         const res = await fetch("/api/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -491,7 +537,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        synced = data.total_inserted ?? 0;
+        totalSynced = data.total_inserted ?? 0;
       }
 
       setActiveConnectors((prev) =>
@@ -499,11 +545,17 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
           c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c
         )
       );
-      toast.success(`Synced ${synced} new transactions`);
+
+      if (chunkErrors.length > 0) {
+        toast.warning(`Synced ${totalSynced} transactions (${chunkErrors.length} chunk error${chunkErrors.length > 1 ? "s" : ""})`);
+      } else {
+        toast.success(`Synced ${totalSynced} new transactions`);
+      }
     } catch (err) {
       toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
+      setSyncProgress(null);
     }
   };
 
@@ -610,15 +662,13 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
-                              {/* Sync */}
-                              <button
-                                onClick={() => handleSync(inst)}
-                                disabled={syncingId === inst.id}
-                                title="Sync now"
-                                className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-40"
-                              >
-                                <RefreshCw className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")} />
-                              </button>
+                              {/* Sync — dropdown with date-range presets */}
+                              <SyncDropdown
+                                connector={inst}
+                                isSyncing={syncingId === inst.id}
+                                progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
+                                onSync={(from, to) => handleSync(inst, from, to)}
+                              />
                               {/* Remove — show confirmation first */}
                               <button
                                 onClick={() => setConfirmRemove(inst)}
@@ -869,6 +919,89 @@ function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>):
       return null;
   }
 }
+
+// ─── Sync dropdown ────────────────────────────────────────────────────────────
+
+interface SyncDropdownProps {
+  connector: Connector;
+  isSyncing: boolean;
+  progress: { connectorId: string; current: number; total: number } | null;
+  onSync: (from: Date, to: Date) => void;
+}
+
+function SyncDropdown({ isSyncing, progress, onSync }: SyncDropdownProps) {
+  const showProgress = isSyncing && progress && progress.total > 1;
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          disabled={isSyncing}
+          title={isSyncing ? "Syncing…" : "Sync — choose date range"}
+          className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-60"
+        >
+          {showProgress ? (
+            <span className="text-[9px] font-bold text-primary/70 tabular-nums leading-none min-w-[28px] inline-block text-center">
+              {progress!.current}/{progress!.total}
+            </span>
+          ) : isSyncing ? (
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="z-[300] rounded-xl overflow-hidden shadow-[0_8px_40px_rgba(0,0,0,0.7)]"
+          style={{
+            background: "hsl(220 40% 8%)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            minWidth: 200,
+          }}
+          align="end"
+          sideOffset={6}
+        >
+          {/* Header */}
+          <div className="px-3 py-2 border-b border-white/[0.05]">
+            <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-white/25">
+              Sync date range
+            </p>
+          </div>
+
+          {/* Presets */}
+          {SYNC_PRESETS.map((preset) => (
+            <DropdownMenu.Item
+              key={preset.days}
+              className="flex items-center justify-between px-3 py-2.5 text-[12px] text-white/50 hover:text-white/85 hover:bg-white/[0.05] cursor-pointer outline-none transition-colors"
+              onSelect={() => {
+                const to = new Date();
+                const from = new Date(to.getTime() - preset.days * 24 * 60 * 60 * 1000);
+                onSync(from, to);
+              }}
+            >
+              <span>{preset.label}</span>
+              <span className="text-[10px] text-white/20 ml-6 tabular-nums">
+                {preset.chunks} req{preset.chunks > 1 ? "s" : ""}
+              </span>
+            </DropdownMenu.Item>
+          ))}
+
+          {/* Footer note */}
+          <div className="px-3 py-2 border-t border-white/[0.05]">
+            <p className="text-[10px] text-white/20 leading-relaxed">
+              Each request covers 30 days.
+              <br />Duplicates are skipped automatically.
+            </p>
+          </div>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+// ─── Form field ───────────────────────────────────────────────────────────────
 
 function FormField({
   label,
