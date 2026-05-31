@@ -283,6 +283,13 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
+  // ── Custom date-range sync ─────────────────────────────────────────────────
+  const todayStr = new Date().toISOString().split("T")[0];
+  const defaultFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const [customSyncConnector, setCustomSyncConnector] = React.useState<Connector | null>(null);
+  const [customFrom, setCustomFrom] = React.useState(defaultFrom);
+  const [customTo,   setCustomTo]   = React.useState(todayStr);
+
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
@@ -668,6 +675,11 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                                 isSyncing={syncingId === inst.id}
                                 progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
                                 onSync={(from, to) => handleSync(inst, from, to)}
+                                onCustom={() => {
+                                  setCustomFrom(defaultFrom);
+                                  setCustomTo(todayStr);
+                                  setCustomSyncConnector(inst);
+                                }}
                               />
                               {/* Remove — show confirmation first */}
                               <button
@@ -877,6 +889,136 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {/* ── Custom date-range sync dialog ───────────────────────────────── */}
+      <Dialog.Root
+        open={!!customSyncConnector}
+        onOpenChange={(open) => !open && setCustomSyncConnector(null)}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
+          <Dialog.Content
+            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[400px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+            style={{ top: 0, left: 0, right: 0, bottom: 0, margin: "auto", maxHeight: "calc(100vh - 32px)" }}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-white/[0.05]">
+              <div>
+                <Dialog.Title className="text-[14px] font-semibold text-white/85">
+                  Custom Sync Range
+                </Dialog.Title>
+                {customSyncConnector && (
+                  <p className="text-[11px] text-white/30 mt-0.5">{customSyncConnector.name}</p>
+                )}
+              </div>
+              <Dialog.Close asChild>
+                <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+                  <X className="h-4 w-4" />
+                </button>
+              </Dialog.Close>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-4 space-y-4">
+              {/* Date inputs */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+                    From
+                  </label>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || todayStr}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="w-full rounded-lg text-[12.5px] text-white/75 focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
+                    style={{
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      padding: "8px 10px",
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+                    To
+                  </label>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom}
+                    max={todayStr}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="w-full rounded-lg text-[12.5px] text-white/75 focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
+                    style={{
+                      background: "rgba(255,255,255,0.04)",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      padding: "8px 10px",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Live estimate */}
+              {customFrom && customTo && customFrom <= customTo && (() => {
+                const days = Math.ceil(
+                  (new Date(customTo).getTime() - new Date(customFrom).getTime()) / (1000 * 60 * 60 * 24)
+                ) + 1;
+                const chunks = Math.ceil(days / 30);
+                return (
+                  <div
+                    className="rounded-xl px-3.5 py-3 flex items-center justify-between"
+                    style={{ background: "rgba(124,82,240,0.07)", border: "1px solid rgba(124,82,240,0.12)" }}
+                  >
+                    <div>
+                      <p className="text-[11px] text-white/50">
+                        <span className="text-white/70 font-semibold num">{days}</span> days selected
+                      </p>
+                      <p className="text-[10.5px] text-white/30 mt-0.5">Duplicates skipped automatically</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-[18px] font-bold text-primary/80 num leading-none">{chunks}</p>
+                      <p className="text-[10px] text-white/30 mt-0.5">request{chunks !== 1 ? "s" : ""}</p>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Validation warning */}
+              {customFrom && customTo && customFrom > customTo && (
+                <p className="text-[11px] text-red-400/80 flex items-center gap-1.5">
+                  <span>⚠</span> "From" date must be before "To" date
+                </p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
+              <Dialog.Close asChild>
+                <Button
+                  variant="outline"
+                  className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                >
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button
+                className="flex-1"
+                disabled={!customFrom || !customTo || customFrom > customTo || syncingId === customSyncConnector?.id}
+                onClick={() => {
+                  if (!customSyncConnector || !customFrom || !customTo) return;
+                  handleSync(customSyncConnector, new Date(customFrom), new Date(customTo + "T23:59:59"));
+                  setCustomSyncConnector(null);
+                }}
+              >
+                {syncingId === customSyncConnector?.id ? (
+                  <><RefreshCw className="h-4 w-4 mr-2 animate-spin" /> Syncing…</>
+                ) : "Start Sync"}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
@@ -927,9 +1069,10 @@ interface SyncDropdownProps {
   isSyncing: boolean;
   progress: { connectorId: string; current: number; total: number } | null;
   onSync: (from: Date, to: Date) => void;
+  onCustom: () => void;
 }
 
-function SyncDropdown({ isSyncing, progress, onSync }: SyncDropdownProps) {
+function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownProps) {
   const showProgress = isSyncing && progress && progress.total > 1;
 
   return (
@@ -987,6 +1130,15 @@ function SyncDropdown({ isSyncing, progress, onSync }: SyncDropdownProps) {
               </span>
             </DropdownMenu.Item>
           ))}
+
+          {/* Custom range */}
+          <DropdownMenu.Separator className="h-px bg-white/[0.05] my-0.5" />
+          <DropdownMenu.Item
+            className="flex items-center gap-2 px-3 py-2.5 text-[12px] text-primary/60 hover:text-primary hover:bg-primary/[0.06] cursor-pointer outline-none transition-colors"
+            onSelect={onCustom}
+          >
+            <span>Custom range…</span>
+          </DropdownMenu.Item>
 
           {/* Footer note */}
           <div className="px-3 py-2 border-t border-white/[0.05]">
