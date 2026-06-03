@@ -4,8 +4,6 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
   TrendingUp,
-  Flame,
-  Wallet,
   Send,
   Search,
   Receipt,

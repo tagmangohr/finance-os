@@ -218,7 +218,7 @@ export default function IntelligencePage() {
           <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-primary/50 mb-1.5">Pro tip</p>
           <p className="text-[11px] text-white/30 leading-relaxed">
             Ask follow-up questions in context. Try{" "}
-            <span className="text-white/55 font-medium">"Why?"</span> after any answer to dig deeper.
+            <span className="text-white/55 font-medium">&quot;Why?&quot;</span> after any answer to dig deeper.
           </p>
         </div>
       </div>

@@ -47,9 +47,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     const normalized = normalizeStripeCharge(charge as unknown as StripeCharge);
 
-    // Determine the matching connector by looking up active Stripe connectors
-    // The webhook endpoint can be registered per account, so we match by
-    // account (if Stripe-Account header is set) or fall back to first active connector
+    // Match by connected account when available. Without an account header,
+    // only write if there is exactly one possible active connector.
     const stripeAccount = req.headers.get("stripe-account");
 
     const { data: connectors } = await supabase
@@ -58,11 +57,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .eq("type", "stripe")
       .eq("status", "active");
 
-    const matchedConnector = connectors?.find((c) => {
-      if (!stripeAccount) return true; // take first active
+    const matchedConnectors = (connectors ?? []).filter((c) => {
+      if (!stripeAccount) return true;
       const cfg = c.config as Record<string, string>;
       return cfg?.account_id === stripeAccount;
     });
+    const matchedConnector =
+      matchedConnectors.length === 1 ? matchedConnectors[0] : null;
 
     if (matchedConnector) {
       const row: TransactionInsert = {

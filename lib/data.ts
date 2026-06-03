@@ -3,8 +3,6 @@ import type {
   FinancialSnapshot,
   IntelligenceAlert,
   Entity,
-  Transaction,
-  Invoice,
   Connector,
 } from "@/lib/supabase/types";
 

@@ -987,7 +987,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
               {/* Validation warning */}
               {customFrom && customTo && customFrom > customTo && (
                 <p className="text-[11px] text-red-400/80 flex items-center gap-1.5">
-                  <span>⚠</span> "From" date must be before "To" date
+                  <span>⚠</span> &quot;From&quot; date must be before &quot;To&quot; date
                 </p>
               )}
             </div>

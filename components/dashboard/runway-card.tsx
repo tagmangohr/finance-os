@@ -28,7 +28,6 @@ const CIRC = 2 * Math.PI * R;
 
 export function RunwayCard({
   days,
-  burnRate,
   formattedBurn,
   cashBalance,
   formattedCash,
@@ -38,7 +37,6 @@ export function RunwayCard({
   const cfg = severityConfig[severity];
   const pct = Math.min(days / MAX_DAYS, 1);
   const dash = pct * CIRC;
-  const netBurn = burnRate; // monthly
 
   const months = Math.floor(days / 30);
   const remDays = days % 30;

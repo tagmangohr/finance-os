@@ -22,8 +22,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const { org_id, secret } = body;
 
-  // Simple secret gate
-  const adminSecret = process.env.ADMIN_SECRET ?? "finance-os-admin";
+  const adminSecret = process.env.ADMIN_SECRET;
+  if (!adminSecret) {
+    return NextResponse.json(
+      { error: "Admin endpoint is not configured" },
+      { status: 503 }
+    );
+  }
+
   if (secret !== adminSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

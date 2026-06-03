@@ -8,7 +8,6 @@ export async function calculateCollections(
   const today = new Date();
   const ninetyDaysAgo = new Date(today);
   ninetyDaysAgo.setDate(today.getDate() - 90);
-  const todayStr = today.toISOString().split('T')[0];
   const fmt = (d: Date) => d.toISOString().split('T')[0];
 
   // Fetch outstanding invoices and recently paid ones in parallel

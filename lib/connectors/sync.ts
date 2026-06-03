@@ -1,0 +1,259 @@
+import { CashfreeConnector } from "@/lib/connectors/cashfree";
+import { EasebuzzConnector } from "@/lib/connectors/easebuzz";
+import { PaytmConnector } from "@/lib/connectors/paytm";
+import { PayUConnector } from "@/lib/connectors/payu";
+import { RazorpayConnector } from "@/lib/connectors/razorpay";
+import { StripeConnector } from "@/lib/connectors/stripe";
+import { getExistingExternalIds } from "@/lib/db/dedup";
+import type { NormalizedTransaction } from "@/lib/normalizer";
+import type { Database } from "@/lib/supabase/types";
+import type { createServiceClient } from "@/lib/supabase/server";
+
+type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
+type TransactionInsert = Database["public"]["Tables"]["transactions"]["Insert"];
+type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
+
+export type ConnectorSyncResult = {
+  fetched: number;
+  inserted: number;
+  skipped: number;
+  warnings: string[];
+};
+
+export class SyncConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SyncConfigError";
+  }
+}
+
+function getConfig(connector: ConnectorRow): Record<string, string> {
+  return connector.config as Record<string, string>;
+}
+
+function warning(label: string, reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return `${label}: ${message.slice(0, 120)}`;
+}
+
+async function fetchRazorpay(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const { key_id: keyId, key_secret: keySecret } = getConfig(connector);
+  if (!keyId || !keySecret) {
+    throw new SyncConfigError("Connector is missing key_id or key_secret in config");
+  }
+
+  const razorpay = new RazorpayConnector(keyId, keySecret);
+  const settled = await Promise.allSettled([
+    razorpay.fetchPayments(fromDate, toDate),
+    razorpay.fetchPayouts(fromDate, toDate),
+    razorpay.fetchRefunds(fromDate, toDate),
+    razorpay.fetchSettlements(fromDate, toDate),
+    razorpay.fetchDisputes(fromDate, toDate),
+  ]);
+
+  const labels = ["payments", "payouts", "refunds", "settlements", "disputes"];
+  return collectSettled(labels, settled);
+}
+
+async function fetchStripe(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const { secret_key: secretKey } = getConfig(connector);
+  if (!secretKey) {
+    throw new SyncConfigError("Connector is missing secret_key in config");
+  }
+
+  const stripe = new StripeConnector(secretKey);
+  const settled = await Promise.allSettled([
+    stripe.fetchCharges(fromDate, toDate),
+    stripe.fetchPayouts(fromDate, toDate),
+  ]);
+
+  return collectSettled(["charges", "payouts"], settled);
+}
+
+async function fetchCashfree(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const { client_id: clientId, client_secret: clientSecret } = getConfig(connector);
+  if (!clientId || !clientSecret) {
+    throw new SyncConfigError("Connector is missing client_id or client_secret in config");
+  }
+
+  const cashfree = new CashfreeConnector(clientId, clientSecret);
+  const settled = await Promise.allSettled([
+    cashfree.fetchOrders(fromDate, toDate),
+    cashfree.fetchSettlements(fromDate, toDate),
+    cashfree.fetchRefunds(fromDate, toDate),
+  ]);
+
+  return collectSettled(["orders", "settlements", "refunds"], settled);
+}
+
+async function fetchSingleEndpoint(
+  label: string,
+  fetcher: () => Promise<NormalizedTransaction[]>
+) {
+  try {
+    return { transactions: await fetcher(), warnings: [] };
+  } catch (err) {
+    return { transactions: [], warnings: [warning(label, err)] };
+  }
+}
+
+async function fetchConnectorTransactions(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const config = getConfig(connector);
+
+  switch (connector.type) {
+    case "razorpay":
+      return fetchRazorpay(connector, fromDate, toDate);
+    case "stripe":
+      return fetchStripe(connector, fromDate, toDate);
+    case "cashfree":
+      return fetchCashfree(connector, fromDate, toDate);
+    case "payu": {
+      const { key, salt } = config;
+      if (!key || !salt) {
+        throw new SyncConfigError("Connector is missing key or salt in config");
+      }
+      const payu = new PayUConnector(key, salt);
+      return fetchSingleEndpoint("transactions", () =>
+        payu.fetchTransactions(fromDate, toDate)
+      );
+    }
+    case "paytm": {
+      const { merchant_id: merchantId, merchant_key: merchantKey } = config;
+      if (!merchantId || !merchantKey) {
+        throw new SyncConfigError(
+          "Connector is missing merchant_id or merchant_key in config"
+        );
+      }
+      const paytm = new PaytmConnector(merchantId, merchantKey);
+      return fetchSingleEndpoint("transactions", () =>
+        paytm.fetchTransactions(fromDate, toDate)
+      );
+    }
+    case "easebuzz": {
+      const { key, salt } = config;
+      if (!key || !salt) {
+        throw new SyncConfigError("Connector is missing key or salt in config");
+      }
+      const easebuzz = new EasebuzzConnector(key, salt);
+      return fetchSingleEndpoint("transactions", () =>
+        easebuzz.fetchTransactions(fromDate, toDate)
+      );
+    }
+    default:
+      throw new SyncConfigError(`Unsupported connector type: ${connector.type}`);
+  }
+}
+
+function collectSettled(
+  labels: string[],
+  settled: PromiseSettledResult<NormalizedTransaction[]>[]
+) {
+  const transactions: NormalizedTransaction[] = [];
+  const warnings: string[] = [];
+
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      transactions.push(...result.value);
+    } else {
+      warnings.push(warning(labels[index] ?? "endpoint", result.reason));
+    }
+  });
+
+  return { transactions, warnings };
+}
+
+function toInsertRows(
+  orgId: string,
+  connectorId: string,
+  transactions: NormalizedTransaction[]
+): TransactionInsert[] {
+  return transactions.map((tx) => ({
+    org_id: orgId,
+    connector_id: connectorId,
+    external_id: tx.external_id,
+    type: tx.type,
+    amount: tx.amount,
+    currency: tx.currency,
+    category: tx.category,
+    category_confidence: null,
+    counterparty_id: null,
+    counterparty_name: tx.counterparty_name,
+    description: tx.description,
+    source: tx.source,
+    status: tx.status,
+    transaction_date: tx.transaction_date,
+    metadata: tx.metadata as import("@/lib/supabase/types").Json,
+  }));
+}
+
+export async function syncConnectorTransactions({
+  supabase,
+  connector,
+  fromDate,
+  toDate,
+}: {
+  supabase: ServiceClient;
+  connector: ConnectorRow;
+  fromDate: Date;
+  toDate: Date;
+}): Promise<ConnectorSyncResult> {
+  const { transactions, warnings } = await fetchConnectorTransactions(
+    connector,
+    fromDate,
+    toDate
+  );
+
+  const result: ConnectorSyncResult = {
+    fetched: transactions.length,
+    inserted: 0,
+    skipped: 0,
+    warnings,
+  };
+
+  if (transactions.length > 0) {
+    const rows = toInsertRows(connector.org_id, connector.id, transactions);
+    const externalIds = rows
+      .map((row) => row.external_id)
+      .filter(Boolean) as string[];
+    const existingIds = externalIds.length
+      ? await getExistingExternalIds(supabase, connector.org_id, externalIds)
+      : new Set<string>();
+
+    const newRows = rows.filter(
+      (row) => !row.external_id || !existingIds.has(row.external_id)
+    );
+    result.skipped = rows.length - newRows.length;
+
+    if (newRows.length > 0) {
+      const { error, count } = await supabase
+        .from("transactions")
+        .insert(newRows, { count: "exact" });
+
+      if (error) throw new Error(`Insert failed: ${error.message}`);
+      result.inserted = count ?? newRows.length;
+    }
+  }
+
+  await supabase
+    .from("connectors")
+    .update({ last_synced_at: new Date().toISOString() })
+    .eq("id", connector.id);
+
+  return result;
+}

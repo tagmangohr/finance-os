@@ -32,7 +32,11 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public routes
-  if (pathname.startsWith("/auth") || pathname.startsWith("/api/webhooks")) {
+  if (
+    pathname.startsWith("/auth") ||
+    pathname.startsWith("/api/webhooks") ||
+    pathname.startsWith("/api/cron")
+  ) {
     return supabaseResponse;
   }
 

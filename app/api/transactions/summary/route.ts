@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { sanitizeSearchTerm } from "@/lib/api/validation";
 
 /**
  * GET /api/transactions/summary
@@ -16,15 +17,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const type        = searchParams.get("type") ?? null;
   const from        = searchParams.get("from") ?? null;
   const to          = searchParams.get("to") ?? null;
-  const search      = searchParams.get("search") ?? null;
+  const search      = sanitizeSearchTerm(searchParams.get("search"));
 
-  const supabase = await createServiceClient();
+  const auth = await requireOrgAccess(orgId);
+  if (isAuthFailure(auth)) return auth.error;
 
   // Fetch only the columns we need for aggregation — no pagination limit
-  let query = supabase
+  let query = auth.supabase
     .from("transactions")
     .select("source, type, amount, metadata")
-    .eq("org_id", orgId);
+    .eq("org_id", auth.org.id);
 
   if (connectorId) query = query.eq("connector_id", connectorId);
   if (source)      query = query.eq("source", source);

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import {
+  parsePagination,
+  parseTransactionSort,
+  sanitizeSearchTerm,
+} from "@/lib/api/validation";
 
 // ─── GET /api/transactions ────────────────────────────────────────────────────
 // Query params:
@@ -28,15 +33,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const type        = searchParams.get("type") ?? null;
   const from        = searchParams.get("from") ?? null;
   const to          = searchParams.get("to") ?? null;
-  const search      = searchParams.get("search") ?? null;
-  const limit       = Math.min(parseInt(searchParams.get("limit") ?? "100", 10), 500);
-  const offset      = parseInt(searchParams.get("offset") ?? "0", 10);
-  const sortCol     = searchParams.get("sort") ?? "transaction_date";
-  const order       = searchParams.get("order") === "asc" ? true : false; // ascending = true
+  const search      = sanitizeSearchTerm(searchParams.get("search"));
+  const { limit, offset } = parsePagination(searchParams);
+  const { sortCol, ascending } = parseTransactionSort(searchParams);
 
-  const supabase = await createServiceClient();
+  const auth = await requireOrgAccess(orgId);
+  if (isAuthFailure(auth)) return auth.error;
 
-  let query = supabase
+  let query = auth.supabase
     .from("transactions")
     .select(
       `id, transaction_date, source, type, amount, currency, status,
@@ -45,7 +49,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
        connectors!inner(name, type)`,
       { count: "exact" }
     )
-    .eq("org_id", orgId);
+    .eq("org_id", auth.org.id);
 
   if (connectorId) query = query.eq("connector_id", connectorId);
   if (source)      query = query.eq("source", source);
@@ -60,7 +64,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   query = query
-    .order(sortCol, { ascending: order })
+    .order(sortCol, { ascending })
     .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;

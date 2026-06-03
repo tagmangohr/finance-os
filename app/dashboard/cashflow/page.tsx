@@ -8,7 +8,7 @@ import { CashFlowChart } from "@/components/charts/cashflow-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Button } from "@/components/ui/button";
-import { formatCurrency, formatRunway, runwaySeverity } from "@/lib/utils";
+import { formatCurrency, runwaySeverity } from "@/lib/utils";
 import { format } from "date-fns";
 
 function Panel({ title, subtitle, children }: {

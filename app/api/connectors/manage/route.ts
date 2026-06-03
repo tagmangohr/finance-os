@@ -1,21 +1,59 @@
 import { NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import {
+  isAuthFailure,
+  requireConnectorAccess,
+  requireOrgAccess,
+} from "@/lib/api/auth";
+import {
+  isConnectorStatus,
+  isConnectorType,
+  isPlainObject,
+} from "@/lib/api/validation";
 
 // POST — create a new connector
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { org_id, type, name, config, status } = body;
+    const { org_id: orgId, type, name, config, status } = body;
 
-    if (!org_id || !type || !name) {
-      return NextResponse.json({ error: "org_id, type, name required" }, { status: 400 });
+    if (!orgId || !type || !name) {
+      return NextResponse.json(
+        { error: "org_id, type, name required" },
+        { status: 400 }
+      );
     }
 
-    const supabase = await createServiceClient();
+    if (!isConnectorType(type)) {
+      return NextResponse.json({ error: "Invalid connector type" }, { status: 400 });
+    }
 
-    const { data, error } = await supabase
+    if (typeof name !== "string" || !name.trim()) {
+      return NextResponse.json(
+        { error: "name must be a non-empty string" },
+        { status: 400 }
+      );
+    }
+
+    if (status !== undefined && !isConnectorStatus(status)) {
+      return NextResponse.json({ error: "Invalid connector status" }, { status: 400 });
+    }
+
+    if (config !== undefined && !isPlainObject(config)) {
+      return NextResponse.json({ error: "config must be an object" }, { status: 400 });
+    }
+
+    const auth = await requireOrgAccess(orgId);
+    if (isAuthFailure(auth)) return auth.error;
+
+    const { data, error } = await auth.supabase
       .from("connectors")
-      .insert({ org_id, type, name, config: config ?? {}, status: status ?? "active" })
+      .insert({
+        org_id: auth.org.id,
+        type,
+        name: name.trim(),
+        config: config ?? {},
+        status: status ?? "active",
+      })
       .select()
       .single();
 
@@ -38,17 +76,44 @@ export async function PATCH(request: Request) {
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
     const body = await request.json();
-    const supabase = await createServiceClient();
+    const auth = await requireConnectorAccess(id);
+    if (isAuthFailure(auth)) return auth.error;
 
     const updates: Record<string, unknown> = {};
-    if (body.config !== undefined) updates.config = body.config;
-    if (body.status !== undefined) updates.status = body.status;
-    if (body.name !== undefined) updates.name = body.name;
 
-    const { data, error } = await supabase
+    if (body.config !== undefined) {
+      if (!isPlainObject(body.config)) {
+        return NextResponse.json({ error: "config must be an object" }, { status: 400 });
+      }
+      updates.config = body.config;
+    }
+
+    if (body.status !== undefined) {
+      if (!isConnectorStatus(body.status)) {
+        return NextResponse.json({ error: "Invalid connector status" }, { status: 400 });
+      }
+      updates.status = body.status;
+    }
+
+    if (body.name !== undefined) {
+      if (typeof body.name !== "string" || !body.name.trim()) {
+        return NextResponse.json(
+          { error: "name must be a non-empty string" },
+          { status: 400 }
+        );
+      }
+      updates.name = body.name.trim();
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return NextResponse.json({ error: "No updates provided" }, { status: 400 });
+    }
+
+    const { data, error } = await auth.supabase
       .from("connectors")
       .update(updates)
       .eq("id", id)
+      .eq("org_id", auth.org.id)
       .select()
       .single();
 
@@ -63,20 +128,21 @@ export async function PATCH(request: Request) {
   }
 }
 
-// DELETE — remove a connector (and its associated transactions)
+// DELETE — remove a connector and its associated transactions.
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
 
-    const supabase = await createServiceClient();
+    const auth = await requireConnectorAccess(id);
+    if (isAuthFailure(auth)) return auth.error;
 
-    // Must delete child transactions first — connector_id is NOT NULL with a FK constraint
-    const { error: txErr } = await supabase
+    const { error: txErr } = await auth.supabase
       .from("transactions")
       .delete()
-      .eq("connector_id", id);
+      .eq("connector_id", id)
+      .eq("org_id", auth.org.id);
 
     if (txErr) {
       return NextResponse.json(
@@ -85,7 +151,11 @@ export async function DELETE(request: Request) {
       );
     }
 
-    const { error } = await supabase.from("connectors").delete().eq("id", id);
+    const { error } = await auth.supabase
+      .from("connectors")
+      .delete()
+      .eq("id", id)
+      .eq("org_id", auth.org.id);
 
     if (error) throw error;
 

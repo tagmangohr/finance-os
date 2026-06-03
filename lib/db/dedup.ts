@@ -1,3 +1,5 @@
+import type { createServiceClient } from "@/lib/supabase/server";
+
 /**
  * Global deduplication helper.
  *
@@ -21,9 +23,10 @@
  *   problem immediately so it can be diagnosed and fixed.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
+
 export async function getExistingExternalIds(
-  supabase: any,
+  supabase: ServiceClient,
   orgId: string,
   externalIds: string[]
 ): Promise<Set<string>> {

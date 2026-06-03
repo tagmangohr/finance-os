@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, DollarSign, Brain, Plug, Table2, Sparkles, ArrowRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/dashboard",             label: "War Room",      Icon: LayoutDashboard, hint: "⌘1" },

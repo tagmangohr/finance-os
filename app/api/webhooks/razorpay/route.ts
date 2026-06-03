@@ -28,12 +28,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .createHmac("sha256", webhookSecret)
     .update(rawBody)
     .digest("hex");
+  const signatureBuffer = Buffer.from(signature, "hex");
+  const expectedBuffer = Buffer.from(expectedSignature, "hex");
 
   if (
-    !crypto.timingSafeEqual(
-      Buffer.from(signature, "hex"),
-      Buffer.from(expectedSignature, "hex")
-    )
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
   ) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
@@ -58,8 +58,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   ) {
     const normalized = normalizeRazorpayPayment(paymentEntity);
 
-    // Look up the connector for this payment's org
-    // We use a service-role client — org/connector resolution is by source key
+    // Resolve the connector by key header when present. Without that header,
+    // only write if there is exactly one possible active connector.
     const supabase = await createServiceClient();
 
     const { data: connectors } = await supabase
@@ -70,10 +70,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
     // Match by key_id in connector config
     const webhookKeyId = req.headers.get("x-razorpay-key-id");
-    const matchedConnector = connectors?.find((c) => {
+    const matchedConnectors = (connectors ?? []).filter((c) => {
+      if (!webhookKeyId) return true;
       const cfg = c.config as Record<string, string>;
-      return !webhookKeyId || cfg?.key_id === webhookKeyId;
+      return cfg?.key_id === webhookKeyId;
     });
+    const matchedConnector =
+      matchedConnectors.length === 1 ? matchedConnectors[0] : null;
 
     if (matchedConnector) {
       const row: TransactionInsert = {

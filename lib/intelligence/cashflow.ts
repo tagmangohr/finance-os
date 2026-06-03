@@ -78,7 +78,7 @@ export async function calculateCashFlow(
   // Linear regression on daily net balance trend (last 30 days)
   const xs = last30.map((_, i) => i);
   const ys = last30.map((d) => d.balance);
-  const { slope, intercept } = linearRegression(xs, ys);
+  const { slope } = linearRegression(xs, ys);
 
   const lastBalance = dailyData[dailyData.length - 1]?.balance ?? 0;
   const forecast30d = lastBalance + slope * 30;

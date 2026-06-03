@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createHash } from "crypto";
+import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { parseCsvFile, parseExcelFile, autoDetectMapping } from "@/lib/connectors/csv-parser";
 import { CsvColumnMapping, NormalizedTransaction } from "@/lib/normalizer";
+import { getExistingExternalIds } from "@/lib/db/dedup";
 import type { Database } from "@/lib/supabase/types";
 
 type TransactionInsert =
@@ -41,6 +43,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       { status: 400 }
     );
   }
+
+  const auth = await requireConnectorAccess(connectorId, { orgId });
+  if (isAuthFailure(auth)) return auth.error;
 
   // ── Parse column mapping (partial allowed — auto-detect fills gaps) ────────
   let mapping: Partial<CsvColumnMapping> = {};
@@ -122,66 +127,85 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
   }
 
-  // ── Upsert into Supabase ──────────────────────────────────────────────────
-  const supabase = await createServiceClient();
-
-  // Validate connector belongs to org
-  const { data: connector, error: connErr } = await supabase
-    .from("connectors")
-    .select("id, org_id")
-    .eq("id", connectorId)
-    .eq("org_id", orgId)
-    .single();
-
-  if (connErr || !connector) {
-    return NextResponse.json(
-      { error: "Connector not found", details: connErr?.message },
-      { status: 404 }
-    );
-  }
-
   let imported = 0;
   if (normalized.length > 0) {
-    const rows: TransactionInsert[] = normalized.map((tx) => ({
-      org_id: orgId,
-      connector_id: connectorId,
-      external_id: tx.external_id,
-      type: tx.type,
-      amount: tx.amount,
-      currency: tx.currency,
-      category: tx.category,
-      category_confidence: null,
-      counterparty_id: null,
-      counterparty_name: tx.counterparty_name,
-      description: tx.description,
-      source: tx.source,
-      status: tx.status,
-      transaction_date: tx.transaction_date,
-      metadata: tx.metadata as import("@/lib/supabase/types").Json,
-    }));
+    const fingerprintCounts = new Map<string, number>();
+    const rows: TransactionInsert[] = normalized.map((tx) => {
+      const baseId = tx.external_id ?? csvExternalId(tx);
+      const count = fingerprintCounts.get(baseId) ?? 0;
+      fingerprintCounts.set(baseId, count + 1);
 
-    // CSV rows don't have external_id so we insert (may create duplicates on
-    // re-upload — caller should deduplicate or use a hash-based external_id)
-    const { error: insertErr, count } = await supabase
-      .from("transactions")
-      .insert(rows, { count: "exact" });
+      return {
+        org_id: auth.org.id,
+        connector_id: connectorId,
+        external_id: count === 0 ? baseId : `${baseId}_${count + 1}`,
+        type: tx.type,
+        amount: tx.amount,
+        currency: tx.currency,
+        category: tx.category,
+        category_confidence: null,
+        counterparty_id: null,
+        counterparty_name: tx.counterparty_name,
+        description: tx.description,
+        source: tx.source,
+        status: tx.status,
+        transaction_date: tx.transaction_date,
+        metadata: tx.metadata as import("@/lib/supabase/types").Json,
+      };
+    });
 
-    if (insertErr) {
-      return NextResponse.json(
-        { error: "Failed to insert transactions", details: insertErr.message },
-        { status: 500 }
-      );
+    const externalIds = rows.map((row) => row.external_id).filter(Boolean) as string[];
+    const existingIds = await getExistingExternalIds(
+      auth.supabase,
+      auth.org.id,
+      externalIds
+    );
+    const newRows = rows.filter(
+      (row) => !row.external_id || !existingIds.has(row.external_id)
+    );
+
+    if (newRows.length > 0) {
+      const { error: insertErr, count } = await auth.supabase
+        .from("transactions")
+        .insert(newRows, { count: "exact" });
+
+      if (insertErr) {
+        return NextResponse.json(
+          { error: "Failed to insert transactions", details: insertErr.message },
+          { status: 500 }
+        );
+      }
+
+      imported = count ?? newRows.length;
     }
 
-    imported = count ?? rows.length;
-    skipped = normalized.length - (count ?? rows.length);
+    skipped = rows.length - imported;
   }
 
   // ── Update connector last_synced_at ───────────────────────────────────────
-  await supabase
+  await auth.supabase
     .from("connectors")
     .update({ last_synced_at: new Date().toISOString() })
     .eq("id", connectorId);
 
   return NextResponse.json({ imported, skipped });
+}
+
+function csvExternalId(tx: NormalizedTransaction): string {
+  const hash = createHash("sha256")
+    .update(
+      JSON.stringify({
+        type: tx.type,
+        amount: tx.amount,
+        currency: tx.currency,
+        counterparty_name: tx.counterparty_name,
+        description: tx.description,
+        transaction_date: tx.transaction_date,
+        raw: tx.metadata.raw,
+      })
+    )
+    .digest("hex")
+    .slice(0, 24);
+
+  return `csv_${hash}`;
 }

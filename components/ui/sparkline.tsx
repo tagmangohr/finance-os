@@ -17,6 +17,8 @@ export function Sparkline({
   strokeWidth = 1.5,
   className,
 }: SparklineProps) {
+  const stableId = React.useId().replace(/:/g, "");
+
   if (!data || data.length < 2) return null;
 
   const width = 100;
@@ -40,7 +42,7 @@ export function Sparkline({
   // Is the last point higher than the first? (upward trend)
   const isUp = data[data.length - 1] >= data[0];
   const trendColor = isUp ? color : "hsl(0, 72%, 56%)";
-  const gradId = `sg-${color.replace(/[^a-z0-9]/gi, "")}-${Math.round(Math.random() * 1e6)}`;
+  const gradId = `sg-${color.replace(/[^a-z0-9]/gi, "")}-${stableId}`;
 
   return (
     <svg
