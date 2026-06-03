@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { ConcentrationResult } from './types';
 
 export async function calculateConcentration(
@@ -15,7 +16,7 @@ export async function calculateConcentration(
     .select('amount, counterparty_id, counterparty_name')
     .eq('org_id', orgId)
     .eq('type', 'credit')
-    .eq('status', 'completed')
+    .in('status', POSTED_TRANSACTION_STATUSES)
     .gte('transaction_date', fmt(twelveMonthsAgo))
     .not('counterparty_id', 'is', null);
 

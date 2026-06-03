@@ -14,7 +14,7 @@ SELECT
   COALESCE(SUM(amount) FILTER (WHERE type = 'credit'), 0)
     - COALESCE(SUM(amount) FILTER (WHERE type = 'debit'), 0) AS net
 FROM transactions
-WHERE status NOT IN ('failed', 'refunded')
+WHERE status IN ('completed', 'refunded')
 GROUP BY org_id, date_trunc('month', transaction_date);
 
 -- ── 2. vw_top_customers ──────────────────────────────────────
@@ -68,7 +68,7 @@ WITH org_totals AS (
   FROM transactions
   WHERE
     type = 'debit'
-    AND status NOT IN ('failed', 'refunded')
+    AND status IN ('completed', 'refunded')
   GROUP BY org_id
 )
 SELECT
@@ -84,6 +84,6 @@ FROM transactions t
 JOIN org_totals ot ON ot.org_id = t.org_id
 WHERE
   t.type = 'debit'
-  AND t.status NOT IN ('failed', 'refunded')
+  AND t.status IN ('completed', 'refunded')
 GROUP BY t.org_id, COALESCE(t.category, 'Uncategorized'), ot.grand_total
 ORDER BY t.org_id, total_amount DESC;

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { CashFlowResult } from './types';
 
 /** Simple OLS linear regression: returns { slope, intercept } */
@@ -36,7 +37,7 @@ export async function calculateCashFlow(
     .from('transactions')
     .select('amount, type, transaction_date')
     .eq('org_id', orgId)
-    .eq('status', 'completed')
+    .in('status', POSTED_TRANSACTION_STATUSES)
     .gte('transaction_date', fmt(ninetyDaysAgo))
     .order('transaction_date', { ascending: true });
 

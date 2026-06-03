@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { RevenueResult } from './types';
 
 export async function calculateRevenue(
@@ -16,7 +17,7 @@ export async function calculateRevenue(
     .select('amount, transaction_date')
     .eq('org_id', orgId)
     .eq('type', 'credit')
-    .eq('status', 'completed')
+    .in('status', POSTED_TRANSACTION_STATUSES)
     .gte('transaction_date', fmt(startDate))
     .order('transaction_date', { ascending: true });
 

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { BurnRateResult } from './types';
 
 export async function calculateBurnRate(
@@ -24,7 +25,7 @@ export async function calculateBurnRate(
       .select('amount, category')
       .eq('org_id', orgId)
       .eq('type', 'debit')
-      .eq('status', 'completed')
+      .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', fmt(currentMonthStart))
       .lte('transaction_date', fmt(currentMonthEnd)),
     supabase
@@ -32,7 +33,7 @@ export async function calculateBurnRate(
       .select('amount, category')
       .eq('org_id', orgId)
       .eq('type', 'debit')
-      .eq('status', 'completed')
+      .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', fmt(prevMonthStart))
       .lte('transaction_date', fmt(prevMonthEnd)),
   ]);

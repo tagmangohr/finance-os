@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { RunwayResult } from './types';
 
 export async function calculateRunway(
@@ -23,7 +24,7 @@ export async function calculateRunway(
       .select('amount, transaction_date')
       .eq('org_id', orgId)
       .eq('type', 'debit')
-      .eq('status', 'completed')
+      .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0]),
   ]);
 
@@ -40,13 +41,13 @@ export async function calculateRunway(
         .select('amount')
         .eq('org_id', orgId)
         .eq('type', 'credit')
-        .eq('status', 'completed'),
+        .in('status', POSTED_TRANSACTION_STATUSES),
       supabase
         .from('transactions')
         .select('amount')
         .eq('org_id', orgId)
         .eq('type', 'debit')
-        .eq('status', 'completed'),
+        .in('status', POSTED_TRANSACTION_STATUSES),
     ]);
 
     const totalCredits = (allCredits.data ?? []).reduce(

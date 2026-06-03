@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 import type {
   FinancialSnapshot,
   IntelligenceAlert,
@@ -92,15 +93,19 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .order("outstanding_amount", { ascending: false })
       .limit(5),
     supabase
-      .rpc("get_revenue_by_month" as never, { p_org_id: orgId })
-      .limit(12)
-      .order("month" as never, { ascending: true }),
+      .from("transactions")
+      .select("transaction_date, amount")
+      .eq("org_id", orgId)
+      .eq("type", "credit")
+      .in("status", POSTED_TRANSACTION_STATUSES)
+      .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
+      .order("transaction_date", { ascending: true }),
     supabase
       .from("transactions")
       .select("transaction_date, type, amount")
       .eq("org_id", orgId)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .in("status", ["completed"])
+      .in("status", POSTED_TRANSACTION_STATUSES)
       .order("transaction_date", { ascending: true }),
     supabase
       .from("vw_category_breakdown" as never)
@@ -132,33 +137,15 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     return { date, inflow: day.inflow, outflow: day.outflow, balance: runningBalance };
   });
 
-  // Revenue by month: use view data or fall back to transaction aggregation
-  let revenueByMonth: { month: string; amount: number }[] = [];
-  if (revenueResult.data && revenueResult.data.length > 0) {
-    revenueByMonth = (revenueResult.data as Array<{ month: string; total_credits: number }>).map((r) => ({
-      month: r.month.split("T")[0].slice(0, 7),
-      amount: r.total_credits,
-    }));
-  } else {
-    // Fallback: aggregate from transactions
-    const { data: txData } = await supabase
-      .from("transactions")
-      .select("transaction_date, amount")
-      .eq("org_id", orgId)
-      .eq("type", "credit")
-      .in("status", ["completed"])
-      .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .order("transaction_date", { ascending: true });
-
-    const monthMap = new Map<string, number>();
-    for (const tx of txData ?? []) {
-      const m = tx.transaction_date.split("T")[0].slice(0, 7);
-      monthMap.set(m, (monthMap.get(m) ?? 0) + tx.amount);
-    }
-    revenueByMonth = Array.from(monthMap.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, amount]) => ({ month, amount }));
+  // Revenue by month from posted transaction rows.
+  const revenueMonthMap = new Map<string, number>();
+  for (const tx of revenueResult.data ?? []) {
+    const m = tx.transaction_date.split("T")[0].slice(0, 7);
+    revenueMonthMap.set(m, (revenueMonthMap.get(m) ?? 0) + tx.amount);
   }
+  const revenueByMonth = Array.from(revenueMonthMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, amount]) => ({ month, amount }));
 
   // Category breakdown
   type CategoryRow = { category: string; total_amount: number; pct_of_total: number };
@@ -189,7 +176,7 @@ export async function getRevenueDetails(orgId: string) {
       .select("transaction_date, amount, counterparty_name")
       .eq("org_id", orgId)
       .eq("type", "credit")
-      .in("status", ["completed"])
+      .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
     supabase
@@ -246,7 +233,7 @@ export async function getCashFlowDetails(orgId: string) {
       .from("transactions")
       .select("transaction_date, type, amount, category, counterparty_name")
       .eq("org_id", orgId)
-      .in("status", ["completed"])
+      .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
     supabase

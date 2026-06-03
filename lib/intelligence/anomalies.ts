@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import type { AnomalyResult } from './types';
 
 export async function detectAnomalies(
@@ -15,14 +16,14 @@ export async function detectAnomalies(
       .from('transactions')
       .select('id, amount, category, counterparty_id, description, transaction_date')
       .eq('org_id', orgId)
-      .eq('status', 'completed')
+      .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', thirtyDaysAgo.toISOString().split('T')[0])
       .order('transaction_date', { ascending: false }),
     supabase
       .from('transactions')
       .select('amount, category, counterparty_id')
       .eq('org_id', orgId)
-      .eq('status', 'completed')
+      .in('status', POSTED_TRANSACTION_STATUSES)
       .gte(
         'transaction_date',
         new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000)

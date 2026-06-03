@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 import type { TaxPositionResult } from "./types";
 import { format, addMonths, startOfQuarter, endOfQuarter } from "date-fns";
 
@@ -36,7 +37,7 @@ export async function calculateTaxPosition(
       .select("amount")
       .eq("org_id", orgId)
       .eq("type", "credit")
-      .eq("status", "completed")
+      .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", quarterStart.toISOString().split("T")[0]),
     // TDS: transactions tagged 'tds' category
     supabase
@@ -44,6 +45,7 @@ export async function calculateTaxPosition(
       .select("amount")
       .eq("org_id", orgId)
       .eq("category", "tds")
+      .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(now.getFullYear(), 0, 1).toISOString().split("T")[0]),
   ]);
 

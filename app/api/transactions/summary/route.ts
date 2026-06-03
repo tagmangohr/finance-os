@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
+import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 
 /**
  * GET /api/transactions/summary
@@ -26,7 +27,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let query = auth.supabase
     .from("transactions")
     .select("source, type, amount, metadata")
-    .eq("org_id", auth.org.id);
+    .eq("org_id", auth.org.id)
+    .in("status", POSTED_TRANSACTION_STATUSES);
 
   if (connectorId) query = query.eq("connector_id", connectorId);
   if (source)      query = query.eq("source", source);

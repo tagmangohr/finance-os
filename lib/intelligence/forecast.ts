@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 import type { ForecastResult } from "./types";
 
 // Simple linear regression: returns slope and intercept
@@ -39,7 +40,7 @@ export async function generateForecast(
     .select("amount, transaction_date")
     .eq("org_id", orgId)
     .eq("type", "credit")
-    .eq("status", "completed")
+    .in("status", POSTED_TRANSACTION_STATUSES)
     .gte("transaction_date", sixMonthsAgo.toISOString().split("T")[0]);
 
   if (!txns?.length) {
@@ -82,7 +83,7 @@ export async function generateForecast(
   const assumptions = [
     `Based on last ${months.length} months of revenue data`,
     "Assumes current growth trajectory continues",
-    "Excludes pending and failed transactions",
+    "Excludes pending and failed transactions while including completed refunds",
     confidence < 0.5
       ? "Low confidence — revenue is volatile, add more data sources for accuracy"
       : "Moderate-to-high confidence based on trend consistency",
