@@ -182,10 +182,13 @@ async function fetchConnectorTransactions(
       if (!key || !salt) {
         throw new SyncConfigError("Connector is missing key or salt in config");
       }
-      const payu = new PayUConnector(key, salt);
-      return fetchSingleEndpoint("transactions", () =>
-        payu.fetchTransactions(fromDate, toDate)
-      );
+      return fetchWithSubChunks(connector, fromDate, toDate, (conn, from, to) => {
+        const cfg = getConfig(conn);
+        const payu = new PayUConnector(cfg.key, cfg.salt);
+        return fetchSingleEndpoint("transactions", () =>
+          payu.fetchTransactions(from, to)
+        );
+      });
     }
     case "paytm": {
       const { merchant_id: merchantId, merchant_key: merchantKey } = config;
@@ -194,20 +197,26 @@ async function fetchConnectorTransactions(
           "Connector is missing merchant_id or merchant_key in config"
         );
       }
-      const paytm = new PaytmConnector(merchantId, merchantKey);
-      return fetchSingleEndpoint("transactions", () =>
-        paytm.fetchTransactions(fromDate, toDate)
-      );
+      return fetchWithSubChunks(connector, fromDate, toDate, (conn, from, to) => {
+        const cfg = getConfig(conn);
+        const paytm = new PaytmConnector(cfg.merchant_id, cfg.merchant_key);
+        return fetchSingleEndpoint("transactions", () =>
+          paytm.fetchTransactions(from, to)
+        );
+      });
     }
     case "easebuzz": {
       const { key, salt } = config;
       if (!key || !salt) {
         throw new SyncConfigError("Connector is missing key or salt in config");
       }
-      const easebuzz = new EasebuzzConnector(key, salt);
-      return fetchSingleEndpoint("transactions", () =>
-        easebuzz.fetchTransactions(fromDate, toDate)
-      );
+      return fetchWithSubChunks(connector, fromDate, toDate, (conn, from, to) => {
+        const cfg = getConfig(conn);
+        const easebuzz = new EasebuzzConnector(cfg.key, cfg.salt);
+        return fetchSingleEndpoint("transactions", () =>
+          easebuzz.fetchTransactions(from, to)
+        );
+      });
     }
     default:
       throw new SyncConfigError(`Unsupported connector type: ${connector.type}`);
