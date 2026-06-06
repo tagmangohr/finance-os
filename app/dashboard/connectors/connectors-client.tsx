@@ -237,21 +237,20 @@ const CSV_COLUMN_OPTIONS = [
 
 // ─── Sync date-range presets ──────────────────────────────────────────────────
 
-// chunk counts below assume CHUNK_DAYS = 7
+// Client sends 30-day windows; the server sub-chunks internally into 7-day
+// Razorpay calls, so each Vercel function is fast (~3 s) regardless of data volume.
 const SYNC_PRESETS = [
-  { label: "Last 30 days",  days: 30,   chunks: 5   },
-  { label: "Last 90 days",  days: 90,   chunks: 13  },
-  { label: "Last 6 months", days: 180,  chunks: 26  },
-  { label: "Last 1 year",   days: 365,  chunks: 53  },
-  { label: "Last 2 years",  days: 730,  chunks: 105 },
-  { label: "Last 3 years",  days: 1095, chunks: 157 },
+  { label: "Last 30 days",  days: 30,   chunks: 1  },
+  { label: "Last 90 days",  days: 90,   chunks: 3  },
+  { label: "Last 6 months", days: 180,  chunks: 6  },
+  { label: "Last 1 year",   days: 365,  chunks: 13 },
+  { label: "Last 2 years",  days: 730,  chunks: 25 },
+  { label: "Last 3 years",  days: 1095, chunks: 37 },
 ] as const;
 
-// 7-day windows keep each Vercel function call to ≤1 page of Razorpay results
-// (~100 transactions), safely under the 10 s Hobby-plan function timeout.
-const CHUNK_DAYS = 7;
+const CHUNK_DAYS = 30;
 
-/** Split [from, to] into N-day chunks so no single API call times out. */
+/** Split [from, to] into N-day client chunks. */
 function splitDateRange(from: Date, to: Date, chunkDays = CHUNK_DAYS): Array<{ from: Date; to: Date }> {
   const chunks: Array<{ from: Date; to: Date }> = [];
   let cursor = new Date(from);
@@ -525,10 +524,10 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
 
       if (endpoint) {
         // ── Chunked parallel sync ─────────────────────────────────────────
-        // 7-day chunks keep each Vercel function call to ≤1 page of results
-        // (safe under Hobby plan's 10 s limit).  Running CONCURRENCY chunks
-        // at once restores the throughput of the old 30-day sequential approach.
-        const CONCURRENCY = 5;
+        // 30-day client chunks × 10 concurrent = 1 year in 2 batches (~6 s).
+        // The server sub-chunks internally into 7-day Razorpay windows, so each
+        // Vercel function stays fast (~3 s) regardless of transaction volume.
+        const CONCURRENCY = 10;
         const chunks = splitDateRange(fromDate, toDate);
         setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
         let completed = 0;

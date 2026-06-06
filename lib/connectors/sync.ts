@@ -118,6 +118,49 @@ async function fetchSingleEndpoint(
   }
 }
 
+// ─── Server-side sub-chunking ─────────────────────────────────────────────────
+// The browser sends 30-day windows to minimise round-trips.  Inside each
+// Vercel function we further split into 7-day sub-windows so that each
+// payment-gateway API call fetches at most ~100 records (1 page).  This
+// eliminates multi-page pagination loops that were causing 504 timeouts.
+// Auth happens only once per Vercel call; Razorpay calls are the cheap bit.
+const SERVER_SUB_CHUNK_DAYS = 7;
+
+function splitSubRange(from: Date, to: Date): Array<{ from: Date; to: Date }> {
+  const chunks: Array<{ from: Date; to: Date }> = [];
+  let cursor = new Date(from);
+  const chunkMs = SERVER_SUB_CHUNK_DAYS * 24 * 60 * 60 * 1000;
+  while (cursor < to) {
+    const end = new Date(Math.min(cursor.getTime() + chunkMs, to.getTime()));
+    chunks.push({ from: new Date(cursor), to: end });
+    cursor = new Date(end.getTime() + 1);
+  }
+  return chunks;
+}
+
+type GatewayFetcher = (
+  connector: ConnectorRow,
+  from: Date,
+  to: Date
+) => Promise<{ transactions: NormalizedTransaction[]; warnings: string[] }>;
+
+async function fetchWithSubChunks(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date,
+  fetcher: GatewayFetcher
+): Promise<{ transactions: NormalizedTransaction[]; warnings: string[] }> {
+  const subChunks = splitSubRange(fromDate, toDate);
+  const allTx: NormalizedTransaction[] = [];
+  const allWarnings: string[] = [];
+  for (const chunk of subChunks) {
+    const { transactions, warnings } = await fetcher(connector, chunk.from, chunk.to);
+    allTx.push(...transactions);
+    allWarnings.push(...warnings);
+  }
+  return { transactions: allTx, warnings: allWarnings };
+}
+
 async function fetchConnectorTransactions(
   connector: ConnectorRow,
   fromDate: Date,
@@ -126,12 +169,14 @@ async function fetchConnectorTransactions(
   const config = getConfig(connector);
 
   switch (connector.type) {
+    // API-based connectors: use server-side sub-chunking so each payment-gateway
+    // call stays under 1 page and the Vercel function never approaches its timeout.
     case "razorpay":
-      return fetchRazorpay(connector, fromDate, toDate);
+      return fetchWithSubChunks(connector, fromDate, toDate, fetchRazorpay);
     case "stripe":
-      return fetchStripe(connector, fromDate, toDate);
+      return fetchWithSubChunks(connector, fromDate, toDate, fetchStripe);
     case "cashfree":
-      return fetchCashfree(connector, fromDate, toDate);
+      return fetchWithSubChunks(connector, fromDate, toDate, fetchCashfree);
     case "payu": {
       const { key, salt } = config;
       if (!key || !salt) {
