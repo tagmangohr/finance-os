@@ -12,6 +12,8 @@ export const CONNECTOR_TYPES = [
   "payu",
   "paytm",
   "easebuzz",
+  "google_drive",
+  "onedrive",
 ] as const;
 
 export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;

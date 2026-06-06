@@ -27,7 +27,7 @@ export interface Database {
         Row: {
           id: string;
           org_id: string;
-          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz";
+          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz" | "google_drive" | "onedrive";
           name: string;
           status: "active" | "inactive" | "error";
           config: Json;
@@ -140,7 +140,51 @@ export interface Database {
   };
 }
 
-// Convenience type aliases
+// ─── Drive connector table types ─────────────────────────────────────────────
+
+export interface DriveConnectionRow {
+  id:            string;
+  org_id:        string;
+  connector_id:  string;
+  provider:      "google_drive" | "onedrive";
+  access_token:  string;
+  refresh_token: string | null;
+  token_expiry:  string | null;
+  account_email: string | null;
+  account_name:  string | null;
+  created_at:    string;
+  updated_at:    string;
+}
+
+export interface DriveFolderRow {
+  id:                 string;
+  org_id:             string;
+  connection_id:      string;
+  provider_folder_id: string;
+  folder_name:        string;
+  folder_url:         string;
+  last_scan_at:       string | null;
+  created_at:         string;
+}
+
+export interface DriveFileRow {
+  id:               string;
+  org_id:           string;
+  folder_id:        string;
+  provider_file_id: string;
+  file_name:        string;
+  mime_type:        string | null;
+  column_mapping:   Json | null;
+  mapping_confirmed:boolean;
+  last_etag:        string | null;
+  last_modified_at: string | null;
+  row_count:        number | null;
+  last_sync_at:     string | null;
+  created_at:       string;
+}
+
+// ─── Convenience type aliases ─────────────────────────────────────────────────
+
 export type Organization = Database["public"]["Tables"]["organizations"]["Row"];
 export type Connector = Database["public"]["Tables"]["connectors"]["Row"];
 export type Transaction = Database["public"]["Tables"]["transactions"]["Row"];
