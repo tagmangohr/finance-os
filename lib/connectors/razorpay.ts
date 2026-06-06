@@ -42,6 +42,9 @@ export class RazorpayConnector {
         Authorization: this.authHeader,
         "Content-Type": "application/json",
       },
+      // Hard timeout — prevents a slow Razorpay response from eating the
+      // entire Vercel function budget (10 s on Hobby, 60 s on Pro).
+      signal: AbortSignal.timeout(9000),
       next: { revalidate: 0 },
     });
 

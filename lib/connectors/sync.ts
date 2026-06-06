@@ -259,11 +259,15 @@ export async function syncConnectorTransactions({
   fromDate: Date;
   toDate: Date;
 }): Promise<ConnectorSyncResult> {
+  console.log(`[sync] start connector=${connector.id} type=${connector.type} from=${fromDate.toISOString()} to=${toDate.toISOString()}`);
+
   const { transactions, warnings } = await fetchConnectorTransactions(
     connector,
     fromDate,
     toDate
   );
+
+  console.log(`[sync] fetched=${transactions.length} warnings=${warnings.length}`, warnings.length ? warnings : "");
 
   const result: ConnectorSyncResult = {
     fetched: transactions.length,
@@ -293,6 +297,8 @@ export async function syncConnectorTransactions({
       (row) => row.external_id && existingByExternalId.has(row.external_id)
     );
 
+    console.log(`[sync] new=${newRows.length} existing=${existingRows.length} skipped-dedup=${rows.length - newRows.length - existingRows.length}`);
+
     if (newRows.length > 0) {
       const { error, count } = await supabase
         .from("transactions")
@@ -305,12 +311,15 @@ export async function syncConnectorTransactions({
         // reference it — plain insert + catching 23505 is the correct pattern.
         // Treat as skipped; the data is already in the DB from the other sync.
         if (error.code === "23505") {
+          console.warn(`[sync] 23505 duplicate on insert — concurrent sync, treating as skipped`);
           result.skipped += newRows.length;
         } else {
+          console.error(`[sync] INSERT ERROR code=${error.code} message=${error.message} details=${error.details}`);
           throw new Error(`Insert failed: ${error.message}`);
         }
       } else {
         result.inserted = count ?? newRows.length;
+        console.log(`[sync] inserted=${result.inserted}`);
       }
     }
 
