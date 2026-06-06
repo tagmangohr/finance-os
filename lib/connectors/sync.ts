@@ -151,14 +151,17 @@ async function fetchWithSubChunks(
   fetcher: GatewayFetcher
 ): Promise<{ transactions: NormalizedTransaction[]; warnings: string[] }> {
   const subChunks = splitSubRange(fromDate, toDate);
-  const allTx: NormalizedTransaction[] = [];
-  const allWarnings: string[] = [];
-  for (const chunk of subChunks) {
-    const { transactions, warnings } = await fetcher(connector, chunk.from, chunk.to);
-    allTx.push(...transactions);
-    allWarnings.push(...warnings);
-  }
-  return { transactions: allTx, warnings: allWarnings };
+  // Run all sub-windows in parallel — each covers a non-overlapping date range
+  // so there are no data dependencies.  This reduces the critical path from
+  // N × longest_call to just max(longest_call), keeping every Vercel function
+  // well under its timeout regardless of how many sub-windows are needed.
+  const results = await Promise.all(
+    subChunks.map((chunk) => fetcher(connector, chunk.from, chunk.to))
+  );
+  return {
+    transactions: results.flatMap((r) => r.transactions),
+    warnings:     results.flatMap((r) => r.warnings),
+  };
 }
 
 async function fetchConnectorTransactions(

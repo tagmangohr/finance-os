@@ -42,8 +42,6 @@ export async function handleConnectorSyncRequest(
     .from("connectors")
     .select("*")
     .eq("id", auth.connector.id)
-    .eq("org_id", auth.org.id)
-    .eq("type", type)
     .single();
 
   if (connErr || !connector) {

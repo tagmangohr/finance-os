@@ -527,7 +527,7 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
         // 30-day client chunks × 10 concurrent = 1 year in 2 batches (~6 s).
         // The server sub-chunks internally into 7-day Razorpay windows, so each
         // Vercel function stays fast (~3 s) regardless of transaction volume.
-        const CONCURRENCY = 10;
+        const CONCURRENCY = 3;
         const chunks = splitDateRange(fromDate, toDate);
         setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
         let completed = 0;
@@ -546,7 +546,9 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
             });
             if (!res.ok) {
               const errBody = await res.json().catch(() => ({})) as { error?: string };
-              return { synced: 0, updated: 0, errors: [errBody.error ?? `HTTP ${res.status}`] };
+              const errMsg = errBody.error ?? `HTTP ${res.status}`;
+              console.error(`[sync] chunk ${chunk.from.toISOString().slice(0,10)}→${chunk.to.toISOString().slice(0,10)} failed: ${errMsg}`);
+              return { synced: 0, updated: 0, errors: [errMsg] };
             }
             const data = await res.json() as { synced?: number; updated?: number; warnings?: string[] };
             return {
@@ -555,7 +557,9 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
               errors:  data.warnings?.map((w) => `warn: ${w}`) ?? [],
             };
           } catch (e) {
-            return { synced: 0, updated: 0, errors: [e instanceof Error ? e.message.slice(0, 80) : "Network error"] };
+            const errMsg = e instanceof Error ? e.message.slice(0, 120) : "Network error";
+            console.error(`[sync] chunk ${chunk.from.toISOString().slice(0,10)}→${chunk.to.toISOString().slice(0,10)} threw: ${errMsg}`);
+            return { synced: 0, updated: 0, errors: [errMsg] };
           }
         };
 

@@ -44,7 +44,7 @@ export class RazorpayConnector {
       },
       // Hard timeout — prevents a slow Razorpay response from eating the
       // entire Vercel function budget (10 s on Hobby, 60 s on Pro).
-      signal: AbortSignal.timeout(9000),
+      signal: AbortSignal.timeout(5000),
       next: { revalidate: 0 },
     });
 
