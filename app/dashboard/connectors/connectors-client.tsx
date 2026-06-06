@@ -263,11 +263,13 @@ function splitDateRange(from: Date, to: Date, chunkDays = 30): Array<{ from: Dat
 interface ConnectorsClientProps {
   orgId: string;
   connectors: Connector[];
+  /** Optional additional section (e.g. Cloud Drive connectors) rendered below the main grid */
+  children?: React.ReactNode;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
+export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
 
   // Modal state
@@ -529,12 +531,22 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
                 to_date:   chunks[i].to.toISOString(),
               }),
             });
-            if (!res.ok) { chunkErrors.push(`chunk ${i + 1}: HTTP ${res.status}`); continue; }
-            const data = await res.json();
-            totalSynced += data.synced ?? 0;
+            if (!res.ok) {
+              // Surface the actual server error message, not just the HTTP status
+              const errBody = await res.json().catch(() => ({})) as { error?: string };
+              const errMsg = errBody.error ?? `HTTP ${res.status}`;
+              chunkErrors.push(errMsg);
+              continue;
+            }
+            const data = await res.json() as { synced?: number; updated?: number; warnings?: string[] };
+            totalSynced  += data.synced  ?? 0;
             totalUpdated += data.updated ?? 0;
+            // Surface server-side warnings (e.g. Razorpay payouts/disputes access errors)
+            if (data.warnings?.length) {
+              data.warnings.forEach((w) => chunkErrors.push(`warn: ${w}`));
+            }
           } catch (e) {
-            chunkErrors.push(`chunk ${i + 1}: ${e instanceof Error ? e.message.slice(0, 60) : "error"}`);
+            chunkErrors.push(e instanceof Error ? e.message.slice(0, 80) : "Network error");
           }
         }
       } else {
@@ -556,8 +568,20 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         )
       );
 
-      if (chunkErrors.length > 0) {
-        toast.warning(`Synced ${totalSynced} new, refreshed ${totalUpdated} (${chunkErrors.length} chunk error${chunkErrors.length > 1 ? "s" : ""})`);
+      const hardErrors = chunkErrors.filter((e) => !e.startsWith("warn:"));
+      const softWarns  = chunkErrors.filter((e) => e.startsWith("warn:"));
+      if (hardErrors.length > 0 && totalSynced === 0 && totalUpdated === 0) {
+        // Nothing got through — show the first real error prominently
+        toast.error(`Sync failed: ${hardErrors[0]}`);
+      } else if (hardErrors.length > 0) {
+        toast.warning(
+          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${hardErrors.length} error${hardErrors.length > 1 ? "s" : ""}: ${hardErrors[0]}`
+        );
+      } else if (softWarns.length > 0) {
+        toast.success(
+          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${softWarns.length} endpoint${softWarns.length > 1 ? "s" : ""} skipped (see console)`
+        );
+        console.warn("[sync warnings]", softWarns);
       } else {
         toast.success(`Synced ${totalSynced} new, refreshed ${totalUpdated}`);
       }
@@ -590,166 +614,197 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // ── Split defs by connection state ───────────────────────────────────────────
+  const connectedDefs    = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length > 0);
+  const notConnectedDefs = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length === 0);
+  const hasAnySplit      = connectedDefs.length > 0;
+
+  /** Renders a single connector card by its def */
+  const renderCard = (def: ConnectorDef, i: number) => {
+    const instances = getConnectorsOfType(def.type);
+    const hasActive = instances.some((c) => c.status === "active");
+
+    return (
+      <div
+        key={def.type}
+        className={cn(
+          "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-white/[0.1] shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
+          hasActive
+            ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
+            : "border-border/60"
+        )}
+        style={{ animationDelay: `${i * 0.04}s` }}
+      >
+        {/* Header */}
+        <div className="flex items-start gap-3">
+          {def.icon}
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-white/80">{def.name}</p>
+            <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
+          </div>
+          {hasActive && (
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
+              <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
+            </div>
+          )}
+        </div>
+
+        {/* Connected instances */}
+        {instances.length > 0 && (
+          <div className="space-y-1.5">
+            {instances.map((inst) => {
+              const cfg = (inst.config ?? {}) as Record<string, string>;
+              const keyId = getKeyIdentifier(inst.type, cfg);
+              const contextInfo = [cfg.email, cfg.mid].filter(Boolean).join(" · ");
+              const subtitle = [keyId, contextInfo].filter(Boolean).join(" · ")
+                || (inst.last_synced_at ? `Synced ${formatDate(inst.last_synced_at)}` : "Never synced");
+
+              const isConfirming = confirmRemove?.id === inst.id;
+
+              return (
+                <div
+                  key={inst.id}
+                  className={cn(
+                    "rounded-xl border transition-all",
+                    inst.status === "error"
+                      ? "border-red-500/20 bg-red-500/[0.04]"
+                      : isConfirming
+                      ? "border-red-500/30 bg-red-500/[0.06]"
+                      : "border-white/[0.06] bg-white/[0.025]"
+                  )}
+                >
+                  {!isConfirming ? (
+                    <div className="flex items-center gap-2 px-3 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
+                        <p className="text-[10px] text-white/25 truncate font-mono">{subtitle}</p>
+                      </div>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        <button onClick={() => handleOpenEdit(inst)} title="Edit credentials"
+                          className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <SyncDropdown
+                          connector={inst}
+                          isSyncing={syncingId === inst.id}
+                          progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
+                          onSync={(from, to) => handleSync(inst, from, to)}
+                          onCustom={() => {
+                            setCustomFrom(defaultFrom);
+                            setCustomTo(todayStr);
+                            setCustomSyncConnector(inst);
+                          }}
+                        />
+                        <button onClick={() => setConfirmRemove(inst)} disabled={disconnectingId === inst.id}
+                          title="Remove"
+                          className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2.5 space-y-2">
+                      <p className="text-[11px] text-red-400/90 leading-snug">
+                        Remove <span className="font-semibold">{inst.name}</span> and all its synced transactions?
+                      </p>
+                      <div className="flex gap-1.5">
+                        <button onClick={() => setConfirmRemove(null)}
+                          className="flex-1 text-[11px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] rounded-lg py-1 transition-all">
+                          Cancel
+                        </button>
+                        <button onClick={() => handleDisconnect(inst.id)} disabled={disconnectingId === inst.id}
+                          className="flex-1 text-[11px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50">
+                          {disconnectingId === inst.id ? "Removing…" : "Yes, remove"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Add / Connect button */}
+        {!def.isCSV ? (
+          <Button size="sm" variant={instances.length > 0 ? "outline" : "default"}
+            className={cn("gap-1.5 w-full transition-all",
+              instances.length > 0 && "border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]")}
+            onClick={() => handleOpenNew(def)}>
+            {instances.length > 0
+              ? <><Plus className="h-3.5 w-3.5" /> Add Account</>
+              : <><Zap className="h-3.5 w-3.5" /> Connect</>}
+          </Button>
+        ) : (
+          <Button size="sm" className="gap-1.5 w-full" onClick={() => handleOpenNew(def)}>
+            <Upload className="h-3.5 w-3.5" /> Upload File
+          </Button>
+        )}
+      </div>
+    );
+  };
+
   return (
-    <div className="space-y-5 max-w-[1400px]">
+    <div className="space-y-6 max-w-[1400px]">
       <div className="animate-enter">
         <h1 className="text-xl font-bold text-white/85">Connectors</h1>
         <p className="text-sm text-white/30 mt-0.5">
-          Connect payment gateways and accounting tools — multiple accounts per source supported
+          Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {CONNECTOR_DEFS.map((def, i) => {
-          const instances = getConnectorsOfType(def.type);
-          const hasActive = instances.some((c) => c.status === "active");
+      {/* ── Connected ──────────────────────────────────────────────────────── */}
+      {hasAnySplit && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-emerald-400/60">
+              Connected ({connectedDefs.length})
+            </span>
+            <div className="flex-1 h-px bg-white/[0.05]" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {connectedDefs.map((def, i) => renderCard(def, i))}
+          </div>
+        </div>
+      )}
 
-          return (
-            <div
-              key={def.type}
-              className={cn(
-                "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-white/[0.1] shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
-                hasActive
-                  ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
-                  : "border-border/60"
-              )}
-              style={{ animationDelay: `${i * 0.04}s` }}
-            >
-              {/* Header */}
-              <div className="flex items-start gap-3">
-                {def.icon}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-white/80">{def.name}</p>
-                  <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
-                </div>
-                {hasActive && (
-                  <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-                    <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Connected instances */}
-              {instances.length > 0 && (
-                <div className="space-y-1.5">
-                  {instances.map((inst) => {
-                    const cfg = (inst.config ?? {}) as Record<string, string>;
-
-                    // Primary key identifier — masked so secrets aren't fully exposed
-                    const keyId = getKeyIdentifier(inst.type, cfg);
-                    const contextInfo = [cfg.email, cfg.mid].filter(Boolean).join(" · ");
-                    const subtitle = [keyId, contextInfo].filter(Boolean).join(" · ")
-                      || (inst.last_synced_at ? `Synced ${formatDate(inst.last_synced_at)}` : "Never synced");
-
-                    const isConfirming = confirmRemove?.id === inst.id;
-
-                    return (
-                      <div
-                        key={inst.id}
-                        className={cn(
-                          "rounded-xl border transition-all",
-                          inst.status === "error"
-                            ? "border-red-500/20 bg-red-500/[0.04]"
-                            : isConfirming
-                            ? "border-red-500/30 bg-red-500/[0.06]"
-                            : "border-white/[0.06] bg-white/[0.025]"
-                        )}
-                      >
-                        {/* Normal row */}
-                        {!isConfirming ? (
-                          <div className="flex items-center gap-2 px-3 py-2.5">
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
-                              <p className="text-[10px] text-white/25 truncate font-mono">{subtitle}</p>
-                            </div>
-                            <div className="flex items-center gap-0.5 flex-shrink-0">
-                              {/* Edit */}
-                              <button
-                                onClick={() => handleOpenEdit(inst)}
-                                title="Edit credentials"
-                                className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              {/* Sync — dropdown with date-range presets */}
-                              <SyncDropdown
-                                connector={inst}
-                                isSyncing={syncingId === inst.id}
-                                progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
-                                onSync={(from, to) => handleSync(inst, from, to)}
-                                onCustom={() => {
-                                  setCustomFrom(defaultFrom);
-                                  setCustomTo(todayStr);
-                                  setCustomSyncConnector(inst);
-                                }}
-                              />
-                              {/* Remove — show confirmation first */}
-                              <button
-                                onClick={() => setConfirmRemove(inst)}
-                                disabled={disconnectingId === inst.id}
-                                title="Remove"
-                                className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          /* Confirmation row */
-                          <div className="px-3 py-2.5 space-y-2">
-                            <p className="text-[11px] text-red-400/90 leading-snug">
-                              Remove <span className="font-semibold">{inst.name}</span> and all its synced transactions?
-                            </p>
-                            <div className="flex gap-1.5">
-                              <button
-                                onClick={() => setConfirmRemove(null)}
-                                className="flex-1 text-[11px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] rounded-lg py-1 transition-all"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                onClick={() => handleDisconnect(inst.id)}
-                                disabled={disconnectingId === inst.id}
-                                className="flex-1 text-[11px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50"
-                              >
-                                {disconnectingId === inst.id ? "Removing…" : "Yes, remove"}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Add / Connect button */}
-              {!def.isCSV ? (
-                <Button
-                  size="sm"
-                  variant={instances.length > 0 ? "outline" : "default"}
-                  className={cn(
-                    "gap-1.5 w-full transition-all",
-                    instances.length > 0 &&
-                      "border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
-                  )}
-                  onClick={() => handleOpenNew(def)}
-                >
-                  {instances.length > 0
-                    ? <><Plus className="h-3.5 w-3.5" /> Add Account</>
-                    : <><Zap className="h-3.5 w-3.5" /> Connect</>
-                  }
-                </Button>
-              ) : (
-                <Button size="sm" className="gap-1.5 w-full" onClick={() => handleOpenNew(def)}>
-                  <Upload className="h-3.5 w-3.5" /> Upload File
-                </Button>
-              )}
-            </div>
-          );
-        })}
+      {/* ── Not connected ──────────────────────────────────────────────────── */}
+      <div className="space-y-3">
+        {hasAnySplit && (
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 w-1.5 rounded-full bg-white/20" />
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-white/25">
+              Not connected ({notConnectedDefs.length})
+            </span>
+            <div className="flex-1 h-px bg-white/[0.04]" />
+          </div>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {notConnectedDefs.map((def, i) => renderCard(def, i))}
+        </div>
       </div>
+
+      {/* ── Cloud storage section (injected from page.tsx) ─────────────────── */}
+      {children && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-px bg-white/[0.05]" />
+            <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/20">
+              Cloud Storage
+            </span>
+            <div className="flex-1 h-px bg-white/[0.05]" />
+          </div>
+          <p className="text-xs text-white/25">
+            Store raw transaction files in Google Drive or OneDrive — Finance OS fetches them automatically,
+            normalises columns with AI, and keeps data in sync.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {children}
+          </div>
+        </div>
+      )}
 
       {/* ── Modal ──────────────────────────────────────────────────────────── */}
       <Dialog.Root open={!!openModal} onOpenChange={(open) => !open && handleCloseModal()}>
