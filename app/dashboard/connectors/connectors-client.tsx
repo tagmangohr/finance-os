@@ -524,12 +524,16 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
       const chunkErrors: string[] = [];
 
       if (endpoint) {
-        // ── Chunked sync: one 30-day window per request ──────────────────
+        // ── Chunked parallel sync ─────────────────────────────────────────
+        // 7-day chunks keep each Vercel function call to ≤1 page of results
+        // (safe under Hobby plan's 10 s limit).  Running CONCURRENCY chunks
+        // at once restores the throughput of the old 30-day sequential approach.
+        const CONCURRENCY = 5;
         const chunks = splitDateRange(fromDate, toDate);
         setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
+        let completed = 0;
 
-        for (let i = 0; i < chunks.length; i++) {
-          setSyncProgress({ connectorId: connector.id, current: i + 1, total: chunks.length });
+        const fetchChunk = async (chunk: { from: Date; to: Date }) => {
           try {
             const res = await fetch(endpoint, {
               method: "POST",
@@ -537,26 +541,35 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
               body: JSON.stringify({
                 connector_id: connector.id,
                 org_id: orgId,
-                from_date: chunks[i].from.toISOString(),
-                to_date:   chunks[i].to.toISOString(),
+                from_date: chunk.from.toISOString(),
+                to_date:   chunk.to.toISOString(),
               }),
             });
             if (!res.ok) {
-              // Surface the actual server error message, not just the HTTP status
               const errBody = await res.json().catch(() => ({})) as { error?: string };
-              const errMsg = errBody.error ?? `HTTP ${res.status}`;
-              chunkErrors.push(errMsg);
-              continue;
+              return { synced: 0, updated: 0, errors: [errBody.error ?? `HTTP ${res.status}`] };
             }
             const data = await res.json() as { synced?: number; updated?: number; warnings?: string[] };
-            totalSynced  += data.synced  ?? 0;
-            totalUpdated += data.updated ?? 0;
-            // Surface server-side warnings (e.g. Razorpay payouts/disputes access errors)
-            if (data.warnings?.length) {
-              data.warnings.forEach((w) => chunkErrors.push(`warn: ${w}`));
-            }
+            return {
+              synced:  data.synced  ?? 0,
+              updated: data.updated ?? 0,
+              errors:  data.warnings?.map((w) => `warn: ${w}`) ?? [],
+            };
           } catch (e) {
-            chunkErrors.push(e instanceof Error ? e.message.slice(0, 80) : "Network error");
+            return { synced: 0, updated: 0, errors: [e instanceof Error ? e.message.slice(0, 80) : "Network error"] };
+          }
+        };
+
+        // Process in batches of CONCURRENCY; update progress after each batch
+        for (let i = 0; i < chunks.length; i += CONCURRENCY) {
+          const batch = chunks.slice(i, i + CONCURRENCY);
+          const results = await Promise.all(batch.map(fetchChunk));
+          completed += batch.length;
+          setSyncProgress({ connectorId: connector.id, current: Math.min(completed, chunks.length), total: chunks.length });
+          for (const r of results) {
+            totalSynced  += r.synced;
+            totalUpdated += r.updated;
+            chunkErrors.push(...r.errors);
           }
         }
       } else {
