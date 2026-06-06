@@ -88,18 +88,27 @@ export class RazorpayConnector {
   }
 
   // ─── Payouts ──────────────────────────────────────────────────────────────
+  // NOTE: Razorpay Payouts API is part of Razorpay X (their banking product).
+  // It REQUIRES an account_number param; without it the API returns 400.
+  // Pass accountNumber from the connector config if the merchant uses Razorpay X;
+  // otherwise this method returns an empty array silently (no API call made).
 
   async fetchPayouts(
     fromDate: Date,
-    toDate: Date
+    toDate: Date,
+    accountNumber?: string
   ): Promise<NormalizedTransaction[]> {
+    // Payouts API requires account_number — only available to Razorpay X merchants
+    if (!accountNumber) return [];
+
     const results: NormalizedTransaction[] = [];
     let cursor: string | undefined;
 
     while (true) {
       const params: Record<string, string | number> = {
+        account_number: accountNumber,
         from: Math.floor(fromDate.getTime() / 1000),
-        to: Math.floor(toDate.getTime() / 1000),
+        to:   Math.floor(toDate.getTime() / 1000),
         count: PAGE_SIZE,
       };
       if (cursor) params.cursor = cursor;

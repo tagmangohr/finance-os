@@ -46,15 +46,19 @@ async function fetchRazorpay(
   fromDate: Date,
   toDate: Date
 ) {
-  const { key_id: keyId, key_secret: keySecret } = getConfig(connector);
+  const { key_id: keyId, key_secret: keySecret, account_number: accountNumber } = getConfig(connector);
   if (!keyId || !keySecret) {
     throw new SyncConfigError("Connector is missing key_id or key_secret in config");
   }
 
   const razorpay = new RazorpayConnector(keyId, keySecret);
+
+  // fetchPayouts returns [] when no accountNumber is provided (Razorpay X only).
+  // All five are wrapped in allSettled so individual 4xx errors become warnings,
+  // not hard failures — payments/refunds/settlements succeed regardless.
   const settled = await Promise.allSettled([
     razorpay.fetchPayments(fromDate, toDate),
-    razorpay.fetchPayouts(fromDate, toDate),
+    razorpay.fetchPayouts(fromDate, toDate, accountNumber),
     razorpay.fetchRefunds(fromDate, toDate),
     razorpay.fetchSettlements(fromDate, toDate),
     razorpay.fetchDisputes(fromDate, toDate),
@@ -290,9 +294,18 @@ export async function syncConnectorTransactions({
     );
 
     if (newRows.length > 0) {
+      // upsert with ignoreDuplicates is a safety net against concurrent syncs:
+      // the pre-insert dedup check already filters existing rows, but if two
+      // syncs overlap the same date range the second would hit the unique index
+      // (org_id, connector_id, external_id) and fail with 23505.
+      // ON CONFLICT DO NOTHING silently skips any race-condition duplicates.
       const { error, count } = await supabase
         .from("transactions")
-        .insert(newRows, { count: "exact" });
+        .upsert(newRows, {
+          onConflict:       "org_id,connector_id,external_id",
+          ignoreDuplicates: true,
+          count:            "exact",
+        });
 
       if (error) throw new Error(`Insert failed: ${error.message}`);
       result.inserted = count ?? newRows.length;

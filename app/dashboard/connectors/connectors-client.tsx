@@ -110,10 +110,11 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Payments, refunds, settlements, disputes",
     icon: <SiIcon slug="razorpay" bg="#2D81F7" />,
     fields: [
-      { key: "key_id",     label: "Key ID",      placeholder: "rzp_live_..." },
-      { key: "key_secret", label: "Key Secret",  isPassword: true, placeholder: "••••••••••••••••" },
-      { key: "email",      label: "Account Email", placeholder: "you@company.com", isOptional: true },
-      { key: "mid",        label: "Merchant ID (MID)", placeholder: "MID12345", isOptional: true },
+      { key: "key_id",         label: "Key ID",                   placeholder: "rzp_live_..." },
+      { key: "key_secret",     label: "Key Secret",               isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "account_number", label: "Account Number (Razorpay X)", placeholder: "4564563087654", isOptional: true },
+      { key: "email",          label: "Account Email",            placeholder: "you@company.com", isOptional: true },
+      { key: "mid",            label: "Merchant ID (MID)",        placeholder: "MID12345", isOptional: true },
     ],
   },
   {
@@ -444,10 +445,14 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
 
         for (const field of def.fields ?? []) {
           const val = credFields[field.key];
-          if (field.isPassword) {
-            // Only update if user typed something (non-empty)
+          if (field.isPassword || !field.isOptional) {
+            // Required fields (passwords + non-optional plain text like key_id):
+            // only overwrite if the user typed something non-empty.
+            // Blank = keep existing — prevents accidental credential wipe on edit.
             if (val && val.trim()) updatedCfg[field.key] = val.trim();
           } else {
+            // Optional fields (email, mid, account_number, etc.):
+            // always update — user can explicitly clear them.
             if (val !== undefined) updatedCfg[field.key] = val;
           }
         }
@@ -891,7 +896,7 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
                       label={field.label}
                       type={field.isPassword ? "password" : "text"}
                       placeholder={
-                        editingConnector && field.isPassword
+                        editingConnector
                           ? "Leave blank to keep existing"
                           : field.placeholder
                       }
