@@ -508,6 +508,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
 
     try {
       let totalSynced = 0;
+      let totalUpdated = 0;
       const chunkErrors: string[] = [];
 
       if (endpoint) {
@@ -531,6 +532,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
             if (!res.ok) { chunkErrors.push(`chunk ${i + 1}: HTTP ${res.status}`); continue; }
             const data = await res.json();
             totalSynced += data.synced ?? 0;
+            totalUpdated += data.updated ?? 0;
           } catch (e) {
             chunkErrors.push(`chunk ${i + 1}: ${e instanceof Error ? e.message.slice(0, 60) : "error"}`);
           }
@@ -545,6 +547,7 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         totalSynced = data.total_inserted ?? 0;
+        totalUpdated = data.total_updated ?? 0;
       }
 
       setActiveConnectors((prev) =>
@@ -554,9 +557,9 @@ export function ConnectorsClient({ orgId, connectors }: ConnectorsClientProps) {
       );
 
       if (chunkErrors.length > 0) {
-        toast.warning(`Synced ${totalSynced} transactions (${chunkErrors.length} chunk error${chunkErrors.length > 1 ? "s" : ""})`);
+        toast.warning(`Synced ${totalSynced} new, refreshed ${totalUpdated} (${chunkErrors.length} chunk error${chunkErrors.length > 1 ? "s" : ""})`);
       } else {
-        toast.success(`Synced ${totalSynced} new transactions`);
+        toast.success(`Synced ${totalSynced} new, refreshed ${totalUpdated}`);
       }
     } catch (err) {
       toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);

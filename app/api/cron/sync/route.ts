@@ -57,6 +57,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       type: connector.type,
       status: result.status,
       inserted: result.status === "fulfilled" ? result.value.inserted : 0,
+      updated: result.status === "fulfilled" ? result.value.updated : 0,
       skipped: result.status === "fulfilled" ? result.value.skipped : 0,
       warnings: result.status === "fulfilled" ? result.value.warnings : undefined,
       error: result.status === "rejected" ? String(result.reason) : undefined,
@@ -64,10 +65,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   });
 
   const totalInserted = summary.reduce((sum, result) => sum + result.inserted, 0);
+  const totalUpdated = summary.reduce((sum, result) => sum + result.updated, 0);
 
   console.log(
-    `[cron/sync] ${new Date().toISOString()} - ${connectors.length} connectors, ${totalInserted} new txns`
+    `[cron/sync] ${new Date().toISOString()} - ${connectors.length} connectors, ${totalInserted} new txns, ${totalUpdated} refreshed`
   );
 
-  return NextResponse.json({ message: "OK", synced: totalInserted, detail: summary });
+  return NextResponse.json({
+    message: "OK",
+    synced: totalInserted,
+    updated: totalUpdated,
+    detail: summary,
+  });
 }

@@ -65,6 +65,7 @@ export async function handleConnectorSyncRequest(
       synced: result.inserted,
       fetched: result.fetched,
       skipped: result.skipped,
+      updated: result.updated,
       from: range.fromDate.toISOString(),
       to: range.toDate.toISOString(),
       ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),

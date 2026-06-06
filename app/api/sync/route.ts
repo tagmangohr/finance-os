@@ -15,6 +15,7 @@ export type SyncResult = {
   type: string;
   fetched: number;
   inserted: number;
+  updated: number;
   skipped: number;
   from: string;
   to: string;
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       results: [],
       total_fetched: 0,
       total_inserted: 0,
+      total_updated: 0,
       total_skipped: 0,
     });
   }
@@ -75,12 +77,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const total_fetched = results.reduce((sum, result) => sum + result.fetched, 0);
   const total_inserted = results.reduce((sum, result) => sum + result.inserted, 0);
+  const total_updated = results.reduce((sum, result) => sum + result.updated, 0);
   const total_skipped = results.reduce((sum, result) => sum + result.skipped, 0);
 
   return NextResponse.json({
     results,
     total_fetched,
     total_inserted,
+    total_updated,
     total_skipped,
     from: range.fromDate.toISOString(),
     to: range.toDate.toISOString(),
@@ -113,6 +117,7 @@ async function syncOne(
       ...base,
       fetched: result.fetched,
       inserted: result.inserted,
+      updated: result.updated,
       skipped: result.skipped,
       ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
     };
@@ -128,6 +133,7 @@ async function syncOne(
       ...base,
       fetched: 0,
       inserted: 0,
+      updated: 0,
       skipped: 0,
       error: err instanceof Error ? err.message : String(err),
     };

@@ -25,6 +25,21 @@ import type { createServiceClient } from "@/lib/supabase/server";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
+export type ExistingTransactionByExternalId = {
+  id: string;
+  external_id: string;
+  type: string;
+  amount: number | string;
+  currency: string;
+  category: string | null;
+  counterparty_name: string | null;
+  description: string | null;
+  source: string;
+  status: string;
+  transaction_date: string;
+  metadata: unknown;
+};
+
 export async function getExistingExternalIds(
   supabase: ServiceClient,
   orgId: string,
@@ -49,6 +64,44 @@ export async function getExistingExternalIds(
 
     for (const row of data ?? []) {
       if (row.external_id) existing.add(row.external_id as string);
+    }
+  }
+
+  return existing;
+}
+
+export async function getExistingTransactionsByExternalId(
+  supabase: ServiceClient,
+  orgId: string,
+  externalIds: string[]
+): Promise<Map<string, ExistingTransactionByExternalId[]>> {
+  const BATCH_SIZE = 500;
+  const existing = new Map<string, ExistingTransactionByExternalId[]>();
+
+  for (let i = 0; i < externalIds.length; i += BATCH_SIZE) {
+    const batch = externalIds.slice(i, i + BATCH_SIZE);
+
+    const { data, error } = await supabase
+      .from("transactions")
+      .select(
+        `id, external_id, type, amount, currency, category, counterparty_name,
+         description, source, status, transaction_date, metadata`
+      )
+      .eq("org_id", orgId)
+      .in("external_id", batch);
+
+    if (error) {
+      throw new Error(`Existing transaction lookup failed: ${error.message}`);
+    }
+
+    for (const row of data ?? []) {
+      if (!row.external_id) continue;
+
+      const key = row.external_id as string;
+      existing.set(key, [
+        ...(existing.get(key) ?? []),
+        row as ExistingTransactionByExternalId,
+      ]);
     }
   }
 

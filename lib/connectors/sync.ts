@@ -4,18 +4,23 @@ import { PaytmConnector } from "@/lib/connectors/paytm";
 import { PayUConnector } from "@/lib/connectors/payu";
 import { RazorpayConnector } from "@/lib/connectors/razorpay";
 import { StripeConnector } from "@/lib/connectors/stripe";
-import { getExistingExternalIds } from "@/lib/db/dedup";
+import {
+  getExistingTransactionsByExternalId,
+  type ExistingTransactionByExternalId,
+} from "@/lib/db/dedup";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import type { Database } from "@/lib/supabase/types";
 import type { createServiceClient } from "@/lib/supabase/server";
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 type TransactionInsert = Database["public"]["Tables"]["transactions"]["Insert"];
+type TransactionUpdate = Database["public"]["Tables"]["transactions"]["Update"];
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
 export type ConnectorSyncResult = {
   fetched: number;
   inserted: number;
+  updated: number;
   skipped: number;
   warnings: string[];
 };
@@ -202,6 +207,43 @@ function toInsertRows(
   }));
 }
 
+function toRefreshFields(row: TransactionInsert): TransactionUpdate {
+  return {
+    type: row.type,
+    amount: row.amount,
+    currency: row.currency,
+    category: row.category,
+    counterparty_name: row.counterparty_name,
+    description: row.description,
+    source: row.source,
+    status: row.status,
+    transaction_date: row.transaction_date,
+    metadata: row.metadata,
+  };
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value ?? null);
+}
+
+function hasTransactionChanged(
+  existing: ExistingTransactionByExternalId,
+  next: TransactionUpdate
+): boolean {
+  return (
+    existing.type !== next.type ||
+    Number(existing.amount) !== Number(next.amount) ||
+    existing.currency !== next.currency ||
+    existing.category !== next.category ||
+    existing.counterparty_name !== next.counterparty_name ||
+    existing.description !== next.description ||
+    existing.source !== next.source ||
+    existing.status !== next.status ||
+    existing.transaction_date !== next.transaction_date ||
+    stableJson(existing.metadata) !== stableJson(next.metadata)
+  );
+}
+
 export async function syncConnectorTransactions({
   supabase,
   connector,
@@ -222,6 +264,7 @@ export async function syncConnectorTransactions({
   const result: ConnectorSyncResult = {
     fetched: transactions.length,
     inserted: 0,
+    updated: 0,
     skipped: 0,
     warnings,
   };
@@ -231,14 +274,20 @@ export async function syncConnectorTransactions({
     const externalIds = rows
       .map((row) => row.external_id)
       .filter(Boolean) as string[];
-    const existingIds = externalIds.length
-      ? await getExistingExternalIds(supabase, connector.org_id, externalIds)
-      : new Set<string>();
+    const existingByExternalId = externalIds.length
+      ? await getExistingTransactionsByExternalId(
+          supabase,
+          connector.org_id,
+          externalIds
+        )
+      : new Map<string, ExistingTransactionByExternalId[]>();
 
     const newRows = rows.filter(
-      (row) => !row.external_id || !existingIds.has(row.external_id)
+      (row) => !row.external_id || !existingByExternalId.has(row.external_id)
     );
-    result.skipped = rows.length - newRows.length;
+    const existingRows = rows.filter(
+      (row) => row.external_id && existingByExternalId.has(row.external_id)
+    );
 
     if (newRows.length > 0) {
       const { error, count } = await supabase
@@ -247,6 +296,35 @@ export async function syncConnectorTransactions({
 
       if (error) throw new Error(`Insert failed: ${error.message}`);
       result.inserted = count ?? newRows.length;
+    }
+
+    for (const row of existingRows) {
+      if (!row.external_id) continue;
+
+      const existingMatches = existingByExternalId.get(row.external_id) ?? [];
+      const refreshFields = toRefreshFields(row);
+      const changedMatches = existingMatches.filter((existing) =>
+        hasTransactionChanged(existing, refreshFields)
+      );
+
+      if (changedMatches.length === 0) {
+        result.skipped++;
+        continue;
+      }
+
+      for (const existing of changedMatches) {
+        const { error } = await supabase
+          .from("transactions")
+          .update(refreshFields)
+          .eq("id", existing.id)
+          .eq("org_id", connector.org_id);
+
+        if (error) {
+          throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
+        }
+      }
+
+      result.updated++;
     }
   }
 

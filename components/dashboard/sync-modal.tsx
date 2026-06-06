@@ -33,7 +33,7 @@ function toDateInputValue(d: Date) {
 function ResultRow({ r }: { r: SyncResult }) {
   const [open, setOpen] = React.useState(false);
   const hasError = !!r.error;
-  const isNew = r.inserted > 0;
+  const hasChanges = r.inserted > 0 || r.updated > 0;
 
   return (
     <div className={cn(
@@ -64,9 +64,15 @@ function ResultRow({ r }: { r: SyncResult }) {
           </div>
           {!hasError && (
             <p className="text-xs text-white/35 mt-0.5">
-              <span className={cn("font-semibold", isNew ? "text-emerald-400" : "text-white/40")}>
+              <span className={cn("font-semibold", hasChanges ? "text-emerald-400" : "text-white/40")}>
                 {r.inserted} new
               </span>
+              {r.updated > 0 && (
+                <>
+                  {" · "}
+                  <span className="font-semibold text-violet-400">{r.updated} refreshed</span>
+                </>
+              )}
               {" · "}
               {r.fetched} fetched
               {r.skipped > 0 && ` · ${r.skipped} already existed`}
@@ -90,6 +96,7 @@ function ResultRow({ r }: { r: SyncResult }) {
           <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mt-3">
             <DetailRow label="Fetched from API" value={String(r.fetched)} />
             <DetailRow label="New inserted" value={String(r.inserted)} highlight={r.inserted > 0} />
+            <DetailRow label="Refreshed" value={String(r.updated)} highlight={r.updated > 0} />
             <DetailRow label="Already existed" value={String(r.skipped)} />
             <DetailRow
               label="Date range"
@@ -136,6 +143,7 @@ interface SyncResponse {
   results: SyncResult[];
   total_fetched: number;
   total_inserted: number;
+  total_updated: number;
   total_skipped: number;
   from: string;
   to: string;
@@ -190,15 +198,15 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
 
       setResponse(data);
       setState("done");
-      if (data.total_inserted > 0) onSyncComplete?.();
+      if (data.total_inserted > 0 || data.total_updated > 0) onSyncComplete?.();
     } catch (err) {
-      setResponse({ results: [], total_fetched: 0, total_inserted: 0, total_skipped: 0, from: fromDate, to: toDate, error: err instanceof Error ? err.message : "Unknown error" });
+      setResponse({ results: [], total_fetched: 0, total_inserted: 0, total_updated: 0, total_skipped: 0, from: fromDate, to: toDate, error: err instanceof Error ? err.message : "Unknown error" });
       setState("error");
     }
   }
 
   function handleClose() {
-    if (state === "done" && response?.total_inserted && response.total_inserted > 0) {
+    if (state === "done" && response && (response.total_inserted > 0 || response.total_updated > 0)) {
       window.location.reload();
     }
     onOpenChange(false);
@@ -356,6 +364,9 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                           <span className={cn("font-semibold", response.total_inserted > 0 ? "text-emerald-400" : "text-white/40")}>
                             {response.total_inserted} new
                           </span>
+                          {response.total_updated > 0 && (
+                            <span className="font-semibold text-violet-400">{response.total_updated} refreshed</span>
+                          )}
                           {response.total_skipped > 0 && (
                             <span className="text-white/25">{response.total_skipped} skipped</span>
                           )}
@@ -397,7 +408,7 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                 )}
               </Button>
             )}
-            {state === "done" && response && response.total_inserted > 0 && (
+            {state === "done" && response && (response.total_inserted > 0 || response.total_updated > 0) && (
               <Button className="flex-1" onClick={handleClose}>
                 Reload dashboard
               </Button>
