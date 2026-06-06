@@ -294,21 +294,24 @@ export async function syncConnectorTransactions({
     );
 
     if (newRows.length > 0) {
-      // upsert with ignoreDuplicates is a safety net against concurrent syncs:
-      // the pre-insert dedup check already filters existing rows, but if two
-      // syncs overlap the same date range the second would hit the unique index
-      // (org_id, connector_id, external_id) and fail with 23505.
-      // ON CONFLICT DO NOTHING silently skips any race-condition duplicates.
       const { error, count } = await supabase
         .from("transactions")
-        .upsert(newRows, {
-          onConflict:       "org_id,connector_id,external_id",
-          ignoreDuplicates: true,
-          count:            "exact",
-        });
+        .insert(newRows, { count: "exact" });
 
-      if (error) throw new Error(`Insert failed: ${error.message}`);
-      result.inserted = count ?? newRows.length;
+      if (error) {
+        // 23505 = unique_violation: a concurrent sync beat us to it for some rows.
+        // The unique index on (org_id, connector_id, external_id) is PARTIAL
+        // (WHERE external_id IS NOT NULL), so Supabase's upsert/onConflict cannot
+        // reference it — plain insert + catching 23505 is the correct pattern.
+        // Treat as skipped; the data is already in the DB from the other sync.
+        if (error.code === "23505") {
+          result.skipped += newRows.length;
+        } else {
+          throw new Error(`Insert failed: ${error.message}`);
+        }
+      } else {
+        result.inserted = count ?? newRows.length;
+      }
     }
 
     for (const row of existingRows) {
