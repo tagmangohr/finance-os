@@ -7,7 +7,7 @@ import { getOrgId, getRevenueDetails } from "@/lib/data";
 import { RevenueChart } from "@/components/charts/revenue-chart";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { Button } from "@/components/ui/button";
-import { formatCurrency, formatDate, formatPercent, calcGrowth } from "@/lib/utils";
+import { formatCurrency, formatDate, formatPercent } from "@/lib/utils";
 import { format } from "date-fns";
 
 // ── Shared card shell ────────────────────────────────────────────────
@@ -38,19 +38,8 @@ export default async function RevenuePage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
 
-  const { revenueByMonth, customers, mrrTrend, currentSnapshot, previousSnapshot } =
+  const { revenueByMonth, customers, mrrTrend, mrr, arr, momGrowth, yoyGrowth } =
     await getRevenueDetails(orgId);
-
-  const mrr = currentSnapshot?.mrr ?? 0;
-  const arr = mrr * 12;
-  const prevMrr = previousSnapshot?.mrr ?? 0;
-  const momGrowth = prevMrr > 0 ? calcGrowth(mrr, prevMrr) : 0;
-
-  // YoY growth
-  const sortedMonths = revenueByMonth.slice().sort((a, b) => a.month.localeCompare(b.month));
-  const currentMonthRev = sortedMonths[sortedMonths.length - 1]?.amount ?? 0;
-  const yearAgoRev = sortedMonths[sortedMonths.length - 13]?.amount ?? 0;
-  const yoyGrowth = yearAgoRev > 0 ? calcGrowth(currentMonthRev, yearAgoRev) : 0;
 
   const totalRevenue = customers.reduce((s, c) => s + c.total_revenue, 0);
 

@@ -214,7 +214,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
 export async function getRevenueDetails(orgId: string) {
   const supabase = await createClient();
 
-  const [revenueResult, customersResult, snapshotsResult] = await Promise.all([
+  const [revenueResult, customersResult, revenueMetrics] = await Promise.all([
     supabase
       .from("transactions")
       .select("transaction_date, amount, counterparty_name")
@@ -231,15 +231,11 @@ export async function getRevenueDetails(orgId: string) {
       .eq("type", "customer")
       .order("total_revenue", { ascending: false })
       .limit(20),
-    supabase
-      .from("financial_snapshots")
-      .select("*")
-      .eq("org_id", orgId)
-      .order("snapshot_date", { ascending: false })
-      .limit(13),
+    // Live MRR/ARR/growth computed from transactions — no snapshot dependency
+    calculateRevenue(orgId, supabase),
   ]);
 
-  // Aggregate by month
+  // Aggregate by month for the chart
   const monthMap = new Map<string, number>();
   for (const tx of revenueResult.data ?? []) {
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
@@ -249,31 +245,33 @@ export async function getRevenueDetails(orgId: string) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, amount]) => ({ month, amount }));
 
-  // MRR trend from snapshots
-  const snapshots = snapshotsResult.data ?? [];
-  const mrrTrend = snapshots.reverse().map((s, i, arr) => {
+  // Build MRR trend from transaction revenue — no snapshot dependency.
+  // MoM change is computed between consecutive months in the dataset.
+  const mrrTrend = revenueByMonth.map((entry, i, arr) => {
     const prev = arr[i - 1];
-    const momChange = prev ? ((s.mrr - prev.mrr) / (prev.mrr || 1)) * 100 : 0;
-    return {
-      month: s.snapshot_date.slice(0, 7),
-      revenue: s.mrr,
-      momChange,
-    };
+    const momChange =
+      prev && prev.amount > 0
+        ? ((entry.amount - prev.amount) / prev.amount) * 100
+        : 0;
+    return { month: entry.month, revenue: entry.amount, momChange };
   });
 
   return {
     revenueByMonth,
-    customers: customersResult.data ?? [],
+    customers:  customersResult.data ?? [],
     mrrTrend,
-    currentSnapshot: snapshots[snapshots.length - 1] ?? null,
-    previousSnapshot: snapshots[snapshots.length - 2] ?? null,
+    mrr:        revenueMetrics.mrr,
+    arr:        revenueMetrics.arr,
+    momGrowth:  revenueMetrics.mom_growth,
+    yoyGrowth:  revenueMetrics.yoy_growth,
   };
 }
 
 export async function getCashFlowDetails(orgId: string) {
   const supabase = await createClient();
 
-  const [txResult, snapshotResult] = await Promise.all([
+  // All three queries run in parallel — no snapshot dependency.
+  const [txResult, runwayMetrics, categoryResult] = await Promise.all([
     supabase
       .from("transactions")
       .select("transaction_date, type, amount, category, counterparty_name")
@@ -281,13 +279,8 @@ export async function getCashFlowDetails(orgId: string) {
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
-    supabase
-      .from("financial_snapshots")
-      .select("*")
-      .eq("org_id", orgId)
-      .order("snapshot_date", { ascending: false })
-      .limit(1)
-      .single(),
+    // Live burn rate + cash balance computed from transactions
+    calculateRunway(orgId, supabase),
     supabase
       .from("vw_category_breakdown" as never)
       .select("*")
@@ -297,7 +290,8 @@ export async function getCashFlowDetails(orgId: string) {
   ]);
 
   const transactions = txResult.data ?? [];
-  const snapshot = snapshotResult.data;
+  const burnRate    = runwayMetrics.burn_rate;
+  const cashBalance = runwayMetrics.cash_balance;
 
   // Daily cash flow.
   // Exclude settlements (category = 'settlement') from inflows — they are Razorpay's
@@ -312,7 +306,15 @@ export async function getCashFlowDetails(orgId: string) {
     txByDate.set(date, existing);
   }
 
-  let runningBalance = snapshot?.cash_balance ?? 0;
+  // Anchor the running balance to the live cash balance.
+  // Starting balance = current balance − net of all transactions in the 90-day window,
+  // so the chart line ends at the real current balance.
+  const net90d = transactions.reduce((sum, tx) => {
+    if (tx.type === "credit" && tx.category === "settlement") return sum;
+    return tx.type === "credit" ? sum + tx.amount : sum - tx.amount;
+  }, 0);
+  let runningBalance = cashBalance - net90d;
+
   const sortedDates = Array.from(txByDate.keys()).sort();
   const cashFlowData = sortedDates.map((date) => {
     const day = txByDate.get(date)!;
@@ -334,30 +336,20 @@ export async function getCashFlowDetails(orgId: string) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, data]) => ({ month, ...data, net: data.inflow - data.outflow }));
 
-  // Forecast based on burn rate
-  const burnRate = snapshot?.burn_rate ?? 0;
-  const cashBalance = snapshot?.cash_balance ?? 0;
+  // Forecasts using live burn rate
   const forecasts = [30, 60, 90].map((days) => ({
     days,
     projectedBalance: Math.max(0, cashBalance - burnRate * (days / 30)),
   }));
 
-  // Category breakdown for cashflow page
-  const { data: catData } = await supabase
-    .from("vw_category_breakdown" as never)
-    .select("*")
-    .eq("org_id" as never, orgId)
-    .order("total_amount" as never, { ascending: false })
-    .limit(8);
-
   type CategoryRow = { category: string; total_amount: number; pct_of_total: number };
-  const categoryBreakdown = ((catData as CategoryRow[]) ?? []).map((c) => ({
+  const categoryBreakdown = ((categoryResult.data as CategoryRow[]) ?? []).map((c) => ({
     category: c.category,
-    amount: c.total_amount,
-    pct: Number(c.pct_of_total),
+    amount:   c.total_amount,
+    pct:      Number(c.pct_of_total),
   }));
 
-  return { cashFlowData, monthlyData, forecasts, snapshot, categoryBreakdown };
+  return { cashFlowData, monthlyData, forecasts, burnRate, cashBalance, categoryBreakdown };
 }
 
 export async function getCollectionsData(orgId: string) {

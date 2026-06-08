@@ -34,10 +34,8 @@ export default async function CashFlowPage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
 
-  const { cashFlowData, monthlyData, forecasts, snapshot, categoryBreakdown } =
+  const { cashFlowData, monthlyData, forecasts, burnRate, categoryBreakdown } =
     await getCashFlowDetails(orgId);
-
-  const burnRate = snapshot?.burn_rate ?? 0;
 
   return (
     <div className="space-y-3 max-w-[1400px]">

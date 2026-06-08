@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic';
 
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { generateSyncToken } from "@/lib/api/sync-token";
@@ -51,12 +52,14 @@ export default async function ConnectorsPage() {
 
   return (
     <ConnectorsClient orgId={org.id} connectors={connectors ?? []} syncTokens={syncTokens}>
-      <DriveConnectors
-        orgId={org.id}
-        initialConnections={
-          safeDriveConnections as Parameters<typeof DriveConnectors>[0]["initialConnections"]
-        }
-      />
+      <Suspense fallback={null}>
+        <DriveConnectors
+          orgId={org.id}
+          initialConnections={
+            safeDriveConnections as Parameters<typeof DriveConnectors>[0]["initialConnections"]
+          }
+        />
+      </Suspense>
     </ConnectorsClient>
   );
 }

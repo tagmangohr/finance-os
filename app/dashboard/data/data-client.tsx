@@ -358,9 +358,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <SummaryCard
             label="Payments"
-            count={summary.groups["razorpay"]?.count ?? summary.groups["stripe"]?.count ?? (
-              (summary.groups["razorpay"]?.count ?? 0) + (summary.groups["stripe"]?.count ?? 0)
-            )}
+            count={(summary.groups["razorpay"]?.count ?? 0) + (summary.groups["stripe"]?.count ?? 0)}
             amount={(summary.groups["razorpay"]?.amount ?? 0) + (summary.groups["stripe"]?.amount ?? 0)}
             colour="text-emerald-400"
           />
