@@ -41,6 +41,7 @@ export async function calculateRunway(
         .select('amount')
         .eq('org_id', orgId)
         .eq('type', 'credit')
+        .not('category', 'eq', 'settlement')   // exclude settlement transfers
         .in('status', POSTED_TRANSACTION_STATUSES),
       supabase
         .from('transactions')

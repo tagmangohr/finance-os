@@ -32,10 +32,11 @@ export async function calculateCashFlow(
   ninetyDaysAgo.setDate(today.getDate() - 90);
   const fmt = (d: Date) => d.toISOString().split('T')[0];
 
-  // Fetch all transactions from last 90 days
+  // Fetch all transactions from last 90 days.
+  // category is fetched so we can exclude settlement transfers from inflows.
   const { data: transactions } = await supabase
     .from('transactions')
-    .select('amount, type, transaction_date')
+    .select('amount, type, category, transaction_date')
     .eq('org_id', orgId)
     .in('status', POSTED_TRANSACTION_STATUSES)
     .gte('transaction_date', fmt(ninetyDaysAgo))
@@ -43,10 +44,13 @@ export async function calculateCashFlow(
 
   const txns = transactions ?? [];
 
-  // Build day-by-day map
+  // Build day-by-day map.
+  // Exclude settlements (category = 'settlement') from inflows — they are the
+  // gateway's delayed bank transfer of already-collected payments, not new money.
   const dayMap = new Map<string, { inflow: number; outflow: number }>();
 
   for (const t of txns) {
+    if (t.type === 'credit' && t.category === 'settlement') continue;
     const dateStr = t.transaction_date;
     const existing = dayMap.get(dateStr) ?? { inflow: 0, outflow: 0 };
     if (t.type === 'credit') {

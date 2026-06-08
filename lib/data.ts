@@ -97,12 +97,13 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .select("transaction_date, amount")
       .eq("org_id", orgId)
       .eq("type", "credit")
+      .not("category", "eq", "settlement")   // exclude settlement transfers — already counted as payments
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
     supabase
       .from("transactions")
-      .select("transaction_date, type, amount")
+      .select("transaction_date, type, amount, category")
       .eq("org_id", orgId)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .in("status", POSTED_TRANSACTION_STATUSES)
@@ -119,9 +120,13 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
   const snapshot = snapshots[0] ?? null;
   const previousSnapshot = snapshots[1] ?? null;
 
-  // Build cash flow data from transactions
+  // Build cash flow data from transactions.
+  // Settlements (category = 'settlement') are Razorpay's delayed bank transfer of
+  // already-collected payments — they must be excluded from inflows to prevent
+  // double-counting every payment once as a payment and again as a settlement.
   const txByDate = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactionsResult.data ?? []) {
+    if (tx.type === "credit" && (tx as { category?: string }).category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
     if (tx.type === "credit") existing.inflow += tx.amount;
@@ -176,6 +181,7 @@ export async function getRevenueDetails(orgId: string) {
       .select("transaction_date, amount, counterparty_name")
       .eq("org_id", orgId)
       .eq("type", "credit")
+      .not("category", "eq", "settlement")   // exclude settlement transfers
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
@@ -254,9 +260,12 @@ export async function getCashFlowDetails(orgId: string) {
   const transactions = txResult.data ?? [];
   const snapshot = snapshotResult.data;
 
-  // Daily cash flow
+  // Daily cash flow.
+  // Exclude settlements (category = 'settlement') from inflows — they are Razorpay's
+  // delayed bank transfer of already-collected payments, not new money.
   const txByDate = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
+    if (tx.type === "credit" && tx.category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
     if (tx.type === "credit") existing.inflow += tx.amount;
@@ -272,9 +281,10 @@ export async function getCashFlowDetails(orgId: string) {
     return { date, inflow: day.inflow, outflow: day.outflow, balance: runningBalance };
   });
 
-  // Monthly aggregation
+  // Monthly aggregation — same settlement exclusion rule.
   const monthMap = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
+    if (tx.type === "credit" && tx.category === "settlement") continue;
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
     const existing = monthMap.get(m) ?? { inflow: 0, outflow: 0 };
     if (tx.type === "credit") existing.inflow += tx.amount;
