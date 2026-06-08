@@ -1,6 +1,8 @@
 import * as React from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { calculateRevenue } from "@/lib/intelligence/revenue";
+import { calculateRunway } from "@/lib/intelligence/runway";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
 import { TopBar } from "@/components/dashboard/top-bar";
 import { MobileSidebarWrapper } from "@/components/dashboard/mobile-sidebar-wrapper";
@@ -21,35 +23,34 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   if (!org) redirect("/onboarding");
 
-  // Connector status for sidebar STATUS section
-  const { data: connectors } = await supabase
-    .from("connectors")
-    .select("id, status, last_synced_at")
-    .eq("org_id", org.id);
+  // All layout queries run in parallel — connectors, entities, and live
+  // intelligence metrics are fetched simultaneously to minimise page load time.
+  const [connectorsResult, entitiesResult, revenueMetrics, runwayMetrics] =
+    await Promise.all([
+      supabase
+        .from("connectors")
+        .select("id, status, last_synced_at")
+        .eq("org_id", org.id),
+      supabase
+        .from("entities")
+        .select("outstanding_amount")
+        .eq("org_id", org.id),
+      // Computed live — no snapshot dependency
+      calculateRevenue(org.id, supabase),
+      calculateRunway(org.id, supabase),
+    ]);
 
+  const connectors     = connectorsResult.data;
   const connectorCount = connectors?.length ?? 0;
-  const liveCount = connectors?.filter((c) => c.status === "active").length ?? 0;
-  const lastSyncedAt = connectors
+  const liveCount      = connectors?.filter((c) => c.status === "active").length ?? 0;
+  const lastSyncedAt   = connectors
     ?.map((c) => c.last_synced_at)
     .filter(Boolean)
     .sort()
     .at(-1) ?? null;
 
-  // Headline numbers for ticker tape
-  const { data: snapshot } = await supabase
-    .from("financial_snapshots")
-    .select("cash_balance, mrr, burn_rate, runway_days")
-    .eq("org_id", org.id)
-    .order("snapshot_date", { ascending: false })
-    .limit(1)
-    .single();
-
-  const { data: entities } = await supabase
-    .from("entities")
-    .select("outstanding_amount")
-    .eq("org_id", org.id);
-
-  const totalOutstanding = entities?.reduce((s, e) => s + (e.outstanding_amount ?? 0), 0) ?? 0;
+  const totalOutstanding =
+    entitiesResult.data?.reduce((s, e) => s + (e.outstanding_amount ?? 0), 0) ?? 0;
 
   return (
     <div className="flex h-screen bg-background overflow-hidden relative z-[1]">
@@ -71,10 +72,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <TopBar orgId={org.id} orgName={org.name} />
         <Ticker
-          cash={snapshot?.cash_balance ?? 0}
-          mrr={snapshot?.mrr ?? 0}
-          burnRate={snapshot?.burn_rate ?? 0}
-          runwayDays={snapshot?.runway_days ?? 0}
+          cash={runwayMetrics.cash_balance}
+          mrr={revenueMetrics.mrr}
+          burnRate={runwayMetrics.burn_rate}
+          runwayDays={runwayMetrics.runway_days}
           totalOutstanding={totalOutstanding}
         />
         <main className="flex-1 overflow-y-auto p-4 sm:p-5 bg-background">

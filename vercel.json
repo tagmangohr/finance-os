@@ -2,11 +2,23 @@
   "crons": [
     {
       "path": "/api/cron/sync",
-      "schedule": "0 * * * *"
+      "schedule": "0 * * * *",
+      "description": "Connector sync — runs at :00 every hour"
+    },
+    {
+      "path": "/api/cron/sync-half",
+      "schedule": "30 * * * *",
+      "description": "Connector sync — runs at :30 every hour; paired with /api/cron/sync for 30-min effective cadence"
     },
     {
       "path": "/api/cron/drive-sync",
-      "schedule": "30 * * * *"
+      "schedule": "0 * * * *",
+      "description": "Google Drive / OneDrive sync — hourly"
+    },
+    {
+      "path": "/api/cron/snapshot",
+      "schedule": "0 2 * * *",
+      "description": "Financial snapshot — daily at 02:00 UTC; populates financial_snapshots for Ticker and historical trends"
     }
   ]
 }

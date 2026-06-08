@@ -1,5 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { calculateRevenue } from "@/lib/intelligence/revenue";
+import { calculateRunway } from "@/lib/intelligence/runway";
+import { calculateBurnRate } from "@/lib/intelligence/burn-rate";
 import type {
   FinancialSnapshot,
   IntelligenceAlert,
@@ -15,6 +18,18 @@ export interface DashboardSummary {
   revenueByMonth: { month: string; amount: number }[];
   cashFlowData: { date: string; inflow: number; outflow: number; balance: number }[];
   categoryBreakdown: { category: string; amount: number; pct: number }[];
+  /** Computed live from transactions — never stale, no snapshot dependency. */
+  mrr: number;
+  arr: number;
+  burnRate: number;
+  cashBalance: number;
+  runwayDays: number;
+  /** MoM revenue growth % */
+  mrrGrowth: number;
+  /** MoM burn change % */
+  burnChange: number;
+  /** True when the org has any synced transaction data */
+  hasData: boolean;
 }
 
 export async function getOrgId(): Promise<string | null> {
@@ -58,6 +73,14 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       revenueByMonth: [],
       cashFlowData: [],
       categoryBreakdown: [],
+      mrr: 0,
+      arr: 0,
+      burnRate: 0,
+      cashBalance: 0,
+      runwayDays: 0,
+      mrrGrowth: 0,
+      burnChange: 0,
+      hasData: false,
     };
   }
 
@@ -70,6 +93,9 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     revenueResult,
     transactionsResult,
     categoryResult,
+    revenueMetrics,
+    runwayMetrics,
+    burnRateMetrics,
   ] = await Promise.all([
     supabase
       .from("financial_snapshots")
@@ -97,7 +123,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .select("transaction_date, amount")
       .eq("org_id", orgId)
       .eq("type", "credit")
-      .not("category", "eq", "settlement")   // exclude settlement transfers — already counted as payments
+      .not("category", "eq", "settlement")   // exclude settlement transfers
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .order("transaction_date", { ascending: true }),
@@ -114,6 +140,10 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .eq("org_id" as never, orgId)
       .order("total_amount" as never, { ascending: false })
       .limit(8),
+    // Live intelligence — computed from transactions, never depends on snapshots
+    calculateRevenue(orgId, supabase),
+    calculateRunway(orgId, supabase),
+    calculateBurnRate(orgId, supabase),
   ]);
 
   const snapshots = snapshotResult.data ?? [];
@@ -164,11 +194,20 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
   return {
     snapshot,
     previousSnapshot,
-    alerts: alertsResult.data ?? [],
-    topDebtors: debtorsResult.data ?? [],
+    alerts:            alertsResult.data ?? [],
+    topDebtors:        debtorsResult.data ?? [],
     revenueByMonth,
     cashFlowData,
     categoryBreakdown,
+    // Live computed metrics — replace stale snapshot values on War Room
+    mrr:        revenueMetrics.mrr,
+    arr:        revenueMetrics.arr,
+    burnRate:   runwayMetrics.burn_rate,
+    cashBalance: runwayMetrics.cash_balance,
+    runwayDays: runwayMetrics.runway_days,
+    mrrGrowth:  revenueMetrics.mom_growth,
+    burnChange:  burnRateMetrics.change_pct,
+    hasData:    revenueMetrics.mrr > 0 || runwayMetrics.cash_balance > 0 || revenueByMonth.length > 0,
   };
 }
 

@@ -109,19 +109,13 @@ export default async function DashboardPage() {
   if (!orgId) redirect("/auth/login");
 
   const summary = await getFinancialSummary();
-  const { snapshot, previousSnapshot, alerts, topDebtors, revenueByMonth, cashFlowData, categoryBreakdown } = summary;
+  const {
+    alerts, topDebtors, revenueByMonth, cashFlowData, categoryBreakdown,
+    mrr, arr: _arr, burnRate, cashBalance, runwayDays,
+    mrrGrowth, burnChange, hasData,
+  } = summary;
 
-  const runwayDays = snapshot?.runway_days ?? 0;
-  const mrr = snapshot?.mrr ?? 0;
-  const burnRate = snapshot?.burn_rate ?? 0;
-  const cashBalance = snapshot?.cash_balance ?? 0;
-
-  const prevMrr = previousSnapshot?.mrr ?? 0;
-  const prevBurn = previousSnapshot?.burn_rate ?? 0;
-  const mrrGrowth = prevMrr > 0 ? calcGrowth(mrr, prevMrr) : 0;
-  const burnChange = prevBurn > 0 ? calcGrowth(burnRate, prevBurn) : 0;
-
-  const hasConnectors = snapshot !== null;
+  const hasConnectors = hasData;
 
   // Sparkline data
   const mrrSparkline = revenueByMonth.slice(-8).map((r) => r.amount);
@@ -165,7 +159,7 @@ export default async function DashboardPage() {
           <MetricCard
             title="Cash Balance"
             value={formatCurrency(cashBalance, "INR", true)}
-            subtitle={snapshot ? `Updated ${formatDate(snapshot.snapshot_date)}` : "No data"}
+            subtitle={hasData ? "Computed from transactions" : "No data"}
             severity={
               cashBalance < burnRate * 3 ? "critical"
               : cashBalance < burnRate * 6 ? "warning"
@@ -185,7 +179,7 @@ export default async function DashboardPage() {
           value={formatCurrency(mrr, "INR", true)}
           trend={mrrGrowth !== 0 ? mrrGrowth : undefined}
           trendLabel="MoM"
-          subtitle={prevMrr === 0 ? "No prior period" : undefined}
+          subtitle={mrrGrowth === 0 ? "No prior period" : undefined}
           severity={mrr > 0 ? "good" : "neutral"}
           sparklineData={mrrSparkline.length >= 2 ? mrrSparkline : undefined}
           sparklineColor="#1db884"
@@ -195,7 +189,7 @@ export default async function DashboardPage() {
           value={formatCurrency(burnRate, "INR", true) + "/mo"}
           trend={burnChange !== 0 ? burnChange : undefined}
           trendLabel="MoM"
-          subtitle={prevBurn === 0 ? "No prior period" : undefined}
+          subtitle={burnChange === 0 ? "No prior period" : undefined}
           severity={burnChange > 40 ? "critical" : burnChange > 20 ? "warning" : "neutral"}
         />
         <MetricCard
