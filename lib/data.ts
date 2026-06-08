@@ -306,14 +306,12 @@ export async function getCashFlowDetails(orgId: string) {
     txByDate.set(date, existing);
   }
 
-  // Anchor the running balance to the live cash balance.
-  // Starting balance = current balance − net of all transactions in the 90-day window,
-  // so the chart line ends at the real current balance.
-  const net90d = transactions.reduce((sum, tx) => {
-    if (tx.type === "credit" && tx.category === "settlement") return sum;
-    return tx.type === "credit" ? sum + tx.amount : sum - tx.amount;
-  }, 0);
-  let runningBalance = cashBalance - net90d;
+  // Running balance starts at 0 and accumulates the net daily cash flow.
+  // An accurate absolute balance requires a connected bank account; anchoring
+  // to the Razorpay-derived cash figure would distort the chart (total
+  // all-time settlements ≠ current bank balance).  Starting at 0 shows the
+  // relative cash-flow trend honestly.
+  let runningBalance = 0;
 
   const sortedDates = Array.from(txByDate.keys()).sort();
   const cashFlowData = sortedDates.map((date) => {
@@ -336,10 +334,16 @@ export async function getCashFlowDetails(orgId: string) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, data]) => ({ month, ...data, net: data.inflow - data.outflow }));
 
-  // Forecasts using live burn rate
+  // Forecasts: project average monthly net (inflow − outflow) forward.
+  // Average over the months we actually have data for — avoids distortion
+  // from months with partial data at the edges of the 90-day window.
+  // projectedBalance is signed: positive = net inflow, negative = net outflow.
+  const avgMonthlyNet = monthlyData.length > 0
+    ? monthlyData.reduce((sum, m) => sum + m.net, 0) / monthlyData.length
+    : 0;
   const forecasts = [30, 60, 90].map((days) => ({
     days,
-    projectedBalance: Math.max(0, cashBalance - burnRate * (days / 30)),
+    projectedBalance: Math.round(avgMonthlyNet * (days / 30)),
   }));
 
   type CategoryRow = { category: string; total_amount: number; pct_of_total: number };

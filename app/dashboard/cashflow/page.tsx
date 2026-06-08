@@ -88,15 +88,15 @@ export default async function CashFlowPage() {
 
       {/* ── 3 forecast cards ─────────────────────────────────────────── */}
       <div>
-        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-white/20 mb-2 px-0.5">Projected Balance</p>
+        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-white/20 mb-2 px-0.5">Projected Net Cash Flow</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 animate-enter-delay-1">
           {forecasts.map(({ days, projectedBalance }) => (
             <MetricCard
               key={days}
-              title={`${days}-Day Forecast`}
+              title={`${days}-Day Projection`}
               value={formatCurrency(projectedBalance, "INR", true)}
-              subtitle={burnRate > 0 ? `At ${formatCurrency(burnRate, "INR", true)}/mo burn` : undefined}
-              severity={runwaySeverity(projectedBalance / (burnRate / 30 || 1))}
+              subtitle="Based on avg monthly net"
+              severity={projectedBalance > 0 ? "good" : projectedBalance < 0 ? "critical" : "neutral"}
             />
           ))}
         </div>

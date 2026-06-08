@@ -12,12 +12,15 @@ const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "ease
  * /api/cron/sync-half (runs at :30).  Together they achieve a
  * 30-minute effective sync cadence within Vercel Pro's hourly-per-job limit.
  *
- * Syncs the last 30 days on every run so late-arriving transactions,
+ * Syncs the last 90 days on every run so late-arriving transactions,
  * status updates (e.g. captured → refunded), and any missed windows are
  * always reconciled. Upserts are idempotent on external_id so re-fetching
  * already-stored rows is safe and cheap.
+ *
+ * 90-day window (vs 30) ensures the monthly table always shows the last
+ * 3 complete months and eliminates gaps when the sync cadence changes.
  */
-const LOOKBACK_DAYS = 30;
+const LOOKBACK_DAYS = 90;
 
 export async function runConnectorSync(req: NextRequest): Promise<NextResponse> {
   const authHeader = req.headers.get("authorization");

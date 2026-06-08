@@ -34,14 +34,31 @@ export async function calculateRunway(
   if (snapshotResult.data?.cash_balance != null) {
     cashBalance = Number(snapshotResult.data.cash_balance);
   } else {
-    // Fall back: compute from all-time transactions
-    const [allCredits, allDebits] = await Promise.all([
+    // Fall back: compute from all-time transactions.
+    //
+    // For settlement-based connectors (Razorpay): the gateway deducts fees,
+    // refunds, and disputes before each settlement transfer.  The settlement
+    // credit therefore represents the *actual* net amount deposited into the
+    // bank account — the correct cash-balance proxy.  Using payment credits
+    // minus all debits collapses to ≈ 0 because payout debits ≈ settlement
+    // credits (the gateway sweeps nearly everything to the bank).
+    //
+    // For charge-based connectors (Stripe, CSV): there are no settlement rows,
+    // so fall back to gross credits − all debits.
+    const [settlementsResult, creditsResult, allDebitsResult] = await Promise.all([
       supabase
         .from('transactions')
         .select('amount')
         .eq('org_id', orgId)
         .eq('type', 'credit')
-        .not('category', 'eq', 'settlement')   // exclude settlement transfers
+        .eq('category', 'settlement')
+        .in('status', POSTED_TRANSACTION_STATUSES),
+      supabase
+        .from('transactions')
+        .select('amount')
+        .eq('org_id', orgId)
+        .eq('type', 'credit')
+        .not('category', 'eq', 'settlement')
         .in('status', POSTED_TRANSACTION_STATUSES),
       supabase
         .from('transactions')
@@ -51,15 +68,24 @@ export async function calculateRunway(
         .in('status', POSTED_TRANSACTION_STATUSES),
     ]);
 
-    const totalCredits = (allCredits.data ?? []).reduce(
+    const totalSettlements = (settlementsResult.data ?? []).reduce(
       (sum, t) => sum + Number(t.amount),
       0
     );
-    const totalDebits = (allDebits.data ?? []).reduce(
+    const totalCredits = (creditsResult.data ?? []).reduce(
       (sum, t) => sum + Number(t.amount),
       0
     );
-    cashBalance = Math.max(0, totalCredits - totalDebits);
+    const totalDebits = (allDebitsResult.data ?? []).reduce(
+      (sum, t) => sum + Number(t.amount),
+      0
+    );
+
+    // Settlement-based (Razorpay): total settled amount is the cash proxy.
+    // Charge-based (Stripe, CSV): gross payments minus all outflows.
+    cashBalance = totalSettlements > 0
+      ? Math.max(0, totalSettlements)
+      : Math.max(0, totalCredits - totalDebits);
   }
 
   // Compute average monthly burn from last 90 days of debits
