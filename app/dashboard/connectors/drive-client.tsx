@@ -17,7 +17,7 @@ import {
   Link,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn, formatDate } from "@/lib/utils";
 import type { DriveColumnMapping, DriveFolderWithFiles, DriveFile, MAPPING_TARGET_OPTIONS } from "@/lib/drive/types";
@@ -909,24 +909,47 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function DriveConnectors({ orgId, initialConnections }: DriveClientProps) {
-  const router = useRouter();
+  const router     = useRouter();
+  const searchParams = useSearchParams();
   const [connections, setConnections] = React.useState<DriveConnectionData[]>(initialConnections);
 
-  // Detect OAuth redirect back and show toast
+  // Keep local state in sync if the server re-renders with updated initialConnections
+  // (e.g. after router.refresh() re-fetches the server component).
   React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sp = new URLSearchParams(window.location.search);
-    const connected = sp.get("drive_connected");
-    const error     = sp.get("drive_error");
+    setConnections(initialConnections);
+  }, [initialConnections]);
+
+  // Detect OAuth redirect back — fetch fresh connections so the card shows
+  // active immediately without depending on router cache state.
+  React.useEffect(() => {
+    const connected = searchParams.get("drive_connected");
+    const error     = searchParams.get("drive_error");
+
+    if (!connected && !error) return;
+
+    // Strip query params immediately so a browser refresh won't re-trigger
+    router.replace("/dashboard/connectors");
 
     if (connected) {
       const name = connected === "google_drive" ? "Google Drive" : "OneDrive";
-      toast.success(`${name} connected successfully`);
-      // Remove query params cleanly
-      router.replace("/dashboard/connectors");
+      // Fetch fresh connection data directly — this bypasses any router cache
+      // and guarantees the card shows the real DB state.
+      fetch(`/api/drive/connections?org_id=${orgId}`)
+        .then((r) => r.json())
+        .then((data: DriveConnectionData[]) => {
+          setConnections(data);
+          toast.success(`${name} connected successfully`);
+        })
+        .catch(() => {
+          // Fallback: force a full server component re-fetch
+          router.refresh();
+          toast.success(`${name} connected — refreshing…`);
+        });
     } else if (error) {
-      toast.error(`Drive connection failed: ${decodeURIComponent(error)}`);
-      router.replace("/dashboard/connectors");
+      toast.error(`Drive connection failed: ${decodeURIComponent(error)}`, {
+        duration: 8000,
+        description: "Check your Google Cloud Console redirect URIs and env vars.",
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
