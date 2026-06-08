@@ -380,6 +380,11 @@ export async function syncConnectorTransactions({
       }
     }
 
+    // Build all update tasks first, then run them in parallel.
+    // Sequential updates (the old approach) cost N × ~100 ms per changed row;
+    // parallel runs them all in ~100 ms regardless of N.
+    const updateTasks: Array<Promise<void>> = [];
+
     for (const row of existingRows) {
       if (!row.external_id) continue;
 
@@ -394,19 +399,22 @@ export async function syncConnectorTransactions({
         continue;
       }
 
-      for (const existing of changedMatches) {
-        const { error } = await supabase
-          .from("transactions")
-          .update(refreshFields)
-          .eq("id", existing.id)
-          .eq("org_id", connector.org_id);
-
-        if (error) {
-          throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
-        }
-      }
-
       result.updated++;
+      for (const existing of changedMatches) {
+        const task = async (): Promise<void> => {
+          const { error } = await supabase
+            .from("transactions")
+            .update(refreshFields)
+            .eq("id", existing.id)
+            .eq("org_id", connector.org_id);
+          if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
+        };
+        updateTasks.push(task());
+      }
+    }
+
+    if (updateTasks.length > 0) {
+      await Promise.all(updateTasks);
     }
   }
 

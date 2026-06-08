@@ -531,7 +531,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         // 30-day client chunks × 10 concurrent = 1 year in 2 batches (~6 s).
         // The server sub-chunks internally into 7-day Razorpay windows, so each
         // Vercel function stays fast (~3 s) regardless of transaction volume.
-        const CONCURRENCY = 3;
+        const CONCURRENCY = 10;
         const chunks = splitDateRange(fromDate, toDate);
         setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
         let completed = 0;
