@@ -26,7 +26,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // Fetch only the columns we need for aggregation — no pagination limit
   let query = auth.supabase
     .from("transactions")
-    .select("source, type, amount, metadata")
+    .select("source, type, amount, category, metadata")
     .eq("org_id", auth.org.id)
     .in("status", POSTED_TRANSACTION_STATUSES);
 
@@ -49,6 +49,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let totalFees = 0;
   let totalCredits = 0;
   let totalDebits = 0;
+  // Net Flow = Payments − Refunds − Fees − Disputes (real-time earned, not lagging
+  // settlement transfers).  Settlements are excluded because they are not new money
+  // — they are Razorpay's delayed bank transfer of already-collected payments.
+  let totalPayments = 0;
 
   for (const row of data ?? []) {
     const key = row.source as string;
@@ -56,10 +60,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     groups[key].count++;
     groups[key].amount += row.amount ?? 0;
 
-    if (row.type === "credit") totalCredits += row.amount ?? 0;
-    else totalDebits += row.amount ?? 0;
+    if (row.type === "credit") {
+      totalCredits += row.amount ?? 0;
+      // Exclude settlement rows — they are bank transfers of already-counted
+      // payments, not incremental revenue.
+      if (row.category !== "settlement") {
+        totalPayments += row.amount ?? 0;
+      }
+    } else {
+      totalDebits += row.amount ?? 0;
+    }
 
-    // Extract fees from metadata
+    // Extract fees from metadata (inclusive of GST)
     const meta = row.metadata as Record<string, unknown> ?? {};
     const fee = Number(meta.fee ?? meta.fees ?? 0);
     if (!isNaN(fee)) totalFees += fee;
@@ -70,7 +82,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     totalCredits,
     totalDebits,
     totalFees,
-    net: totalCredits - totalDebits,
+    // Payments − Refunds − Disputes − Fees
+    net: totalPayments - totalDebits - totalFees,
     total: (data ?? []).length,
   });
 }

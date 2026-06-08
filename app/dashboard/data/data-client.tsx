@@ -387,6 +387,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
             count={null}
             amount={summary.totalFees}
             colour="text-amber-400"
+            note="incl. GST"
           />
           <SummaryCard
             label="Net Flow"
@@ -603,12 +604,14 @@ function SummaryCard({
   amount,
   colour,
   showSign = false,
+  note,
 }: {
   label: string;
   count: number | null;
   amount: number;
   colour: string;
   showSign?: boolean;
+  note?: string;
 }) {
   const fmt = (n: number) =>
     new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(
@@ -618,9 +621,16 @@ function SummaryCard({
 
   return (
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-      <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mb-1.5">
-        {label}
-      </p>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <p className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">
+          {label}
+        </p>
+        {note && (
+          <span className="text-[9px] font-medium text-white/20 border border-white/10 rounded px-1 py-px leading-none">
+            {note}
+          </span>
+        )}
+      </div>
       {count !== null && (
         <p className="text-[11px] text-white/30 mb-0.5">
           {count.toLocaleString("en-IN")} txns
