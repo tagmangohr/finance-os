@@ -59,6 +59,8 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
     return {
       connector: connector.name,
       type:      connector.type,
+      org_id:    connector.org_id,
+      id:        connector.id,
       status:    result.status,
       inserted:  result.status === "fulfilled" ? result.value.inserted : 0,
       updated:   result.status === "fulfilled" ? result.value.updated  : 0,
@@ -71,15 +73,48 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
   const totalInserted = summary.reduce((s, r) => s + r.inserted, 0);
   const totalUpdated  = summary.reduce((s, r) => s + r.updated,  0);
 
+  // ── Alert on failure, self-heal on recovery ──────────────────────────────
+  await Promise.allSettled(
+    summary.map(async (r) => {
+      if (r.status === "rejected") {
+        // Insert a critical alert visible on the War Room Active Alerts card.
+        // data.connector_id lets us find and clear it when sync recovers.
+        await supabase.from("intelligence_alerts").insert({
+          org_id:   r.org_id,
+          type:     "anomaly",
+          severity: "critical",
+          title:    `${r.connector} sync failed`,
+          message:  r.error ?? "Unknown error during connector sync",
+          is_read:  false,
+          data:     { connector_id: r.id, subtype: "sync_failure" },
+        });
+      } else {
+        // Sync recovered — delete any unread sync_failure alerts for this connector
+        // so the War Room clears automatically without manual intervention.
+        await supabase
+          .from("intelligence_alerts")
+          .delete()
+          .eq("org_id", r.org_id)
+          .eq("type", "anomaly")
+          .eq("is_read", false)
+          .filter("data->>subtype",       "eq", "sync_failure")
+          .filter("data->>connector_id",  "eq", r.id);
+      }
+    })
+  );
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const failCount = summary.filter((r) => r.status === "rejected").length;
   console.log(
     `[cron/sync] ${new Date().toISOString()} — ${connectors.length} connectors, ` +
-    `${totalInserted} new, ${totalUpdated} refreshed`
+    `${totalInserted} new, ${totalUpdated} refreshed, ${failCount} failed`
   );
 
   return NextResponse.json({
     message: "OK",
     synced:  totalInserted,
     updated: totalUpdated,
+    failed:  failCount,
     detail:  summary,
   });
 }
