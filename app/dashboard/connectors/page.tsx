@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { generateSyncToken } from "@/lib/api/sync-token";
 import { ConnectorsClient } from "./connectors-client";
 import { DriveConnectors } from "./drive-client";
 
@@ -40,8 +41,16 @@ export default async function ConnectorsPage() {
     ({ access_token: _a, refresh_token: _r, ...rest }) => rest
   );
 
+  // Generate a short-lived HMAC token per connector.
+  // These are verified locally in the sync API route — no Supabase auth
+  // round-trip needed per chunk, eliminating the main cause of 504 timeouts.
+  const syncTokens: Record<string, string> = {};
+  for (const c of connectors ?? []) {
+    syncTokens[c.id] = generateSyncToken(c.id, org.id);
+  }
+
   return (
-    <ConnectorsClient orgId={org.id} connectors={connectors ?? []}>
+    <ConnectorsClient orgId={org.id} connectors={connectors ?? []} syncTokens={syncTokens}>
       <DriveConnectors
         orgId={org.id}
         initialConnections={

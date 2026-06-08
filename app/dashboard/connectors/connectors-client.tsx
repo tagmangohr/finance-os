@@ -268,13 +268,17 @@ function splitDateRange(from: Date, to: Date, chunkDays = CHUNK_DAYS): Array<{ f
 interface ConnectorsClientProps {
   orgId: string;
   connectors: Connector[];
+  /** Per-connector HMAC tokens generated server-side; sent with every sync request
+   *  so the API route can skip Supabase cookie auth (3 network calls) and verify
+   *  the token locally (0 network calls). */
+  syncTokens?: Record<string, string>;
   /** Optional additional section (e.g. Cloud Drive connectors) rendered below the main grid */
   children?: React.ReactNode;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClientProps) {
+export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
 
   // Modal state
@@ -542,6 +546,9 @@ export function ConnectorsClient({ orgId, connectors, children }: ConnectorsClie
                 org_id: orgId,
                 from_date: chunk.from.toISOString(),
                 to_date:   chunk.to.toISOString(),
+                // HMAC token generated server-side at page load; lets the API
+                // route skip Supabase cookie auth entirely (saves ~600 ms per call)
+                sync_token: syncTokens[connector.id],
               }),
             });
             if (!res.ok) {
