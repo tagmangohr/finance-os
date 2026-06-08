@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getGoogleAuthUrl } from "@/lib/drive/google";
-import { buildOAuthState, NONCE_COOKIE } from "@/lib/drive/oauth";
+import { NONCE_COOKIE } from "@/lib/drive/oauth";
 
 /**
  * GET /api/drive/auth/google?org_id=<orgId>
@@ -35,8 +35,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   try {
-    const { stateParam, nonce } = buildOAuthState(orgId, "google_drive");
-    const authUrl = getGoogleAuthUrl(orgId);
+    // Single call — stateParam embedded in authUrl and the nonce stored in the
+    // cookie come from the same buildOAuthState() invocation.  Using two
+    // separate calls generated different nonces and always caused csrf_invalid.
+    const { url: authUrl, stateParam, nonce } = getGoogleAuthUrl(orgId);
 
     // Return the auth URL and nonce — client sets the nonce cookie then redirects
     const res = NextResponse.json({ authUrl, stateParam });

@@ -34,58 +34,34 @@ export async function calculateRunway(
   if (snapshotResult.data?.cash_balance != null) {
     cashBalance = Number(snapshotResult.data.cash_balance);
   } else {
-    // Fall back: compute from all-time transactions.
+    // Fall back: 90-day net cash position (credits − debits over the same
+    // window used for the burn-rate query).
     //
-    // For settlement-based connectors (Razorpay): the gateway deducts fees,
-    // refunds, and disputes before each settlement transfer.  The settlement
-    // credit therefore represents the *actual* net amount deposited into the
-    // bank account — the correct cash-balance proxy.  Using payment credits
-    // minus all debits collapses to ≈ 0 because payout debits ≈ settlement
-    // credits (the gateway sweeps nearly everything to the bank).
+    // Using the same 90-day window for both sides avoids the all-time
+    // historical-debit inflation that collapsed the old formula to ≈ 0
+    // (all-time payout debits ≈ all-time settlement credits when Razorpay
+    // sweeps nearly every rupee collected into the bank account).
     //
-    // For charge-based connectors (Stripe, CSV): there are no settlement rows,
-    // so fall back to gross credits − all debits.
-    const [settlementsResult, creditsResult, allDebitsResult] = await Promise.all([
-      supabase
-        .from('transactions')
-        .select('amount')
-        .eq('org_id', orgId)
-        .eq('type', 'credit')
-        .eq('category', 'settlement')
-        .in('status', POSTED_TRANSACTION_STATUSES),
-      supabase
-        .from('transactions')
-        .select('amount')
-        .eq('org_id', orgId)
-        .eq('type', 'credit')
-        .not('category', 'eq', 'settlement')
-        .in('status', POSTED_TRANSACTION_STATUSES),
-      supabase
-        .from('transactions')
-        .select('amount')
-        .eq('org_id', orgId)
-        .eq('type', 'debit')
-        .in('status', POSTED_TRANSACTION_STATUSES),
-    ]);
+    // debitsResult.data is already scoped to 90 days (fetched above).
+    // Settlements are excluded from credits — they double-count payments.
+    const creditsResult = await supabase
+      .from('transactions')
+      .select('amount')
+      .eq('org_id', orgId)
+      .eq('type', 'credit')
+      .not('category', 'eq', 'settlement')
+      .in('status', POSTED_TRANSACTION_STATUSES)
+      .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0]);
 
-    const totalSettlements = (settlementsResult.data ?? []).reduce(
-      (sum, t) => sum + Number(t.amount),
-      0
-    );
     const totalCredits = (creditsResult.data ?? []).reduce(
       (sum, t) => sum + Number(t.amount),
       0
     );
-    const totalDebits = (allDebitsResult.data ?? []).reduce(
+    const totalDebits = (debitsResult.data ?? []).reduce(
       (sum, t) => sum + Number(t.amount),
       0
     );
-
-    // Settlement-based (Razorpay): total settled amount is the cash proxy.
-    // Charge-based (Stripe, CSV): gross payments minus all outflows.
-    cashBalance = totalSettlements > 0
-      ? Math.max(0, totalSettlements)
-      : Math.max(0, totalCredits - totalDebits);
+    cashBalance = Math.max(0, totalCredits - totalDebits);
   }
 
   // Compute average monthly burn from last 90 days of debits

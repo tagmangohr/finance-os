@@ -35,9 +35,23 @@ function getRedirectUri(): string {
 
 // ─── Auth URL ─────────────────────────────────────────────────────────────────
 
-export function getGoogleAuthUrl(orgId: string): string {
+/**
+ * Returns the Google OAuth redirect URL together with the stateParam and nonce
+ * generated for this request.  The caller MUST set a cookie with the nonce
+ * before redirecting to `url` — this is the CSRF token the callback verifies.
+ *
+ * Returning all three values from a single call guarantees that the stateParam
+ * embedded in `url` and the nonce stored in the cookie are always from the
+ * same buildOAuthState() invocation (previously they were separate calls that
+ * produced mismatched nonces, causing every callback to fail with csrf_invalid).
+ */
+export function getGoogleAuthUrl(orgId: string): {
+  url: string;
+  stateParam: string;
+  nonce: string;
+} {
   const { clientId } = getCredentials();
-  const { stateParam } = buildOAuthState(orgId, "google_drive");
+  const { stateParam, nonce } = buildOAuthState(orgId, "google_drive");
 
   const params = new URLSearchParams({
     client_id:    clientId,
@@ -49,7 +63,7 @@ export function getGoogleAuthUrl(orgId: string): string {
     state:        stateParam,
   });
 
-  return `${GOOGLE_AUTH_BASE}?${params.toString()}`;
+  return { url: `${GOOGLE_AUTH_BASE}?${params.toString()}`, stateParam, nonce };
 }
 
 // ─── Token exchange ───────────────────────────────────────────────────────────
