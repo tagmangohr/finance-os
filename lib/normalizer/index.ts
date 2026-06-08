@@ -186,7 +186,13 @@ export function parseDateString(raw: string): string {
 }
 
 function unixToDateString(ts: number): string {
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+  // Use IST (Asia/Kolkata, UTC+5:30) so transaction dates match what Razorpay /
+  // Stripe show in their dashboards.  toISOString() always returns UTC, which
+  // shifts midnight–05:30 IST transactions to the previous calendar date.
+  // en-CA locale produces the YYYY-MM-DD format required by the DB date column.
+  return new Date(ts * 1000).toLocaleDateString("en-CA", {
+    timeZone: "Asia/Kolkata",
+  });
 }
 
 // ─── Razorpay normalizers ─────────────────────────────────────────────────────
