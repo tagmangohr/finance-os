@@ -2,6 +2,24 @@
 
 export type DriveProvider = "google_drive" | "onedrive";
 
+// ─── Folder type ──────────────────────────────────────────────────────────────
+// Labels a folder so the normaliser can infer the correct transaction type
+// when the file only has a single unsigned amount column.
+
+export type DriveFolderType = "sales" | "expenses" | "bank_statements" | "general";
+
+export const FOLDER_TYPE_OPTIONS: {
+  value:       DriveFolderType;
+  label:       string;
+  description: string;
+  color:       string;
+}[] = [
+  { value: "general",         label: "General",         description: "Auto-detect from columns",       color: "#7c52f0" },
+  { value: "sales",           label: "Sales / Revenue", description: "Payments received, invoices",    color: "#1db884" },
+  { value: "expenses",        label: "Expenses",        description: "Vendor payments, bills, costs",  color: "#e83a3a" },
+  { value: "bank_statements", label: "Bank Statements", description: "Account/bank statement exports", color: "#f59116" },
+];
+
 // ─── Column mapping ───────────────────────────────────────────────────────────
 // Stored as JSONB in drive_files.column_mapping.
 // Each field is the *source column name* from the spreadsheet header row,
@@ -74,6 +92,7 @@ export type DriveFolder = {
   provider_folder_id: string;
   folder_name: string;
   folder_url: string;
+  folder_type: DriveFolderType;
   last_scan_at: string | null;
   created_at: string;
 };

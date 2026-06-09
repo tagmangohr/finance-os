@@ -156,18 +156,34 @@ export function parseGoogleFolderUrl(url: string): string | null {
   return match?.[1] ?? null;
 }
 
-// ─── List files in a folder ───────────────────────────────────────────────────
+// ─── List files in a folder (recursive) ──────────────────────────────────────
 
-/** Returns all CSV / Excel / Google Sheets files in the given Drive folder.
- *  Handles pagination automatically (max 1 000 files per folder as a safety cap). */
-export async function listGoogleFolderFiles(
+const MAX_FILES = 1000;
+const MAX_DEPTH = 3; // scan up to 3 levels deep (e.g. Sales/ → 2025/ → Q1/)
+
+type RawDriveItem = {
+  id: string;
+  name: string;
+  mimeType: string;
+  md5Checksum?: string;
+  modifiedTime?: string;
+};
+
+async function listFolderAtDepth(
   accessToken: string,
-  folderId: string
-): Promise<DriveFileInfo[]> {
-  const mimeQuery = SUPPORTED_MIME_TYPES.map((m) => `mimeType='${m}'`).join(" or ");
-  const q = encodeURIComponent(`'${folderId}' in parents and (${mimeQuery}) and trashed=false`);
+  folderId: string,
+  depth: number,
+  accumulated: DriveFileInfo[]
+): Promise<void> {
+  if (depth > MAX_DEPTH || accumulated.length >= MAX_FILES) return;
+
+  // Include both supported file types AND subfolders in one query
+  const fileMimeQuery = SUPPORTED_MIME_TYPES.map((m) => `mimeType='${m}'`).join(" or ");
+  const q = encodeURIComponent(
+    `'${folderId}' in parents and (${fileMimeQuery} or mimeType='application/vnd.google-apps.folder') and trashed=false`
+  );
   const fields = "files(id,name,mimeType,md5Checksum,modifiedTime),nextPageToken";
-  const results: DriveFileInfo[] = [];
+  const subfolderIds: string[] = [];
   let pageToken: string | undefined;
 
   do {
@@ -185,29 +201,43 @@ export async function listGoogleFolderFiles(
     }
 
     const data = await res.json() as {
-      files: Array<{
-        id: string;
-        name: string;
-        mimeType: string;
-        md5Checksum?: string;
-        modifiedTime?: string;
-      }>;
+      files: RawDriveItem[];
       nextPageToken?: string;
     };
 
     for (const f of data.files ?? []) {
-      results.push({
-        id:         f.id,
-        name:       f.name,
-        mimeType:   f.mimeType,
-        etag:       f.md5Checksum ?? null,
-        modifiedAt: f.modifiedTime ?? null,
-      });
+      if (f.mimeType === "application/vnd.google-apps.folder") {
+        subfolderIds.push(f.id);
+      } else if (accumulated.length < MAX_FILES) {
+        accumulated.push({
+          id:         f.id,
+          name:       f.name,
+          mimeType:   f.mimeType,
+          etag:       f.md5Checksum ?? null,
+          modifiedAt: f.modifiedTime ?? null,
+        });
+      }
     }
 
     pageToken = data.nextPageToken;
-  } while (pageToken && results.length < 1000);
+  } while (pageToken && accumulated.length < MAX_FILES);
 
+  // Recurse into subfolders sequentially (avoid parallel bursts against the API)
+  for (const subId of subfolderIds) {
+    if (accumulated.length >= MAX_FILES) break;
+    await listFolderAtDepth(accessToken, subId, depth + 1, accumulated);
+  }
+}
+
+/** Returns all CSV / Excel / Google Sheets files in the given Drive folder,
+ *  scanning up to 3 levels of subfolders.  Handles pagination automatically
+ *  (hard cap: 1 000 files total). */
+export async function listGoogleFolderFiles(
+  accessToken: string,
+  folderId: string
+): Promise<DriveFileInfo[]> {
+  const results: DriveFileInfo[] = [];
+  await listFolderAtDepth(accessToken, folderId, 0, results);
   return results;
 }
 

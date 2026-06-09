@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { parse, isValid } from "date-fns";
-import type { DriveColumnMapping } from "./types";
+import type { DriveColumnMapping, DriveFolderType } from "./types";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 
 // ─── Date parsing ─────────────────────────────────────────────────────────────
@@ -97,12 +97,23 @@ function externalId(
 // ─── Main normalizer ──────────────────────────────────────────────────────────
 
 /** Transforms raw spreadsheet rows into NormalizedTransaction[], skipping
- *  rows that are missing required fields (date + amount). */
+ *  rows that are missing required fields (date + amount).
+ *
+ *  `folderType` is used when the file has only a single unsigned amount column
+ *  and no type/DR-CR column — in that case the folder label tells us which
+ *  direction to assign:
+ *  - "expenses"  → every row is a debit
+ *  - "sales"     → every row is a credit
+ *  - everything else → positive = credit, negative = debit (existing logic)
+ *
+ *  It also pre-fills the `category` field so expense rows appear in the
+ *  expense breakdown without requiring a manual category mapping. */
 export function normalizeDriverRows(
   rows: Record<string, string>[],
   mapping: DriveColumnMapping,
   fileId: string,
-  defaultCurrency = "INR"
+  defaultCurrency = "INR",
+  folderType: DriveFolderType = "general"
 ): NormalizedTransaction[] {
   const results: NormalizedTransaction[] = [];
 
@@ -151,13 +162,30 @@ export function normalizeDriverRows(
           amount = raw;
         }
       } else {
-        // Signed amount — positive = credit
-        type   = raw >= 0 ? "credit" : "debit";
-        amount = Math.abs(raw);
+        // No explicit type column — use folder type hint, then fall back to sign
+        if (folderType === "expenses") {
+          // Expense folders: all rows are outflows regardless of sign
+          type   = "debit";
+          amount = Math.abs(raw);
+        } else if (folderType === "sales") {
+          // Sales folders: all rows are inflows regardless of sign
+          type   = "credit";
+          amount = Math.abs(raw);
+        } else {
+          // bank_statements / general: positive = credit, negative = debit
+          type   = raw >= 0 ? "credit" : "debit";
+          amount = Math.abs(raw);
+        }
       }
     } else {
       continue; // no amount mapping at all
     }
+
+    // ── Category from folder type ────────────────────────────────────────────
+    // Pre-fill so expense rows appear in the category breakdown automatically.
+    const category: string | null =
+      folderType === "expenses" ? "expense" :
+      null;
 
     // ── Other fields ────────────────────────────────────────────────────────
     const description   = mapping.description   ? (row[mapping.description]   ?? "").trim() || null : null;
@@ -169,7 +197,7 @@ export function normalizeDriverRows(
       type,
       amount,
       currency:         currency.toUpperCase(),
-      category:         null,
+      category,
       counterparty_name: counterparty,
       description,
       source:           "drive",

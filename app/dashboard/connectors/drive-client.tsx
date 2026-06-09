@@ -20,8 +20,8 @@ import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { cn, formatDate } from "@/lib/utils";
-import type { DriveColumnMapping, DriveFolderWithFiles, DriveFile, MAPPING_TARGET_OPTIONS } from "@/lib/drive/types";
-import { MAPPING_TARGET_OPTIONS as MAPPING_OPTS, EMPTY_MAPPING } from "@/lib/drive/types";
+import type { DriveColumnMapping, DriveFolderWithFiles, DriveFile, DriveFolderType } from "@/lib/drive/types";
+import { MAPPING_TARGET_OPTIONS as MAPPING_OPTS, EMPTY_MAPPING, FOLDER_TYPE_OPTIONS } from "@/lib/drive/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -342,9 +342,10 @@ interface AddFolderDialogProps {
 }
 
 function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolderDialogProps) {
-  const [url, setUrl]       = React.useState("");
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError]   = React.useState<string | null>(null);
+  const [url, setUrl]             = React.useState("");
+  const [folderType, setFolderType] = React.useState<DriveFolderType>("general");
+  const [loading, setLoading]     = React.useState(false);
+  const [error, setError]         = React.useState<string | null>(null);
 
   const placeholder =
     provider === "google_drive"
@@ -358,7 +359,7 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
       const res = await fetch("/api/drive/folders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ connection_id: connectionId, folder_url: url.trim() }),
+        body: JSON.stringify({ connection_id: connectionId, folder_url: url.trim(), folder_type: folderType }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to add folder");
@@ -385,7 +386,7 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                 Add {provider === "google_drive" ? "Google Drive" : "OneDrive"} Folder
               </Dialog.Title>
               <p className="text-[11px] text-white/30 mt-0.5">
-                All CSV / Excel files inside this folder will be discovered.
+                CSV / Excel files in this folder and its subfolders will be discovered.
               </p>
             </div>
             <Dialog.Close asChild>
@@ -411,6 +412,44 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                   className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] text-white/75 placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-violet-500/30 transition-all"
                   style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
                 />
+              </div>
+            </div>
+
+            {/* Folder type selector */}
+            <div>
+              <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+                Folder Type
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {FOLDER_TYPE_OPTIONS.map((opt) => {
+                  const active = folderType === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setFolderType(opt.value)}
+                      className="flex flex-col items-start px-3 py-2 rounded-lg text-left transition-all"
+                      style={{
+                        background: active ? `${opt.color}14` : "rgba(255,255,255,0.025)",
+                        border: `1px solid ${active ? `${opt.color}45` : "rgba(255,255,255,0.06)"}`,
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <div
+                          className="h-1.5 w-1.5 rounded-full flex-shrink-0"
+                          style={{ background: opt.color, opacity: active ? 1 : 0.45 }}
+                        />
+                        <span
+                          className="text-[11.5px] font-semibold leading-none"
+                          style={{ color: active ? opt.color : "rgba(255,255,255,0.50)" }}
+                        >
+                          {opt.label}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-white/25 leading-snug pl-3">{opt.description}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 

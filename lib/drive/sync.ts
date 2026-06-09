@@ -4,7 +4,7 @@ import { refreshGoogleToken, downloadGoogleFile } from "./google";
 import { refreshOnedriveToken, downloadOnedriveFile } from "./onedrive";
 import { parseFileToRows, normalizeDriverRows } from "./normalizer";
 import { getExistingTransactionsByExternalId } from "@/lib/db/dedup";
-import type { DriveFile, DriveConnection, DriveColumnMapping } from "./types";
+import type { DriveFile, DriveConnection, DriveColumnMapping, DriveFolderType } from "./types";
 import type { Database } from "@/lib/supabase/types";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
@@ -74,6 +74,14 @@ export async function syncDriveFile({
   const mapping: DriveColumnMapping = file.column_mapping;
   const accessToken = await getFreshAccessToken(supabase, connection);
 
+  // ── Resolve folder type (for normaliser type-inference hint) ─────────────
+  const { data: folderRow } = await supabase
+    .from("drive_folders")
+    .select("folder_type")
+    .eq("id", file.folder_id)
+    .single();
+  const folderType = (folderRow?.folder_type ?? "general") as DriveFolderType;
+
   // ── Download the file ────────────────────────────────────────────────────
   const { buffer, effectiveMime } =
     connection.provider === "google_drive"
@@ -84,7 +92,7 @@ export async function syncDriveFile({
   const rows = await parseFileToRows(buffer, effectiveMime);
 
   // ── Normalise ────────────────────────────────────────────────────────────
-  const transactions = normalizeDriverRows(rows, mapping, file.provider_file_id);
+  const transactions = normalizeDriverRows(rows, mapping, file.provider_file_id, "INR", folderType);
 
   const result: DriveSyncResult = {
     fetched:  transactions.length,

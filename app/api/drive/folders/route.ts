@@ -17,12 +17,16 @@ import type { DriveConnection } from "@/lib/drive/types";
  * Returns the created folder with its files.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  let body: { connection_id?: string; folder_url?: string };
+  let body: { connection_id?: string; folder_url?: string; folder_type?: string };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { connection_id: connectionId, folder_url: folderUrl } = body;
+  const {
+    connection_id: connectionId,
+    folder_url:    folderUrl,
+    folder_type:   folderType = "general",
+  } = body;
   if (!connectionId || !folderUrl) {
     return NextResponse.json({ error: "connection_id and folder_url are required" }, { status: 400 });
   }
@@ -126,6 +130,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           provider_folder_id: providerFolderId,
           folder_name:        folderName,
           folder_url:         folderUrl,
+          folder_type:        folderType,
           last_scan_at:       new Date().toISOString(),
         },
         { onConflict: "connection_id,provider_folder_id" }
