@@ -24,11 +24,15 @@ const TIMEZONES = [
 ];
 
 function generateSlug(name: string): string {
-  return name
+  const base = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "")
-    .slice(0, 50);
+    .slice(0, 40);
+  // Append a 6-char random suffix so slugs are collision-resistant
+  // across retries, demo accounts, and previous failed attempts.
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return `${base}-${suffix}`;
 }
 
 export function OnboardingForm() {
@@ -60,28 +64,28 @@ export function OnboardingForm() {
         return;
       }
 
-      // Try base slug; on unique-constraint violation (23505) append -2, -3, …
-      const baseSlug = generateSlug(orgName);
-      let finalError: { message?: string; code?: string } | null = null;
+      // Slug already has a random suffix so collisions are extremely unlikely.
+      // We still retry once more on 23505 just to be safe.
+      const slug = generateSlug(orgName);
+      let { error: insertError } = await supabase.from("organizations").insert({
+        name:     orgName.trim(),
+        slug,
+        currency,
+        timezone,
+        owner_id: user.id,
+      });
 
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt + 1}`;
-        const { error } = await supabase.from("organizations").insert({
-          name:      orgName.trim(),
-          slug,
-          currency,
-          timezone,
-          owner_id:  user.id,
+      if (insertError && (insertError as { code?: string }).code === "23505") {
+        // Astronomically unlikely with a random suffix, but handle it
+        const retrySlug = generateSlug(orgName);
+        const { error: retryError } = await supabase.from("organizations").insert({
+          name: orgName.trim(), slug: retrySlug, currency, timezone, owner_id: user.id,
         });
-
-        finalError = error;
-        if (!error) break;
-        // Only retry on duplicate slug; surface any other error immediately
-        if ((error as { code?: string }).code !== "23505") break;
+        insertError = retryError;
       }
 
-      if (finalError) {
-        throw new Error(finalError.message ?? "Failed to create org");
+      if (insertError) {
+        throw new Error(insertError.message ?? "Failed to create org");
       }
 
       toast.success("Organisation created!");
