@@ -22,12 +22,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
   let pageAccess:   string[] | null = null;   // null = all pages
   let canManageTeam = false;
 
-  // 1. Check if this user owns an org (most common path)
+  // 1. Check if this user owns an org (most common path).
+  //    Use limit(1)+maybeSingle — .single() would throw if the user somehow
+  //    has >1 org rows (can happen if earlier INSERTs retried on slug collisions).
   const { data: ownedOrg } = await supabase
     .from("organizations")
     .select("id, name")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (ownedOrg) {
     org           = ownedOrg;

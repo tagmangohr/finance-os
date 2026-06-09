@@ -23,8 +23,9 @@ export default function LoginPage() {
       if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        router.push("/dashboard");
-        router.refresh();
+        // Full page reload so the proxy refreshes the auth token and the
+        // server-side layout can read the session from fresh cookies.
+        window.location.href = "/dashboard";
       } else {
         const { error } = await supabase.auth.signUp({
           email,
