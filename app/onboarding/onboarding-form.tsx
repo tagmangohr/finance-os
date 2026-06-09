@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { TrendingUp, ArrowRight, Loader2, Building2, Globe } from "lucide-react";
+import { createOrgAction } from "./actions";
 
 const CURRENCIES = [
   { value: "INR", label: "₹ Indian Rupee (INR)" },
@@ -23,24 +23,11 @@ const TIMEZONES = [
   { value: "Asia/Singapore", label: "Singapore (SGT, UTC+8)" },
 ];
 
-function generateSlug(name: string): string {
-  const base = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 40);
-  // Append a 6-char random suffix so slugs are collision-resistant
-  // across retries, demo accounts, and previous failed attempts.
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return `${base}-${suffix}`;
-}
-
 export function OnboardingForm() {
   const [orgName, setOrgName]   = useState("");
   const [currency, setCurrency] = useState("INR");
   const [timezone, setTimezone] = useState("Asia/Kolkata");
   const [loading, setLoading]   = useState(false);
-  const supabase = createClient();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,56 +35,23 @@ export function OnboardingForm() {
     setLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      // Guard: if user already has an org (e.g. navigated here by mistake), do a
-      // hard reload to /dashboard so the server gets fresh cookies.
-      const { data: existingOrg } = await supabase
-        .from("organizations")
-        .select("id")
-        .eq("owner_id", user.id)
-        .maybeSingle();
-
-      if (existingOrg) {
-        window.location.href = "/dashboard";
-        return;
-      }
-
-      // Slug already has a random suffix so collisions are extremely unlikely.
-      // We still retry once more on 23505 just to be safe.
-      const slug = generateSlug(orgName);
-      let { error: insertError } = await supabase.from("organizations").insert({
+      // Server Action: org is created server-side, session cookies are already
+      // set (from the server-action login), and redirect("/dashboard") inside
+      // the action is a true server-side HTTP redirect — no client nav race.
+      const result = await createOrgAction({
         name:     orgName.trim(),
-        slug,
         currency,
         timezone,
-        owner_id: user.id,
       });
 
-      if (insertError && (insertError as { code?: string }).code === "23505") {
-        // Astronomically unlikely with a random suffix, but handle it
-        const retrySlug = generateSlug(orgName);
-        const { error: retryError } = await supabase.from("organizations").insert({
-          name: orgName.trim(), slug: retrySlug, currency, timezone, owner_id: user.id,
-        });
-        insertError = retryError;
+      // createOrgAction redirects on success — we only get here on error
+      if (result?.error) {
+        toast.error(result.error);
+        setLoading(false);
       }
-
-      if (insertError) {
-        throw new Error(insertError.message ?? "Failed to create org");
-      }
-
-      toast.success("Organisation created!");
-      // Hard reload forces the proxy to refresh the auth token so the
-      // dashboard layout server component can see the new org row.
-      window.location.href = "/dashboard";
-    } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message
-        : (err as { message?: string })?.message ?? "Failed to create org";
-      toast.error(msg);
-      setLoading(false);
+    } catch {
+      // Next.js redirect() throws internally — that's expected and means success
+      // (the browser follows the redirect). Only catch genuine errors.
     }
   }
 
