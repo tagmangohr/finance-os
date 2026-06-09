@@ -1,32 +1,33 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { TrendingUp, Loader2 } from "lucide-react";
+import { signInAction } from "./actions";
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState<"login" | "signup">("login");
-  const router = useRouter();
-  const supabase = createClient();
+  const [loading, setLoading]   = useState(false);
+  const [mode, setMode]         = useState<"login" | "signup">("login");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     try {
       if (mode === "login") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) throw error;
-        // Full page reload so the proxy refreshes the auth token and the
-        // server-side layout can read the session from fresh cookies.
+        // Server Action: calls signInWithPassword server-side so the session
+        // is written via Set-Cookie headers in the action response. The browser
+        // stores those cookies before window.location.href fires, meaning the
+        // next server render has a fully-authenticated request.
+        const result = await signInAction(email, password);
+        if (result.error) throw new Error(result.error);
         window.location.href = "/dashboard";
       } else {
+        const supabase = createClient();
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -34,11 +35,11 @@ export default function LoginPage() {
         });
         if (error) throw error;
         toast.success("Check your email to confirm your account.");
+        setLoading(false);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Something went wrong";
       toast.error(message);
-    } finally {
       setLoading(false);
     }
   }
@@ -46,7 +47,6 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8">
           <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
             <TrendingUp className="w-5 h-5 text-primary-foreground" />
