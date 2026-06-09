@@ -87,6 +87,9 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
   const [mapping, setMapping]       = React.useState<DriveColumnMapping>({ ...EMPTY_MAPPING });
   const [saving, setSaving]         = React.useState(false);
   const [error, setError]           = React.useState<string | null>(null);
+  // Custom field creation state
+  const [creatingCustomFor, setCreatingCustomFor] = React.useState<string | null>(null);
+  const [customInput, setCustomInput]             = React.useState("");
 
   React.useEffect(() => {
     let cancelled = false;
@@ -109,6 +112,30 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
 
     return () => { cancelled = true; };
   }, [file.id]);
+
+  /** Commit the inline custom-field creation for `col`. */
+  const confirmCustomField = React.useCallback((col: string) => {
+    const label = customInput.trim();
+    if (!label) return;
+    setMapping((prev) => {
+      const next = { ...prev };
+      // Clear any existing standard binding for this column
+      (Object.keys(next) as (keyof DriveColumnMapping)[]).forEach((k) => {
+        if (k !== "custom_fields" && (next[k] as string | null) === col) {
+          (next as unknown as Record<string, string | null>)[k] = null;
+        }
+      });
+      // Clear any existing custom binding for this column
+      const cf = { ...(next.custom_fields ?? {}) };
+      Object.keys(cf).forEach((lbl) => { if (cf[lbl] === col) delete cf[lbl]; });
+      // Add the new custom label → source column binding
+      cf[label] = col;
+      next.custom_fields = cf;
+      return next;
+    });
+    setCreatingCustomFor(null);
+    setCustomInput("");
+  }, [customInput]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -219,37 +246,109 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
 
                   <div className="space-y-2">
                     {headers.map((col) => {
-                      // Find what this column is currently mapped to
-                      const mappedTo = Object.entries(mapping).find(([, v]) => v === col)?.[0] ?? "";
+                      // Find what this column is currently mapped to (standard or custom)
+                      const stdKey = (Object.keys(mapping) as (keyof DriveColumnMapping)[])
+                        .find((k) => k !== "custom_fields" && (mapping[k] as string | null) === col) ?? "";
+                      const customEntry = Object.entries(mapping.custom_fields ?? {})
+                        .find(([, src]) => src === col);
+                      const mappedTo = stdKey || (customEntry ? `custom:${customEntry[0]}` : "");
+
+                      // Build the options list: standard + any already-created custom labels + create
+                      const existingCustoms = Object.keys(mapping.custom_fields ?? {});
+
                       return (
                         <div key={col} className="flex items-center gap-2">
                           <span className="text-[11px] text-white/40 font-mono bg-white/[0.04] border border-white/[0.06] px-2 py-1 rounded-lg flex-shrink-0 w-40 truncate">
                             {col}
                           </span>
                           <span className="text-[11px] text-white/20 flex-shrink-0">→</span>
-                          <select
-                            value={mappedTo}
-                            onChange={(e) => {
-                              const target = e.target.value as keyof DriveColumnMapping | "";
-                              setMapping((prev) => {
-                                const next = { ...prev };
-                                // Clear any existing binding for this column
-                                for (const key of Object.keys(next) as (keyof DriveColumnMapping)[]) {
-                                  if (next[key] === col) next[key] = null;
+
+                          {/* ── Inline creation mode ── */}
+                          {creatingCustomFor === col ? (
+                            <div className="flex-1 flex items-center gap-1.5">
+                              <input
+                                autoFocus
+                                type="text"
+                                value={customInput}
+                                onChange={(e) => setCustomInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" && customInput.trim()) confirmCustomField(col);
+                                  if (e.key === "Escape") { setCreatingCustomFor(null); setCustomInput(""); }
+                                }}
+                                placeholder="e.g. GST Number, Order ID, Tier…"
+                                className="flex-1 text-[12px] rounded-lg border border-violet-500/30 bg-violet-500/[0.05] text-white/75 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/40 placeholder:text-white/20"
+                              />
+                              <button
+                                onClick={() => customInput.trim() && confirmCustomField(col)}
+                                disabled={!customInput.trim()}
+                                className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-violet-500/20 text-violet-400 hover:bg-violet-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => { setCreatingCustomFor(null); setCustomInput(""); }}
+                                className="p-1.5 rounded-lg text-white/25 hover:text-white/50 transition-colors"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            /* ── Normal dropdown ── */
+                            <select
+                              value={mappedTo}
+                              onChange={(e) => {
+                                const target = e.target.value;
+                                // Trigger inline creation for the __create__ sentinel
+                                if (target === "__create__") {
+                                  setCreatingCustomFor(col);
+                                  setCustomInput("");
+                                  return;
                                 }
-                                // Set new binding
-                                if (target) (next as Record<string, string | null>)[target] = col;
-                                return next;
-                              });
-                            }}
-                            className="flex-1 text-[12px] rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/65 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
-                          >
-                            {MAPPING_OPTS.map((opt) => (
-                              <option key={opt.value} value={opt.value} className="bg-[#0c1221]">
-                                {opt.label}
+                                setMapping((prev) => {
+                                  const next = { ...prev };
+                                  // Clear any existing standard binding for this column
+                                  (Object.keys(next) as (keyof DriveColumnMapping)[]).forEach((k) => {
+                                    if (k !== "custom_fields" && (next[k] as string | null) === col) {
+                                      (next as unknown as Record<string, string | null>)[k] = null;
+                                    }
+                                  });
+                                  // Clear any existing custom binding for this column
+                                  const cf = { ...(next.custom_fields ?? {}) };
+                                  Object.keys(cf).forEach((lbl) => { if (cf[lbl] === col) delete cf[lbl]; });
+                                  // Apply new binding
+                                  if (!target) {
+                                    // Unmap — nothing more to do
+                                  } else if (target.startsWith("custom:")) {
+                                    // Re-assign an already-created custom label to a different column
+                                    cf[target.slice(7)] = col;
+                                  } else {
+                                    (next as unknown as Record<string, string | null>)[target] = col;
+                                  }
+                                  next.custom_fields = Object.keys(cf).length > 0 ? cf : undefined;
+                                  return next;
+                                });
+                              }}
+                              className="flex-1 text-[12px] rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/65 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                            >
+                              {MAPPING_OPTS.map((opt) => (
+                                <option key={opt.value} value={opt.value} className="bg-[#0c1221]">
+                                  {opt.label}
+                                </option>
+                              ))}
+                              {existingCustoms.length > 0 && (
+                                <optgroup label="Custom Fields">
+                                  {existingCustoms.map((label) => (
+                                    <option key={`custom:${label}`} value={`custom:${label}`} className="bg-[#0c1221]">
+                                      {label}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              )}
+                              <option value="__create__" className="bg-[#0c1221]">
+                                + Create custom field…
                               </option>
-                            ))}
-                          </select>
+                            </select>
+                          )}
                         </div>
                       );
                     })}
@@ -286,10 +385,11 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
 }
 
 function MappingSummary({ mapping }: { mapping: DriveColumnMapping }) {
-  const hasDate   = !!mapping.date;
-  const hasAmount = !!(mapping.amount || mapping.debit || mapping.credit);
-  const hasSplit  = mapping.debit && mapping.credit && !mapping.amount;
-  const hasSingle = !!mapping.amount;
+  const hasDate    = !!mapping.date;
+  const hasAmount  = !!(mapping.amount || mapping.debit || mapping.credit);
+  const hasSplit   = mapping.debit && mapping.credit && !mapping.amount;
+  const hasSingle  = !!mapping.amount;
+  const customFields = Object.entries(mapping.custom_fields ?? {});
 
   return (
     <div
@@ -297,14 +397,32 @@ function MappingSummary({ mapping }: { mapping: DriveColumnMapping }) {
       style={{ background: "rgba(124,82,240,0.06)", border: "1px solid rgba(124,82,240,0.10)" }}
     >
       <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/25 mb-1">Mapping Summary</p>
-      <MappingCheck label="Date column"    ok={hasDate}   detail={mapping.date ?? "not set"} />
+      <MappingCheck label="Date column"   ok={hasDate}   detail={mapping.date ?? "not set"} />
       {hasSplit
         ? <>
             <MappingCheck label="Debit column"  ok={!!mapping.debit}  detail={mapping.debit  ?? "not set"} />
             <MappingCheck label="Credit column" ok={!!mapping.credit} detail={mapping.credit ?? "not set"} />
           </>
-        : <MappingCheck label="Amount column"  ok={hasAmount} detail={hasSingle ? mapping.amount! : "not set"} />
+        : <MappingCheck label="Amount column" ok={hasAmount} detail={hasSingle ? mapping.amount! : "not set"} />
       }
+
+      {/* Custom fields — informational, not required for validity */}
+      {customFields.length > 0 && (
+        <div className="mt-1 pt-2 border-t border-white/[0.05]">
+          <p className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/20 mb-1.5">
+            Custom Fields ({customFields.length})
+          </p>
+          {customFields.map(([label, col]) => (
+            <div key={label} className="flex items-center gap-2 py-0.5">
+              <div className="h-1.5 w-1.5 rounded-full bg-violet-400/40 flex-shrink-0" />
+              <span className="text-[11.5px] text-white/45">{label}</span>
+              <span className="text-[11px] text-white/25 font-mono ml-auto truncate max-w-[140px]">{col}</span>
+            </div>
+          ))}
+          <p className="text-[10.5px] text-white/20 mt-1">Stored in transaction metadata — queryable but not required.</p>
+        </div>
+      )}
+
       {!hasDate && (
         <p className="text-[11px] text-amber-400/80 mt-1">⚠ You must map a Date column before syncing.</p>
       )}
@@ -658,6 +776,7 @@ interface FolderSectionProps {
 function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSectionProps) {
   const [expanded, setExpanded] = React.useState(true);
   const [removing, setRemoving] = React.useState(false);
+  const [rescanning, setRescanning] = React.useState(false);
 
   const handleRemove = async () => {
     setRemoving(true);
@@ -670,6 +789,32 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
       toast.error("Failed to remove folder");
     } finally {
       setRemoving(false);
+    }
+  };
+
+  const handleRescan = async () => {
+    setRescanning(true);
+    try {
+      const res = await fetch(`/api/drive/folders/${folder.id}/rescan`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Rescan failed");
+      const total: number         = data.new_files_found  ?? 0;
+      const autoConfirmed: number = data.auto_confirmed   ?? 0;
+      const needsMapping          = total - autoConfirmed;
+      if (total === 0) {
+        toast.success("No new files found");
+      } else if (autoConfirmed > 0 && needsMapping === 0) {
+        toast.success(`${autoConfirmed} new file${autoConfirmed !== 1 ? "s" : ""} — mapping inherited automatically, will sync next run`);
+      } else if (autoConfirmed > 0) {
+        toast.success(`${total} new file${total !== 1 ? "s" : ""} — ${autoConfirmed} auto-mapped, ${needsMapping} need${needsMapping === 1 ? "s" : ""} mapping`);
+      } else {
+        toast.success(`${total} new file${total !== 1 ? "s" : ""} found — review mapping to start syncing`);
+      }
+      onFolderUpdated(data as DriveFolderWithFiles);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Rescan failed");
+    } finally {
+      setRescanning(false);
     }
   };
 
@@ -706,6 +851,14 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
+        <button
+          onClick={handleRescan}
+          disabled={rescanning}
+          title="Rescan folder for new files"
+          className="p-1.5 rounded-lg text-white/15 hover:text-violet-400 hover:bg-violet-500/[0.08] transition-all flex-shrink-0"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${rescanning ? "animate-spin" : ""}`} />
+        </button>
         <button
           onClick={handleRemove}
           disabled={removing}

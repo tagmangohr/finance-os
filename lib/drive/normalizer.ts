@@ -192,6 +192,21 @@ export function normalizeDriverRows(
     const counterparty  = mapping.counterparty  ? (row[mapping.counterparty]  ?? "").trim() || null : null;
     const currency      = (mapping.currency     ? (row[mapping.currency]      ?? "").trim() : "") || defaultCurrency;
 
+    // ── Custom fields → metadata.custom ─────────────────────────────────────
+    // User-defined fields are stored as metadata so they survive without a
+    // schema change and can be surfaced in the UI or exported later.
+    let customMeta: Record<string, string> | undefined;
+    if (mapping.custom_fields && Object.keys(mapping.custom_fields).length > 0) {
+      const built: Record<string, string> = {};
+      for (const [label, col] of Object.entries(mapping.custom_fields)) {
+        if (col && row[col] !== undefined) {
+          const val = (row[col] ?? "").trim();
+          if (val) built[label] = val;
+        }
+      }
+      if (Object.keys(built).length > 0) customMeta = built;
+    }
+
     results.push({
       external_id:      externalId(fileId, row, mapping),
       type,
@@ -206,6 +221,7 @@ export function normalizeDriverRows(
       metadata: {
         raw:            row,
         drive_file_id:  fileId,
+        ...(customMeta ? { custom: customMeta } : {}),
       },
     });
   }

@@ -44,6 +44,12 @@ export type DriveColumnMapping = {
   currency: string | null;
   /** Reference / transaction ID column — used to build a stable external_id */
   reference: string | null;
+  /**
+   * User-defined custom fields: { "My Label" → "source_column_header" }.
+   * Stored in transaction metadata.custom so they survive in the DB and
+   * can be queried / displayed without changing the transactions schema.
+   */
+  custom_fields?: Record<string, string>;
 };
 
 export const EMPTY_MAPPING: DriveColumnMapping = {

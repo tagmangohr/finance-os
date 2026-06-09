@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { isTokenExpired } from "@/lib/drive/oauth";
 import { refreshGoogleToken, listGoogleFolderFiles, getGoogleFolderName, parseGoogleFolderUrl } from "@/lib/drive/google";
 import { refreshOnedriveToken, listOnedriveFolderFiles, getOnedriveFolderName, parseOnedriveFolderUrl } from "@/lib/drive/onedrive";
+import { autoConfirmNewFiles } from "@/lib/drive/auto-confirm";
 import type { DriveConnection } from "@/lib/drive/types";
 
 /**
@@ -158,6 +159,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .upsert(fileRows, { onConflict: "folder_id,provider_file_id", ignoreDuplicates: false });
 
     if (filesErr) throw new Error(`Failed to save files: ${filesErr.message}`);
+
+    // ── Auto-confirm any files that match a previously confirmed file ───────
+    // Handles the case where a second folder is added that shares files with
+    // an already-confirmed folder in the same org, or future re-adds.
+    await autoConfirmNewFiles(supabase, folder.id);
 
     // ── Return folder + files ───────────────────────────────────────────────
     const { data: result } = await supabase

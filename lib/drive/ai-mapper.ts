@@ -70,7 +70,7 @@ export async function aiMapColumns(
     for (const [field, col] of Object.entries(raw)) {
       if (!col || !headerSet.has(col) || assigned.has(col)) continue;
       if (field in mapping) {
-        (mapping as Record<string, string | null>)[field] = col;
+        (mapping as unknown as Record<string, string | null>)[field] = col;
         assigned.add(col);
       }
     }
@@ -137,9 +137,16 @@ export async function getColumnMapping(
   const merged: DriveColumnMapping = { ...EMPTY_MAPPING };
   const usedCols = new Set<string>();
 
-  for (const key of Object.keys(EMPTY_MAPPING) as (keyof DriveColumnMapping)[]) {
-    const aiVal = aiResult[key];
-    const ruleVal = ruleResult[key];
+  // Iterate only the standard (non-custom) fields so the indexed-write type
+  // is always `string | null` and never widens to include `Record<string,string>`.
+  const STANDARD_KEYS = [
+    "date", "amount", "debit", "credit", "type",
+    "description", "counterparty", "currency", "reference",
+  ] as const;
+
+  for (const key of STANDARD_KEYS) {
+    const aiVal   = aiResult[key]   as string | null;
+    const ruleVal = ruleResult[key] as string | null;
 
     if (aiVal && !usedCols.has(aiVal)) {
       merged[key] = aiVal;
