@@ -34,33 +34,40 @@ export default async function DashboardLayout({ children }: { children: React.Re
     pageAccess    = null;      // owner sees everything
     canManageTeam = true;
   } else {
-    // 2. Check org_members — use service client so we can also detect pending invites
-    const serviceClient = await createServiceClient();
+    // 2. Check org_members — use service client so we can also detect pending invites.
+    //    Wrapped in try/catch so a missing table (migration not yet applied) doesn't
+    //    incorrectly bounce the user to /onboarding.
+    try {
+      const serviceClient = await createServiceClient();
 
-    const { data: memberRow } = await serviceClient
-      .from("org_members")
-      .select("id, org_id, role, page_access, status, organizations(id, name)")
-      .or(`user_id.eq.${user.id},invited_email.eq.${user.email ?? ""}`)
-      .not("status", "eq", "revoked")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      const { data: memberRow, error: memberErr } = await serviceClient
+        .from("org_members")
+        .select("id, org_id, role, page_access, status, organizations(id, name)")
+        .or(`user_id.eq.${user.id},invited_email.eq.${user.email ?? ""}`)
+        .not("status", "eq", "revoked")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (memberRow) {
-      // Auto-activate a pending invite
-      if (memberRow.status === "pending") {
-        await serviceClient
-          .from("org_members")
-          .update({ user_id: user.id, status: "active" })
-          .eq("id", memberRow.id);
+      // Ignore query errors (e.g. table not yet created) — treat as no membership
+      if (!memberErr && memberRow) {
+        // Auto-activate a pending invite
+        if (memberRow.status === "pending") {
+          await serviceClient
+            .from("org_members")
+            .update({ user_id: user.id, status: "active" })
+            .eq("id", memberRow.id);
+        }
+
+        const memberOrgData = memberRow.organizations as unknown as OrgRow | null;
+        if (memberOrgData) {
+          org           = memberOrgData;
+          pageAccess    = memberRow.role === "admin" ? null : (memberRow.page_access as string[]);
+          canManageTeam = memberRow.role === "admin";
+        }
       }
-
-      const memberOrgData = memberRow.organizations as unknown as OrgRow | null;
-      if (memberOrgData) {
-        org           = memberOrgData;
-        pageAccess    = memberRow.role === "admin" ? null : (memberRow.page_access as string[]);
-        canManageTeam = memberRow.role === "admin";
-      }
+    } catch {
+      // org_members table not yet created or service client unavailable — safe to ignore
     }
   }
 

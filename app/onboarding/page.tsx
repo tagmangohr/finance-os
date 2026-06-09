@@ -51,23 +51,51 @@ export default function OnboardingPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const slug = generateSlug(orgName);
+      // Guard: if org already exists (e.g. navigated here by mistake), go straight to dashboard
+      const { data: existingOrg } = await supabase
+        .from("organizations")
+        .select("id")
+        .eq("owner_id", user.id)
+        .maybeSingle();
 
-      const { error } = await supabase.from("organizations").insert({
-        name: orgName.trim(),
-        slug,
-        currency,
-        timezone,
-        owner_id: user.id,
-      });
+      if (existingOrg) {
+        router.push("/dashboard");
+        router.refresh();
+        return;
+      }
 
-      if (error) throw error;
+      // Try the base slug; on unique-constraint collision append -2, -3, …
+      const baseSlug = generateSlug(orgName);
+      let finalError: { message?: string; code?: string } | null = null;
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const slug = attempt === 0 ? baseSlug : `${baseSlug}-${attempt + 1}`;
+        const { error } = await supabase.from("organizations").insert({
+          name: orgName.trim(),
+          slug,
+          currency,
+          timezone,
+          owner_id: user.id,
+        });
+
+        finalError = error;
+        if (!error) break;
+        // 23505 = unique_violation — slug taken, retry with suffix
+        if ((error as { code?: string }).code !== "23505") break;
+      }
+
+      if (finalError) {
+        // Surface the actual DB / network error message
+        throw new Error(finalError.message ?? "Failed to create org");
+      }
 
       toast.success("Organisation created!");
       router.push("/dashboard");
       router.refresh();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to create org";
+      const msg = err instanceof Error
+        ? err.message
+        : (err as { message?: string })?.message ?? "Failed to create org";
       toast.error(msg);
     } finally {
       setLoading(false);

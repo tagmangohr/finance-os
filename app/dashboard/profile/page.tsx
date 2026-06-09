@@ -19,16 +19,20 @@ export default async function ProfilePage() {
   // If not owner, check membership to get their org
   let memberOrg = org;
   if (!org) {
-    const serviceClient = await createServiceClient();
-    const { data: member } = await serviceClient
-      .from("org_members")
-      .select("organizations(id, name, slug, currency, timezone)")
-      .eq("user_id", user.id)
-      .eq("status", "active")
-      .limit(1)
-      .single();
+    try {
+      const serviceClient = await createServiceClient();
+      const { data: member } = await serviceClient
+        .from("org_members")
+        .select("organizations(id, name, slug, currency, timezone)")
+        .eq("user_id", user.id)
+        .eq("status", "active")
+        .limit(1)
+        .maybeSingle();
 
-    memberOrg = (member?.organizations as unknown as typeof org) ?? null;
+      memberOrg = (member?.organizations as unknown as typeof org) ?? null;
+    } catch {
+      // org_members table not yet created — safe to ignore
+    }
   }
 
   return (
