@@ -4,28 +4,43 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, DollarSign, ArrowLeftRight,
-  Brain, Plug, Table2, LogOut,
+  Brain, Plug, Table2, LogOut, User, Users,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/dashboard",              label: "War Room",     Icon: LayoutDashboard, exact: true,  hint: "⌘1" },
-  { href: "/dashboard/revenue",      label: "Revenue",      Icon: TrendingUp,      exact: false, hint: "⌘2" },
-  { href: "/dashboard/cashflow",     label: "Cash Flow",    Icon: ArrowLeftRight,  exact: false, hint: "⌘3" },
-  { href: "/dashboard/collections",  label: "Collections",  Icon: DollarSign,      exact: false, hint: "⌘4" },
-  { href: "/dashboard/intelligence", label: "Intelligence", Icon: Brain,           exact: false, hint: "⌘5" },
-  { href: "/dashboard/connectors",   label: "Connectors",   Icon: Plug,            exact: false, hint: "⌘6" },
-  { href: "/dashboard/data",         label: "Raw Data",     Icon: Table2,          exact: false, hint: "⌘7" },
+// ─── Nav definitions ──────────────────────────────────────────────────────────
+
+const workspaceNav = [
+  { href: "/dashboard",              slug: "dashboard",    label: "War Room",     Icon: LayoutDashboard, exact: true,  hint: "⌘1" },
+  { href: "/dashboard/revenue",      slug: "revenue",      label: "Revenue",      Icon: TrendingUp,      exact: false, hint: "⌘2" },
+  { href: "/dashboard/cashflow",     slug: "cashflow",     label: "Cash Flow",    Icon: ArrowLeftRight,  exact: false, hint: "⌘3" },
+  { href: "/dashboard/collections",  slug: "collections",  label: "Collections",  Icon: DollarSign,      exact: false, hint: "⌘4" },
+  { href: "/dashboard/intelligence", slug: "intelligence", label: "Intelligence", Icon: Brain,           exact: false, hint: "⌘5" },
+  { href: "/dashboard/connectors",   slug: "connectors",   label: "Connectors",   Icon: Plug,            exact: false, hint: "⌘6" },
+  { href: "/dashboard/data",         slug: "data",         label: "Raw Data",     Icon: Table2,          exact: false, hint: "⌘7" },
 ];
 
-interface SidebarNavProps {
-  org: { id: string; name: string };
-  userEmail: string;
+const settingsNav = [
+  { href: "/dashboard/profile", label: "Profile", Icon: User,  ownerOnly: false },
+  { href: "/dashboard/users",   label: "Team",    Icon: Users, ownerOnly: true  },
+];
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface SidebarNavProps {
+  org:            { id: string; name: string };
+  userEmail:      string;
+  userName?:      string;
+  /** null = owner/admin (all pages visible); string[] = specific slugs allowed */
+  pageAccess?:    string[] | null;
+  canManageTeam?: boolean;
   connectorCount?: number;
-  liveCount?: number;
-  lastSyncedAt?: string | null;
+  liveCount?:      number;
+  lastSyncedAt?:   string | null;
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -37,15 +52,20 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export function SidebarNav({
   org,
   userEmail,
+  userName,
+  pageAccess   = null,
+  canManageTeam = true,
   connectorCount = 0,
-  liveCount = 0,
+  liveCount      = 0,
   lastSyncedAt,
 }: SidebarNavProps) {
   const pathname = usePathname();
-  const router = useRouter();
+  const router   = useRouter();
   const supabase = createClient();
 
   async function handleSignOut() {
@@ -58,6 +78,14 @@ export function SidebarNav({
     if (exact) return pathname === href;
     return pathname.startsWith(href);
   }
+
+  // Filter workspace nav by page access (null = all allowed)
+  const visibleWorkspace = pageAccess === null
+    ? workspaceNav
+    : workspaceNav.filter((item) => pageAccess.includes(item.slug));
+
+  const displayName = userName || userEmail.split("@")[0];
+  const avatarLetter = (userName?.charAt(0) || userEmail.charAt(0)).toUpperCase();
 
   return (
     <aside className="relative flex flex-col w-56 bg-[rgba(4,7,15,0.7)] border-r border-white/[0.06] z-[1]">
@@ -82,14 +110,12 @@ export function SidebarNav({
         </div>
       </div>
 
-      {/* Nav section label */}
+      {/* Workspace nav */}
       <div className="px-3 pt-3 pb-1">
         <span className="text-[9.5px] font-bold tracking-[0.16em] text-white/20 uppercase">Workspace</span>
       </div>
-
-      {/* Nav items */}
-      <nav className="flex-1 px-2.5 space-y-px">
-        {navItems.map((item) => {
+      <nav className="px-2.5 space-y-px">
+        {visibleWorkspace.map((item) => {
           const active = isActive(item.href, item.exact);
           return (
             <Link
@@ -108,12 +134,10 @@ export function SidebarNav({
                   style={{ boxShadow: "0 0 8px rgba(124,82,240,0.6)" }}
                 />
               )}
-              <item.Icon
-                className={cn(
-                  "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
-                  active ? "text-primary" : "text-white/35 group-hover:text-white/60"
-                )}
-              />
+              <item.Icon className={cn(
+                "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
+                active ? "text-primary" : "text-white/35 group-hover:text-white/60"
+              )} />
               <span className="flex-1">{item.label}</span>
               <span className={cn(
                 "text-[9.5px] font-mono flex-shrink-0",
@@ -126,7 +150,43 @@ export function SidebarNav({
         })}
       </nav>
 
-      {/* Status section */}
+      {/* Settings nav */}
+      <div className="px-3 pt-3 pb-1 mt-2">
+        <span className="text-[9.5px] font-bold tracking-[0.16em] text-white/20 uppercase">Settings</span>
+      </div>
+      <nav className="px-2.5 space-y-px">
+        {settingsNav
+          .filter((item) => !item.ownerOnly || canManageTeam)
+          .map((item) => {
+            const active = isActive(item.href, false);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "group relative flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[12.5px] font-medium transition-all duration-150",
+                  active
+                    ? "bg-primary/[0.12] text-white"
+                    : "text-white/35 hover:bg-white/[0.03] hover:text-white/70"
+                )}
+              >
+                {active && (
+                  <span
+                    className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-[2px] bg-primary"
+                    style={{ boxShadow: "0 0 8px rgba(124,82,240,0.6)" }}
+                  />
+                )}
+                <item.Icon className={cn(
+                  "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
+                  active ? "text-primary" : "text-white/35 group-hover:text-white/60"
+                )} />
+                <span className="flex-1">{item.label}</span>
+              </Link>
+            );
+          })}
+      </nav>
+
+      {/* Connector status */}
       {connectorCount > 0 && (
         <div className="mx-2.5 mt-3 mb-2 p-2 border border-white/[0.06] rounded-lg bg-white/[0.015]">
           <div className="text-[9.5px] font-bold tracking-[0.14em] text-white/20 uppercase mb-2">Status</div>
@@ -148,20 +208,25 @@ export function SidebarNav({
         </div>
       )}
 
-      {/* Footer */}
-      <div className="p-2.5 border-t border-white/[0.06]">
-        <div className="flex items-center gap-2 px-2 py-1.5 mb-1">
+      {/* User footer */}
+      <div className="p-2.5 border-t border-white/[0.06] mt-auto">
+        <Link
+          href="/dashboard/profile"
+          className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-lg hover:bg-white/[0.03] transition-all group"
+        >
           <div
             className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white"
             style={{ background: "linear-gradient(135deg, #2a3a6f, #0f1628)" }}
           >
-            {userEmail.charAt(0).toUpperCase()}
+            {avatarLetter}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[12px] font-medium text-white/70 truncate">{userEmail.split("@")[0]}</p>
+            <p className="text-[12px] font-medium text-white/70 truncate group-hover:text-white/85 transition-colors">
+              {displayName}
+            </p>
             <p className="text-[10px] text-white/25 truncate">{userEmail}</p>
           </div>
-        </div>
+        </Link>
         <button
           onClick={handleSignOut}
           className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-[12px] text-white/25 hover:bg-red-500/[0.08] hover:text-red-400 transition-all duration-150"

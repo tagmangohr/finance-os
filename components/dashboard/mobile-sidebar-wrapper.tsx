@@ -6,16 +6,21 @@ import { cn } from "@/lib/utils";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
 
 interface MobileSidebarWrapperProps {
-  org: { id: string; name: string };
-  userEmail: string;
+  org:           { id: string; name: string };
+  userEmail:     string;
+  userName?:     string;
+  pageAccess?:   string[] | null;
+  canManageTeam?: boolean;
 }
 
-export function MobileSidebarWrapper({ org, userEmail }: MobileSidebarWrapperProps) {
+export function MobileSidebarWrapper({
+  org, userEmail, userName, pageAccess = null, canManageTeam = true,
+}: MobileSidebarWrapperProps) {
   const [open, setOpen] = React.useState(false);
 
   return (
     <>
-      {/* Trigger button — rendered inside TopBar area via portal is complex, so we inject a fixed button */}
+      {/* Trigger button */}
       <button
         className="lg:hidden fixed top-4 left-4 z-40 h-8 w-8 rounded-lg bg-card border border-border flex items-center justify-center text-muted-foreground hover:text-foreground shadow-sm"
         onClick={() => setOpen(true)}
@@ -46,7 +51,13 @@ export function MobileSidebarWrapper({ org, userEmail }: MobileSidebarWrapperPro
           >
             <X className="h-4 w-4" />
           </button>
-          <SidebarNav org={org} userEmail={userEmail} />
+          <SidebarNav
+            org={org}
+            userEmail={userEmail}
+            userName={userName}
+            pageAccess={pageAccess}
+            canManageTeam={canManageTeam}
+          />
         </div>
       </div>
     </>
