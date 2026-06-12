@@ -14,7 +14,9 @@ export async function GET(): Promise<NextResponse> {
     .from("organizations")
     .select("id, name, slug, currency, timezone")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   return NextResponse.json({
     user: {

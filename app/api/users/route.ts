@@ -15,7 +15,9 @@ export async function GET(): Promise<NextResponse> {
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
 
@@ -58,7 +60,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
 

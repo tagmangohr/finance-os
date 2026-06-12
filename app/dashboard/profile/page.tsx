@@ -14,7 +14,9 @@ export default async function ProfilePage() {
     .from("organizations")
     .select("id, name, slug, currency, timezone")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   // If not owner, check membership to get their org
   let memberOrg = org;

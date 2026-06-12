@@ -15,7 +15,9 @@ export default async function UsersPage() {
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   // Also allow org admins
   let isAdmin = !!org;

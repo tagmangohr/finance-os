@@ -41,7 +41,9 @@ export async function getOrgId(): Promise<string | null> {
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   return data?.id ?? null;
 }
@@ -55,7 +57,9 @@ export async function getOrgWithUser(): Promise<{ orgId: string; orgName: string
     .from("organizations")
     .select("id, name")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!data) return null;
   return { orgId: data.id, orgName: data.name, userEmail: user.email ?? "" };

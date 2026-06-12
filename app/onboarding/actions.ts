@@ -30,6 +30,7 @@ export async function createOrgAction(formData: {
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
+    .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
 
@@ -50,10 +51,25 @@ export async function createOrgAction(formData: {
       // Org created — redirect server-side so the dashboard gets fresh cookies
       redirect("/dashboard");
     }
-    // Only retry on unique slug collision; surface other errors immediately
+    // Anything other than a unique-violation is a real error — surface it.
     if ((error as { code?: string }).code !== "23505") {
       return { error: error.message };
     }
+    // A 23505 here is now ambiguous: it could be the slug (retry with a new one)
+    // OR the owner_id UNIQUE constraint (migration 016) firing because this
+    // owner already has an org — e.g. a double-submit. If an org already
+    // exists for this user, treat it as success and go to the dashboard.
+    const { data: now } = await supabase
+      .from("organizations")
+      .select("id")
+      .eq("owner_id", user.id)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (now) {
+      redirect("/dashboard");
+    }
+    // Otherwise it was a slug collision — loop retries with a fresh random slug.
   }
 
   return { error: "Could not generate a unique slug. Please try again." };

@@ -15,7 +15,9 @@ export default async function DataPage() {
     .from("organizations")
     .select("id, name")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!org) redirect("/onboarding");
 

@@ -12,11 +12,18 @@ export default async function ConnectorsPage() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  // Resolve the user's org deterministically. A user should own exactly one
+  // org, but legacy duplicate rows (from the old slug-collision retry bug) must
+  // never make this throw — .single() errors on >1 row, which silently sent
+  // this page to /onboarding and made connectors look "deleted". Always pick
+  // the oldest owned org (the one all real data is attached to).
   const { data: org } = await supabase
     .from("organizations")
     .select("id")
     .eq("owner_id", user.id)
-    .single();
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
 
   if (!org) redirect("/onboarding");
 
