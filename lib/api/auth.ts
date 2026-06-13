@@ -29,7 +29,7 @@ type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
 /**
  * Return the org {id, owner_id} if `userId` may WRITE to it — i.e. they own it
- * OR they're an active admin member. Returns null otherwise (viewers/strangers).
+ * OR they're an active admin/manager member. Viewers and strangers get null.
  * Uses the service client so it isn't blocked by RLS while resolving access.
  */
 async function getWritableOrg(
@@ -46,14 +46,14 @@ async function getWritableOrg(
   if (!org) return null;
   if (org.owner_id === userId) return org;
 
-  // Active admin member of this org?
+  // Active admin OR manager member of this org may write.
   const { data: member } = await service
     .from("org_members")
     .select("id")
     .eq("org_id", orgId)
     .eq("user_id", userId)
     .eq("status", "active")
-    .eq("role", "admin")
+    .in("role", ["admin", "manager"])
     .maybeSingle();
 
   return member ? org : null;

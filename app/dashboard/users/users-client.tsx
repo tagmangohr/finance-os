@@ -4,7 +4,7 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import {
-  UserPlus, X, RefreshCw, Shield, Eye, Mail, Trash2, Settings2, Check,
+  UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, Trash2, Settings2, Check, Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -21,17 +21,31 @@ export const PAGE_OPTIONS = [
   { value: "data",         label: "Raw Data" },
 ] as const;
 
+export type Role = "admin" | "manager" | "viewer";
+
+const ROLE_META: Record<Role, { label: string; desc: string; Icon: typeof Shield }> = {
+  admin:   { label: "Admin",   desc: "Full access + manage team",  Icon: Shield },
+  manager: { label: "Manager", desc: "View & edit selected pages",  Icon: Wrench },
+  viewer:  { label: "Viewer",  desc: "Read-only, selected pages",   Icon: Eye },
+};
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface OrgMember {
   id:            string;
+  org_id:        string;
   invited_email: string;
   user_id:       string | null;
   full_name:     string | null;
-  role:          "admin" | "viewer";
+  role:          Role;
   page_access:   string[];
   status:        "pending" | "active" | "revoked";
   created_at:    string;
+}
+
+export interface OrgGroup {
+  org:     { id: string; name: string };
+  members: OrgMember[];
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
@@ -48,18 +62,18 @@ function Avatar({ name, email }: { name: string | null; email: string }) {
   );
 }
 
-function RoleBadge({ role }: { role: "admin" | "viewer" }) {
-  return role === "admin"
-    ? (
-      <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/[0.12] text-violet-400 border border-violet-500/20">
-        <Shield className="w-2.5 h-2.5" /> Admin
-      </span>
-    )
-    : (
-      <span className="flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/[0.10] text-blue-400/80 border border-blue-500/15">
-        <Eye className="w-2.5 h-2.5" /> Viewer
-      </span>
-    );
+function RoleBadge({ role }: { role: Role }) {
+  const { label, Icon } = ROLE_META[role];
+  const styles: Record<Role, string> = {
+    admin:   "bg-violet-500/[0.12] text-violet-400 border-violet-500/20",
+    manager: "bg-amber-500/[0.10] text-amber-400/90 border-amber-500/20",
+    viewer:  "bg-blue-500/[0.10] text-blue-400/80 border-blue-500/15",
+  };
+  return (
+    <span className={cn("flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border", styles[role])}>
+      <Icon className="w-2.5 h-2.5" /> {label}
+    </span>
+  );
 }
 
 function PageChip({ label, active }: { label: string; active: boolean }) {
@@ -67,9 +81,7 @@ function PageChip({ label, active }: { label: string; active: boolean }) {
     <span
       className={cn(
         "text-[9.5px] font-medium px-1.5 py-0.5 rounded",
-        active
-          ? "bg-emerald-500/[0.12] text-emerald-400/80"
-          : "bg-white/[0.04] text-white/20 line-through"
+        active ? "bg-emerald-500/[0.12] text-emerald-400/80" : "bg-white/[0.04] text-white/20 line-through"
       )}
     >
       {label}
@@ -80,37 +92,33 @@ function PageChip({ label, active }: { label: string; active: boolean }) {
 // ─── Invite / Edit dialog ─────────────────────────────────────────────────────
 
 interface MemberDialogProps {
-  mode: "invite" | "edit";
+  mode:    "invite" | "edit";
+  orgId:   string;
+  orgName: string;
   member?: OrgMember;
   onClose: () => void;
-  onSaved: (member: OrgMember) => void;
+  onSaved: (orgId: string, member: OrgMember) => void;
 }
 
-function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
-  const [email,       setEmail]       = React.useState(member?.invited_email ?? "");
-  const [role,        setRole]        = React.useState<"admin" | "viewer">(member?.role ?? "viewer");
-  const [pageAccess,  setPageAccess]  = React.useState<string[]>(
+function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: MemberDialogProps) {
+  const [email,      setEmail]      = React.useState(member?.invited_email ?? "");
+  const [role,       setRole]       = React.useState<Role>(member?.role ?? "viewer");
+  const [pageAccess, setPageAccess] = React.useState<string[]>(
     member?.page_access ?? ["dashboard", "revenue", "cashflow", "collections"]
   );
   const [saving, setSaving] = React.useState(false);
 
-  // When role = admin, force all pages selected (visual only — the server ignores page_access for admins)
-  const effectiveAccess = role === "admin"
-    ? PAGE_OPTIONS.map((p) => p.value)
-    : pageAccess;
+  // Admins implicitly get all pages; viewers/managers use the explicit list.
+  const restrictsPages  = role !== "admin";
+  const effectiveAccess = role === "admin" ? PAGE_OPTIONS.map((p) => p.value) : pageAccess;
 
   function togglePage(value: string) {
-    if (role === "admin") return;
-    setPageAccess((prev) =>
-      prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]
-    );
+    if (!restrictsPages) return;
+    setPageAccess((prev) => (prev.includes(value) ? prev.filter((p) => p !== value) : [...prev, value]));
   }
-
   function toggleAll() {
-    if (role === "admin") return;
-    setPageAccess((prev) =>
-      prev.length === PAGE_OPTIONS.length ? [] : PAGE_OPTIONS.map((p) => p.value)
-    );
+    if (!restrictsPages) return;
+    setPageAccess((prev) => (prev.length === PAGE_OPTIONS.length ? [] : PAGE_OPTIONS.map((p) => p.value)));
   }
 
   const handleSave = async () => {
@@ -125,7 +133,7 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
         res = await fetch("/api/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), role, page_access: effectiveAccess }),
+          body: JSON.stringify({ org_id: orgId, email: email.trim(), role, page_access: effectiveAccess }),
         });
       } else {
         res = await fetch(`/api/users/${member!.id}`, {
@@ -137,7 +145,7 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
       toast.success(mode === "invite" ? "Invite sent" : "Permissions updated");
-      onSaved(data as OrgMember);
+      onSaved(orgId, data as OrgMember);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
@@ -155,9 +163,14 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.05]">
-            <Dialog.Title className="text-[14px] font-semibold text-white/85">
-              {mode === "invite" ? "Invite Team Member" : "Edit Permissions"}
-            </Dialog.Title>
+            <div>
+              <Dialog.Title className="text-[14px] font-semibold text-white/85">
+                {mode === "invite" ? "Invite Team Member" : "Edit Permissions"}
+              </Dialog.Title>
+              <p className="flex items-center gap-1 text-[11px] text-white/35 mt-0.5">
+                <Building2 className="w-3 h-3" /> {orgName}
+              </p>
+            </div>
             <Dialog.Close asChild>
               <button className="p-1.5 rounded-lg text-white/25 hover:text-white/60 hover:bg-white/[0.05] transition-colors">
                 <X className="w-4 h-4" />
@@ -193,32 +206,28 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
               <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30 block mb-1.5">
                 Role
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {(["admin", "viewer"] as const).map((r) => {
+              <div className="grid grid-cols-3 gap-2">
+                {(Object.keys(ROLE_META) as Role[]).map((r) => {
                   const active = role === r;
+                  const { label, desc, Icon } = ROLE_META[r];
                   return (
                     <button
                       key={r}
                       type="button"
                       onClick={() => setRole(r)}
-                      className="flex flex-col items-start px-3 py-2.5 rounded-xl transition-all text-left"
+                      className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
                       style={{
                         background: active ? "rgba(124,82,240,0.10)" : "rgba(255,255,255,0.025)",
                         border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "rgba(255,255,255,0.06)"}`,
                       }}
                     >
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        {r === "admin"
-                          ? <Shield className={cn("w-3 h-3", active ? "text-violet-400" : "text-white/25")} />
-                          : <Eye    className={cn("w-3 h-3", active ? "text-violet-400" : "text-white/25")} />
-                        }
-                        <span className={cn("text-[12px] font-semibold capitalize", active ? "text-white/85" : "text-white/40")}>
-                          {r}
+                        <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-white/25")} />
+                        <span className={cn("text-[12px] font-semibold", active ? "text-white/85" : "text-white/40")}>
+                          {label}
                         </span>
                       </div>
-                      <span className="text-[10px] text-white/25">
-                        {r === "admin" ? "Full access + manage team" : "Read-only, selected pages"}
-                      </span>
+                      <span className="text-[9.5px] leading-tight text-white/25">{desc}</span>
                     </button>
                   );
                 })}
@@ -231,7 +240,7 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
                 <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30">
                   Page Access
                 </label>
-                {role === "viewer" && (
+                {restrictsPages && (
                   <button
                     type="button"
                     onClick={toggleAll}
@@ -249,14 +258,12 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
                       key={value}
                       type="button"
                       onClick={() => togglePage(value)}
-                      disabled={role === "admin"}
+                      disabled={!restrictsPages}
                       className={cn(
-                        "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all",
-                        "disabled:cursor-default",
-                        on
-                          ? "bg-emerald-500/[0.08] border border-emerald-500/20"
-                          : "bg-white/[0.025] border border-white/[0.05] hover:bg-white/[0.04]",
-                        role === "admin" && "opacity-60"
+                        "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
+                        on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
+                           : "bg-white/[0.025] border border-white/[0.05] hover:bg-white/[0.04]",
+                        !restrictsPages && "opacity-60"
                       )}
                     >
                       <div className={cn(
@@ -265,18 +272,18 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
                       )}>
                         {on && <Check className="w-2 h-2 text-emerald-400" />}
                       </div>
-                      <span className={cn(
-                        "text-[11.5px] font-medium",
-                        on ? "text-white/75" : "text-white/30"
-                      )}>
+                      <span className={cn("text-[11.5px] font-medium", on ? "text-white/75" : "text-white/30")}>
                         {label}
                       </span>
                     </button>
                   );
                 })}
               </div>
-              {role === "admin" && (
+              {!restrictsPages && (
                 <p className="text-[10.5px] text-white/25 mt-1.5">Admins always have access to all pages.</p>
+              )}
+              {role === "manager" && (
+                <p className="text-[10.5px] text-white/25 mt-1.5">Managers can view and edit data on the selected pages.</p>
               )}
             </div>
           </div>
@@ -291,8 +298,7 @@ function MemberDialog({ mode, member, onClose, onSaved }: MemberDialogProps) {
             <Button className="flex-1 gap-2" onClick={handleSave} disabled={saving}>
               {saving
                 ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                : mode === "invite" ? "Send Invite" : "Save Changes"
-              }
+                : mode === "invite" ? "Send Invite" : "Save Changes"}
             </Button>
           </div>
         </Dialog.Content>
@@ -308,21 +314,18 @@ function MemberRow({
 }: {
   member: OrgMember;
   onEdit: (m: OrgMember) => void;
-  onRevoke: (id: string) => void;
+  onRevoke: (orgId: string, id: string) => void;
 }) {
   const [revoking, setRevoking] = React.useState(false);
 
   const doRevoke = async () => {
-    if (!confirm(`Remove ${member.invited_email} from your team?`)) return;
+    if (!confirm(`Remove ${member.invited_email} from this organisation?`)) return;
     setRevoking(true);
     try {
       const res = await fetch(`/api/users/${member.id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error);
-      }
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       toast.success("Access revoked");
-      onRevoke(member.id);
+      onRevoke(member.org_id, member.id);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
@@ -333,18 +336,12 @@ function MemberRow({
   const isPending = member.status === "pending";
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all",
-        isPending
-          ? "border-amber-500/15 bg-amber-500/[0.03]"
-          : "border-white/[0.06] bg-white/[0.02]"
-      )}
-    >
-      {/* Avatar */}
+    <div className={cn(
+      "flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all",
+      isPending ? "border-amber-500/15 bg-amber-500/[0.03]" : "border-white/[0.06] bg-white/[0.02]"
+    )}>
       <Avatar name={member.full_name} email={member.invited_email} />
 
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-[12.5px] font-medium text-white/75 truncate">
@@ -359,18 +356,15 @@ function MemberRow({
         </div>
         <p className="text-[10.5px] text-white/30 mt-0.5 truncate">{member.invited_email}</p>
 
-        {/* Page chips (viewer only — admin sees "All pages") */}
         <div className="flex flex-wrap gap-1 mt-1.5">
           {member.role === "admin"
             ? <span className="text-[9.5px] text-white/25 font-medium">All pages</span>
             : PAGE_OPTIONS.map(({ value, label }) => (
                 <PageChip key={value} label={label} active={member.page_access.includes(value)} />
-              ))
-          }
+              ))}
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           onClick={() => onEdit(member)}
@@ -385,11 +379,55 @@ function MemberRow({
           title="Revoke access"
           className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all"
         >
-          {revoking
-            ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            : <Trash2 className="w-3.5 h-3.5" />
-          }
+          {revoking ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Per-org section ──────────────────────────────────────────────────────────
+
+function OrgSection({
+  group, onInvite, onEdit, onRevoke,
+}: {
+  group: OrgGroup;
+  onInvite: (orgId: string, orgName: string) => void;
+  onEdit: (m: OrgMember) => void;
+  onRevoke: (orgId: string, id: string) => void;
+}) {
+  const active  = group.members.filter((m) => m.status === "active");
+  const pending = group.members.filter((m) => m.status === "pending");
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
+      <div
+        className="px-4 py-3 flex items-center justify-between"
+        style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <Building2 className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
+          <span className="text-[13px] font-semibold text-white/80 truncate">{group.org.name}</span>
+          <span className="text-[10px] text-white/25 font-mono">
+            {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
+          </span>
+        </div>
+        <Button size="sm" className="gap-1.5 h-7 text-[11px]" onClick={() => onInvite(group.org.id, group.org.name)}>
+          <UserPlus className="w-3 h-3" /> Invite
+        </Button>
+      </div>
+
+      <div className="p-3 space-y-1.5">
+        {group.members.length === 0 ? (
+          <p className="text-[12px] text-white/25 text-center py-4">
+            No members yet — invite someone to {group.org.name}
+          </p>
+        ) : (
+          <>
+            {active.map((m) => <MemberRow key={m.id} member={m} onEdit={onEdit} onRevoke={onRevoke} />)}
+            {pending.map((m) => <MemberRow key={m.id} member={m} onEdit={onEdit} onRevoke={onRevoke} />)}
+          </>
+        )}
       </div>
     </div>
   );
@@ -397,125 +435,74 @@ function MemberRow({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function UsersClient({ initialMembers }: { initialMembers: OrgMember[] }) {
-  const [members, setMembers]   = React.useState<OrgMember[]>(initialMembers);
-  const [inviting, setInviting] = React.useState(false);
-  const [editing,  setEditing]  = React.useState<OrgMember | null>(null);
+export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
+  const [groups, setGroups] = React.useState<OrgGroup[]>(initialGroups);
+  const [invite, setInvite] = React.useState<{ orgId: string; orgName: string } | null>(null);
+  const [editing, setEditing] = React.useState<OrgMember | null>(null);
 
-  const active  = members.filter((m) => m.status === "active");
-  const pending = members.filter((m) => m.status === "pending");
+  const orgNameFor = (orgId: string) => groups.find((g) => g.org.id === orgId)?.org.name ?? "";
 
-  function handleSaved(updated: OrgMember) {
-    setMembers((prev) => {
-      const idx = prev.findIndex((m) => m.id === updated.id);
-      return idx >= 0
-        ? prev.map((m) => (m.id === updated.id ? updated : m))
-        : [...prev, updated];
-    });
-    setInviting(false);
+  function handleSaved(orgId: string, updated: OrgMember) {
+    setGroups((prev) => prev.map((g) => {
+      if (g.org.id !== orgId) return g;
+      const idx = g.members.findIndex((m) => m.id === updated.id);
+      return {
+        ...g,
+        members: idx >= 0
+          ? g.members.map((m) => (m.id === updated.id ? updated : m))
+          : [...g.members, updated],
+      };
+    }));
+    setInvite(null);
     setEditing(null);
   }
 
-  function handleRevoked(id: string) {
-    setMembers((prev) => prev.filter((m) => m.id !== id));
+  function handleRevoked(orgId: string, id: string) {
+    setGroups((prev) => prev.map((g) =>
+      g.org.id === orgId ? { ...g, members: g.members.filter((m) => m.id !== id) } : g
+    ));
   }
 
   return (
     <>
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-[18px] font-bold text-white/85 tracking-tight">Team</h1>
-          <p className="text-[12px] text-white/35 mt-0.5">Invite teammates and control their page access</p>
-        </div>
-        <Button className="gap-2" onClick={() => setInviting(true)}>
-          <UserPlus className="w-3.5 h-3.5" />
-          Invite Member
-        </Button>
+      <div>
+        <h1 className="text-[18px] font-bold text-white/85 tracking-tight">Team</h1>
+        <p className="text-[12px] text-white/35 mt-0.5">
+          Invite teammates to any organisation you manage and control their role &amp; page access
+        </p>
       </div>
 
-      {/* Active members */}
-      <div
-        className="rounded-2xl overflow-hidden"
-        style={{ border: "1px solid rgba(255,255,255,0.07)" }}
-      >
-        <div
-          className="px-4 py-3 flex items-center justify-between"
-          style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-        >
-          <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/25">
-            Active Members
-          </span>
-          <span className="text-[10px] text-white/20 font-mono">{active.length}</span>
-        </div>
-        <div className="p-3 space-y-1.5">
-          {active.length === 0
-            ? (
-              <p className="text-[12px] text-white/25 text-center py-4">
-                No active members yet — invite someone below
-              </p>
-            )
-            : active.map((m) => (
-                <MemberRow
-                  key={m.id}
-                  member={m}
-                  onEdit={(mem) => setEditing(mem)}
-                  onRevoke={handleRevoked}
-                />
-              ))
-          }
-        </div>
+      <div className="space-y-4">
+        {groups.map((g) => (
+          <OrgSection
+            key={g.org.id}
+            group={g}
+            onInvite={(orgId, orgName) => setInvite({ orgId, orgName })}
+            onEdit={(m) => setEditing(m)}
+            onRevoke={handleRevoked}
+          />
+        ))}
       </div>
 
-      {/* Pending invites */}
-      {pending.length > 0 && (
-        <div
-          className="rounded-2xl overflow-hidden"
-          style={{ border: "1px solid rgba(245,145,22,0.15)" }}
-        >
-          <div
-            className="px-4 py-3 flex items-center justify-between"
-            style={{ background: "rgba(245,145,22,0.04)", borderBottom: "1px solid rgba(245,145,22,0.10)" }}
-          >
-            <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-amber-400/50">
-              Pending Invites
-            </span>
-            <span className="text-[10px] text-amber-400/30 font-mono">{pending.length}</span>
-          </div>
-          <div className="p-3 space-y-1.5">
-            {pending.map((m) => (
-              <MemberRow
-                key={m.id}
-                member={m}
-                onEdit={(mem) => setEditing(mem)}
-                onRevoke={handleRevoked}
-              />
-            ))}
-          </div>
-          <div
-            className="px-4 py-2.5"
-            style={{ background: "rgba(245,145,22,0.03)", borderTop: "1px solid rgba(245,145,22,0.08)" }}
-          >
-            <p className="text-[11px] text-amber-400/50">
-              Pending invites activate automatically when the invitee signs in with that email address.
-            </p>
-          </div>
-        </div>
-      )}
+      <p className="text-[11px] text-white/25">
+        Pending invites activate automatically when the invitee signs in with that email address.
+      </p>
 
-      {/* Invite dialog */}
-      {inviting && (
+      {invite && (
         <MemberDialog
           mode="invite"
-          onClose={() => setInviting(false)}
+          orgId={invite.orgId}
+          orgName={invite.orgName}
+          onClose={() => setInvite(null)}
           onSaved={handleSaved}
         />
       )}
 
-      {/* Edit dialog */}
       {editing && (
         <MemberDialog
           mode="edit"
+          orgId={editing.org_id}
+          orgName={orgNameFor(editing.org_id)}
           member={editing}
           onClose={() => setEditing(null)}
           onSaved={handleSaved}

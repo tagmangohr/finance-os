@@ -5,7 +5,9 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 /** Cookie holding the org the user is currently viewing. */
 export const ACTIVE_ORG_COOKIE = "active_org_id";
 
-export type OrgRole = "owner" | "admin" | "viewer";
+// owner/admin: full access. manager: read + write on allowed pages, but cannot
+// manage the team or create orgs. viewer: read-only on allowed pages.
+export type OrgRole = "owner" | "admin" | "manager" | "viewer";
 
 export type AccessibleOrg = {
   id: string;
@@ -24,8 +26,10 @@ export type ActiveOrgContext = {
   accessibleOrgs: AccessibleOrg[];
   /** Page access for the ACTIVE org (null = all pages). */
   pageAccess: string[] | null;
-  /** True when the user is owner/admin of the active org. */
+  /** True when the user is owner/admin of the active org (manage team + settings). */
   canManageTeam: boolean;
+  /** True when the user may WRITE in the active org (owner/admin/manager). */
+  canWrite: boolean;
   /** True when the user may create new orgs (owner/admin of ≥1 org). */
   canCreateOrg: boolean;
 };
@@ -112,6 +116,7 @@ export const getActiveOrg = cache(async (): Promise<ActiveOrgContext> => {
       accessibleOrgs: [],
       pageAccess: null,
       canManageTeam: false,
+      canWrite: false,
       canCreateOrg: false,
     };
   }
@@ -124,12 +129,14 @@ export const getActiveOrg = cache(async (): Promise<ActiveOrgContext> => {
   const org =
     accessibleOrgs.find((o) => o.id === cookieOrgId) ?? accessibleOrgs[0] ?? null;
 
+  const role = org?.role;
   return {
     userId: user.id,
     org,
     accessibleOrgs,
     pageAccess: org?.pageAccess ?? null,
-    canManageTeam: org?.role === "owner" || org?.role === "admin",
+    canManageTeam: role === "owner" || role === "admin",
+    canWrite: role === "owner" || role === "admin" || role === "manager",
     canCreateOrg: accessibleOrgs.some((o) => o.role === "owner" || o.role === "admin"),
   };
 });

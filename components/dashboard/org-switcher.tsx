@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { setActiveOrgAction, createOrgAndSwitchAction } from "@/app/org/actions";
 import { CURRENCIES, TIMEZONES } from "@/lib/org/org-options";
 
-export type SwitcherOrg = { id: string; name: string; role: "owner" | "admin" | "viewer" };
+export type SwitcherOrg = { id: string; name: string; role: "owner" | "admin" | "manager" | "viewer" };
 
 interface OrgSwitcherProps {
   orgs: SwitcherOrg[];
