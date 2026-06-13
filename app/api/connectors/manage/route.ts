@@ -8,6 +8,7 @@ import {
   isConnectorStatus,
   isConnectorType,
   isPlainObject,
+  validateConnectorConfig,
 } from "@/lib/api/validation";
 
 // POST — create a new connector
@@ -40,6 +41,13 @@ export async function POST(request: Request) {
 
     if (config !== undefined && !isPlainObject(config)) {
       return NextResponse.json({ error: "config must be an object" }, { status: 400 });
+    }
+
+    // Validate credentials up front so a wrong/blank key fails with a clear
+    // message instead of silently erroring on every sync call later.
+    const configError = validateConnectorConfig(type, (config ?? {}) as Record<string, unknown>);
+    if (configError) {
+      return NextResponse.json({ error: configError }, { status: 400 });
     }
 
     const auth = await requireOrgAccess(orgId);
@@ -84,6 +92,12 @@ export async function PATCH(request: Request) {
     if (body.config !== undefined) {
       if (!isPlainObject(body.config)) {
         return NextResponse.json({ error: "config must be an object" }, { status: 400 });
+      }
+      // Validate against the connector's own type (the merged config the client
+      // sends). Blocks saving an invalid key on edit, same as on create.
+      const configError = validateConnectorConfig(auth.connector.type, body.config);
+      if (configError) {
+        return NextResponse.json({ error: configError }, { status: 400 });
       }
       updates.config = body.config;
     }

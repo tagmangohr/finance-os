@@ -44,6 +44,52 @@ export function isConnectorStatus(value: unknown): value is typeof CONNECTOR_STA
   return typeof value === "string" && CONNECTOR_STATUSES.includes(value as typeof CONNECTOR_STATUSES[number]);
 }
 
+/**
+ * Validate a connector's credential config by type. Returns a human-readable
+ * error string, or null when valid. Field names match what lib/connectors/sync.ts
+ * reads. Catches the common "wrong key pasted" mistake (e.g. a Stripe publishable
+ * key, or an unrelated token, in the secret-key field) BEFORE it's saved, so a
+ * bad key can never silently fail every sync call later.
+ */
+export function validateConnectorConfig(
+  type: string,
+  config: Record<string, unknown>
+): string | null {
+  const get = (k: string) => (typeof config[k] === "string" ? (config[k] as string).trim() : "");
+
+  switch (type) {
+    case "stripe": {
+      const key = get("secret_key");
+      if (!key) return "Enter your Stripe Secret key.";
+      if (!/^(sk|rk)_(live|test)_/.test(key)) {
+        return "That doesn't look like a Stripe secret key. Copy the Secret key from Stripe → Developers → API keys — it starts with sk_live_, sk_test_, or rk_live_ (not pk_ or a publishable key).";
+      }
+      return null;
+    }
+    case "razorpay": {
+      const id = get("key_id");
+      if (!id || !get("key_secret")) return "Razorpay needs both a Key ID and a Key Secret.";
+      if (!/^rzp_(live|test)_/.test(id)) return "Razorpay Key ID should start with rzp_live_ or rzp_test_.";
+      return null;
+    }
+    case "cashfree":
+      if (!get("client_id") || !get("client_secret")) return "Cashfree needs a Client ID and Client Secret.";
+      return null;
+    case "payu":
+      if (!get("key") || !get("salt")) return "PayU needs a Merchant Key and Salt.";
+      return null;
+    case "easebuzz":
+      if (!get("key") || !get("salt")) return "Easebuzz needs a Merchant Key and Salt.";
+      return null;
+    case "paytm":
+      if (!get("merchant_id") || !get("merchant_key")) return "Paytm needs a Merchant ID and Merchant Key.";
+      return null;
+    default:
+      // csv, bank_statement, accounting tools, drive connectors: no key check here.
+      return null;
+  }
+}
+
 export function parseSyncDateRange(
   fromRaw?: string,
   toRaw?: string

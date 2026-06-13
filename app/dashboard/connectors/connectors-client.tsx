@@ -434,7 +434,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         formData.append("org_id", orgId);
         formData.append("mapping", JSON.stringify(csvMapping));
         const res = await fetch("/api/connectors/csv", { method: "POST", body: formData });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        }
         const data = await res.json();
         toast.success(`Imported ${data.imported ?? 0} transactions`);
         handleCloseModal();
@@ -474,7 +477,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
             status: "active",
           }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        }
         const updated = await res.json();
         setActiveConnectors((prev) =>
           prev.map((c) => (c.id === editingConnector.id ? updated : c))
@@ -493,7 +499,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
             status: "active",
           }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        }
         const connector = await res.json();
         setActiveConnectors((prev) => [...prev, connector]);
         toast.success(`${connectorName || openModal.name} connected`);
@@ -589,7 +598,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ org_id: orgId }),
         });
-        if (!res.ok) throw new Error(await res.text());
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        }
         const data = await res.json();
         totalSynced = data.total_inserted ?? 0;
         totalUpdated = data.total_updated ?? 0;
@@ -611,9 +623,21 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${hardErrors.length} error${hardErrors.length > 1 ? "s" : ""}: ${hardErrors[0]}`
         );
       } else if (softWarns.length > 0) {
-        toast.success(
-          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${softWarns.length} endpoint${softWarns.length > 1 ? "s" : ""} skipped (see console)`
+        // Surface the ACTUAL reason (e.g. "Invalid API Key…") instead of
+        // "see console". Warnings look like "warn: charges: <error>" — strip
+        // the prefix and dedupe so repeated identical errors show once.
+        const reasons = Array.from(
+          new Set(softWarns.map((w) => w.replace(/^warn:\s*/, "").trim()))
         );
+        const reason = reasons[0] + (reasons.length > 1 ? ` (+${reasons.length - 1} more)` : "");
+        if (totalSynced === 0 && totalUpdated === 0) {
+          // Every call was skipped and nothing imported — this is effectively a failure.
+          toast.error(`Couldn't sync — ${reason}`);
+        } else {
+          toast.warning(
+            `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${softWarns.length} skipped — ${reason}`
+          );
+        }
         console.warn("[sync warnings]", softWarns);
       } else {
         toast.success(`Synced ${totalSynced} new, refreshed ${totalUpdated}`);
