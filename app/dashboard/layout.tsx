@@ -1,6 +1,7 @@
 import * as React from "react";
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
@@ -15,66 +16,24 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
-  // ── Resolve org and access rights ─────────────────────────────────────────
-  // Priority: owner → active member → pending invite (auto-activate) → onboarding
-  type OrgRow = { id: string; name: string };
-  let org:          OrgRow | null = null;
-  let pageAccess:   string[] | null = null;   // null = all pages
-  let canManageTeam = false;
-
-  // 1. Check if this user owns an org (most common path).
-  //    Use limit(1)+maybeSingle — .single() would throw if the user somehow
-  //    has >1 org rows (can happen if earlier INSERTs retried on slug collisions).
-  const { data: ownedOrg } = await supabase
-    .from("organizations")
-    .select("id, name")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (ownedOrg) {
-    org           = ownedOrg;
-    pageAccess    = null;      // owner sees everything
-    canManageTeam = true;
-  } else {
-    // 2. Check org_members — use service client so we can also detect pending invites.
-    //    Wrapped in try/catch so a missing table (migration not yet applied) doesn't
-    //    incorrectly bounce the user to /onboarding.
-    try {
-      const serviceClient = await createServiceClient();
-
-      const { data: memberRow, error: memberErr } = await serviceClient
-        .from("org_members")
-        .select("id, org_id, role, page_access, status, organizations(id, name)")
-        .or(`user_id.eq.${user.id},invited_email.eq.${user.email ?? ""}`)
-        .not("status", "eq", "revoked")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      // Ignore query errors (e.g. table not yet created) — treat as no membership
-      if (!memberErr && memberRow) {
-        // Auto-activate a pending invite
-        if (memberRow.status === "pending") {
-          await serviceClient
-            .from("org_members")
-            .update({ user_id: user.id, status: "active" })
-            .eq("id", memberRow.id);
-        }
-
-        const memberOrgData = memberRow.organizations as unknown as OrgRow | null;
-        if (memberOrgData) {
-          org           = memberOrgData;
-          pageAccess    = memberRow.role === "admin" ? null : (memberRow.page_access as string[]);
-          canManageTeam = memberRow.role === "admin";
-        }
-      }
-    } catch {
-      // org_members table not yet created or service client unavailable — safe to ignore
-    }
+  // ── Auto-activate any pending invites for this email ───────────────────────
+  // Done BEFORE resolving the active org so a freshly-accepted invite is usable
+  // immediately. Service client + try/catch so a missing org_members table (or
+  // service-client hiccup) never bounces the user to onboarding.
+  try {
+    const serviceClient = await createServiceClient();
+    await serviceClient
+      .from("org_members")
+      .update({ user_id: user.id, status: "active" })
+      .eq("invited_email", user.email ?? "")
+      .eq("status", "pending");
+  } catch {
+    // org_members not present yet — ignore.
   }
 
+  // ── Resolve the active org (cookie-selected, validated, oldest as fallback) ──
+  const { org, accessibleOrgs, pageAccess, canManageTeam, canCreateOrg } =
+    await getActiveOrg();
   if (!org) redirect("/onboarding");
 
   // ── Parallel data fetching ─────────────────────────────────────────────────
@@ -112,6 +71,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <div className="hidden lg:flex flex-shrink-0">
         <SidebarNav
           org={org}
+          accessibleOrgs={accessibleOrgs}
+          canCreateOrg={canCreateOrg}
           userEmail={user.email ?? ""}
           userName={userName}
           pageAccess={pageAccess}
@@ -125,6 +86,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* Mobile sidebar */}
       <MobileSidebarWrapper
         org={org}
+        accessibleOrgs={accessibleOrgs}
+        canCreateOrg={canCreateOrg}
         userEmail={user.email ?? ""}
         userName={userName}
         pageAccess={pageAccess}

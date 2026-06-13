@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
@@ -33,36 +34,20 @@ export interface DashboardSummary {
 }
 
 export async function getOrgId(): Promise<string | null> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  return data?.id ?? null;
+  // Resolves to the user's ACTIVE org (cookie-selected), not just the oldest.
+  const { org } = await getActiveOrg();
+  return org?.id ?? null;
 }
 
 export async function getOrgWithUser(): Promise<{ orgId: string; orgName: string; userEmail: string } | null> {
+  const { org } = await getActiveOrg();
+  if (!org) return null;
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
 
-  const { data } = await supabase
-    .from("organizations")
-    .select("id, name")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (!data) return null;
-  return { orgId: data.id, orgName: data.name, userEmail: user.email ?? "" };
+  return { orgId: org.id, orgName: org.name, userEmail: user.email ?? "" };
 }
 
 export async function getFinancialSummary(): Promise<DashboardSummary> {

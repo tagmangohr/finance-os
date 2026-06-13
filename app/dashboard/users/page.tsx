@@ -1,52 +1,23 @@
 import { redirect } from "next/navigation";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 import { UsersClient } from "./users-client";
 import type { OrgMember } from "./users-client";
 
 export const metadata = { title: "Team — Finance OS" };
 
 export default async function UsersPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/auth/login");
+  // Team management applies to the ACTIVE org. Only its owner/admin may manage it.
+  const { userId, org, canManageTeam } = await getActiveOrg();
+  if (!userId) redirect("/auth/login");
+  if (!org) redirect("/onboarding");
+  if (!canManageTeam) redirect("/dashboard");
 
-  // Only org owners (and admins — checked below) can manage the team
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  // Also allow org admins
-  let isAdmin = !!org;
-  if (!org) {
-    const { data: member } = await supabase
-      .from("org_members")
-      .select("role")
-      .eq("user_id", user.id)
-      .eq("role", "admin")
-      .eq("status", "active")
-      .single();
-    isAdmin = !!member;
-  }
-
-  if (!isAdmin) redirect("/dashboard");
-
-  // Fetch all members via service client (owner's org)
   const serviceClient = await createServiceClient();
-  const orgId = org?.id ?? (() => {
-    // Shouldn't reach here but handle gracefully
-    return null;
-  })();
-
-  if (!orgId) redirect("/dashboard");
-
   const { data: members } = await serviceClient
     .from("org_members")
     .select("id, invited_email, user_id, role, page_access, status, created_at")
-    .eq("org_id", orgId)
+    .eq("org_id", org.id)
     .neq("status", "revoked")
     .order("created_at", { ascending: true });
 

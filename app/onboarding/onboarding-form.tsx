@@ -4,24 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { TrendingUp, ArrowRight, Loader2, Building2, Globe } from "lucide-react";
 import { createOrgAction } from "./actions";
-
-const CURRENCIES = [
-  { value: "INR", label: "₹ Indian Rupee (INR)" },
-  { value: "USD", label: "$ US Dollar (USD)" },
-  { value: "EUR", label: "€ Euro (EUR)" },
-  { value: "GBP", label: "£ British Pound (GBP)" },
-  { value: "AED", label: "د.إ UAE Dirham (AED)" },
-  { value: "SGD", label: "S$ Singapore Dollar (SGD)" },
-];
-
-const TIMEZONES = [
-  { value: "Asia/Kolkata", label: "India (IST, UTC+5:30)" },
-  { value: "America/New_York", label: "US Eastern (EST)" },
-  { value: "America/Los_Angeles", label: "US Pacific (PST)" },
-  { value: "Europe/London", label: "London (GMT/BST)" },
-  { value: "Asia/Dubai", label: "Dubai (GST, UTC+4)" },
-  { value: "Asia/Singapore", label: "Singapore (SGT, UTC+8)" },
-];
+import { CURRENCIES, TIMEZONES } from "@/lib/org/org-options";
 
 export function OnboardingForm() {
   const [orgName, setOrgName]   = useState("");
@@ -35,23 +18,25 @@ export function OnboardingForm() {
     setLoading(true);
 
     try {
-      // Server Action: org is created server-side, session cookies are already
-      // set (from the server-action login), and redirect("/dashboard") inside
-      // the action is a true server-side HTTP redirect — no client nav race.
+      // Server action creates the org and sets the active-org cookie. On success
+      // we do a FULL reload into /dashboard (not router.push) so the new cookie
+      // is in play on the next server render — the auth-context lesson.
       const result = await createOrgAction({
         name:     orgName.trim(),
         currency,
         timezone,
       });
 
-      // createOrgAction redirects on success — we only get here on error
       if (result?.error) {
         toast.error(result.error);
         setLoading(false);
+        return;
       }
+
+      window.location.href = "/dashboard";
     } catch {
-      // Next.js redirect() throws internally — that's expected and means success
-      // (the browser follows the redirect). Only catch genuine errors.
+      toast.error("Something went wrong. Please try again.");
+      setLoading(false);
     }
   }
 

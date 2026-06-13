@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 
 /**
  * PATCH /api/users/[memberId]
  * Body: { role?, page_access? }
- * Updates a member's role or page access.  Owner-only.
+ * Updates a member's role or page access in the ACTIVE org. Owner/admin only.
  */
 export async function PATCH(
   req: NextRequest,
@@ -12,17 +13,11 @@ export async function PATCH(
 ): Promise<NextResponse> {
   const { memberId } = await params;
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .single();
-
-  if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
+  const { userId, org, canManageTeam } = await getActiveOrg();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!org || !canManageTeam) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let body: { role?: string; page_access?: string[] };
   try { body = await req.json(); } catch {
@@ -37,13 +32,16 @@ export async function PATCH(
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
+  // Service client (authorized above); scoped to the active org so a member of
+  // another org can never be touched from here.
+  const service = await createServiceClient();
+  const { data, error } = await service
     .from("org_members")
     .update(updates)
     .eq("id", memberId)
-    .eq("org_id", org.id)  // scoped to caller's org — RLS also enforces this
+    .eq("org_id", org.id)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data)  return NextResponse.json({ error: "Member not found" }, { status: 404 });
@@ -53,8 +51,7 @@ export async function PATCH(
 
 /**
  * DELETE /api/users/[memberId]
- * Revokes a member's access.  Owner-only.
- * Sets status = 'revoked' (soft delete so the email can be re-invited later).
+ * Revokes a member's access in the ACTIVE org (soft delete). Owner/admin only.
  */
 export async function DELETE(
   _req: NextRequest,
@@ -62,19 +59,14 @@ export async function DELETE(
 ): Promise<NextResponse> {
   const { memberId } = await params;
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { userId, org, canManageTeam } = await getActiveOrg();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!org || !canManageTeam) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .single();
-
-  if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
-
-  const { error } = await supabase
+  const service = await createServiceClient();
+  const { error } = await service
     .from("org_members")
     .update({ status: "revoked" })
     .eq("id", memberId)

@@ -2,23 +2,14 @@ export const dynamic = "force-dynamic";
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 import { DataExplorerClient } from "./data-client";
 
 export default async function DataPage() {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) redirect("/auth/login");
 
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id, name")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
+  const { userId, org } = await getActiveOrg();
+  if (!userId) redirect("/auth/login");
   if (!org) redirect("/onboarding");
 
   // Fetch all connectors so the filter dropdown is populated

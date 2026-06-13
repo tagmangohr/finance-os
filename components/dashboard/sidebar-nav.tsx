@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
+import { OrgSwitcher, type SwitcherOrg } from "@/components/dashboard/org-switcher";
 
 // ─── Nav definitions ──────────────────────────────────────────────────────────
 
@@ -30,6 +31,10 @@ const settingsNav = [
 
 export interface SidebarNavProps {
   org:            { id: string; name: string };
+  /** All orgs the user can switch between (owned + member). */
+  accessibleOrgs?: SwitcherOrg[];
+  /** Whether the user may create new orgs (owner/admin of ≥1 org). */
+  canCreateOrg?:  boolean;
   userEmail:      string;
   userName?:      string;
   /** null = owner/admin (all pages visible); string[] = specific slugs allowed */
@@ -56,6 +61,8 @@ function timeAgo(dateStr: string): string {
 
 export function SidebarNav({
   org,
+  accessibleOrgs = [],
+  canCreateOrg   = false,
   userEmail,
   userName,
   pageAccess   = null,
@@ -106,9 +113,15 @@ export function SidebarNav({
         </div>
         <div className="overflow-hidden">
           <p className="font-semibold text-[13px] leading-none text-white/90 tracking-tight">Finance OS</p>
-          <p className="text-[10px] text-white/30 truncate mt-0.5">{org.name}</p>
         </div>
       </div>
+
+      {/* Org switcher */}
+      {accessibleOrgs.length > 0 && (
+        <div className="px-2.5 pt-2.5">
+          <OrgSwitcher orgs={accessibleOrgs} activeOrgId={org.id} canCreateOrg={canCreateOrg} />
+        </div>
+      )}
 
       {/* Workspace nav */}
       <div className="px-3 pt-3 pb-1">

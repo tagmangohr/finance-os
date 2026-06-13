@@ -1,27 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 
 /**
  * GET /api/users
- * Returns all org_members for the caller's org.
- * Only accessible to the org owner.
+ * Returns all members of the ACTIVE org. Owner/admin of that org only.
  */
 export async function GET(): Promise<NextResponse> {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { userId, org, canManageTeam } = await getActiveOrg();
+  if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!org || !canManageTeam) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
-
-  // Use service client to read members including their auth profile
+  // Service client so non-owner admins can read the member list (and auth profiles).
   const serviceClient = await createServiceClient();
   const { data: members, error } = await serviceClient
     .from("org_members")
@@ -32,7 +24,6 @@ export async function GET(): Promise<NextResponse> {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Attach display name from auth.users for active members
   const enriched = await Promise.all((members ?? []).map(async (m) => {
     if (!m.user_id) return { ...m, full_name: null };
     const { data: authUser } = await serviceClient.auth.admin.getUserById(m.user_id);
@@ -48,23 +39,17 @@ export async function GET(): Promise<NextResponse> {
 /**
  * POST /api/users
  * Body: { email: string; role: "admin" | "viewer"; page_access: string[] }
- *
- * Creates a pending org_member invite.  Owner-only.
+ * Invites a member to the ACTIVE org. Owner/admin of that org only.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
-  if (!org) return NextResponse.json({ error: "Forbidden — owner only" }, { status: 403 });
+  const { org, canManageTeam } = await getActiveOrg();
+  if (!org || !canManageTeam) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let body: { email?: string; role?: string; page_access?: string[] };
   try { body = await req.json(); } catch {
@@ -78,23 +63,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!email || !email.includes("@")) {
     return NextResponse.json({ error: "Valid email is required" }, { status: 400 });
   }
-
   if (email === user.email?.toLowerCase()) {
     return NextResponse.json({ error: "You cannot invite yourself" }, { status: 400 });
   }
 
-  // Check if already invited
-  const { data: existing } = await supabase
+  // Service client: writes bypass RLS (which only lets the OWNER manage members),
+  // so authorized admins can invite too. Authorization is already enforced above.
+  const service = await createServiceClient();
+
+  const { data: existing } = await service
     .from("org_members")
     .select("id, status")
     .eq("org_id", org.id)
     .eq("invited_email", email)
-    .single();
+    .maybeSingle();
 
   if (existing) {
     if (existing.status === "revoked") {
-      // Re-activate the revoked invite
-      const { data: updated, error } = await supabase
+      const { data: updated, error } = await service
         .from("org_members")
         .update({ role, page_access, status: "pending", user_id: null })
         .eq("id", existing.id)
@@ -106,7 +92,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "This email has already been invited" }, { status: 409 });
   }
 
-  const { data: member, error } = await supabase
+  const { data: member, error } = await service
     .from("org_members")
     .insert({
       org_id:        org.id,

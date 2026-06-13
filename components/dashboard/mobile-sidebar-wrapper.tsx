@@ -4,9 +4,12 @@ import * as React from "react";
 import { Menu, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
+import type { SwitcherOrg } from "@/components/dashboard/org-switcher";
 
 interface MobileSidebarWrapperProps {
   org:           { id: string; name: string };
+  accessibleOrgs?: SwitcherOrg[];
+  canCreateOrg?: boolean;
   userEmail:     string;
   userName?:     string;
   pageAccess?:   string[] | null;
@@ -14,7 +17,8 @@ interface MobileSidebarWrapperProps {
 }
 
 export function MobileSidebarWrapper({
-  org, userEmail, userName, pageAccess = null, canManageTeam = true,
+  org, accessibleOrgs = [], canCreateOrg = false, userEmail, userName,
+  pageAccess = null, canManageTeam = true,
 }: MobileSidebarWrapperProps) {
   const [open, setOpen] = React.useState(false);
 
@@ -53,6 +57,8 @@ export function MobileSidebarWrapper({
           </button>
           <SidebarNav
             org={org}
+            accessibleOrgs={accessibleOrgs}
+            canCreateOrg={canCreateOrg}
             userEmail={userEmail}
             userName={userName}
             pageAccess={pageAccess}

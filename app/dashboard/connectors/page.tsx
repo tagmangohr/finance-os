@@ -3,28 +3,18 @@ export const dynamic = 'force-dynamic';
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getActiveOrg } from "@/lib/org/active-org";
 import { generateSyncToken } from "@/lib/api/sync-token";
 import { ConnectorsClient } from "./connectors-client";
 import { DriveConnectors } from "./drive-client";
 
 export default async function ConnectorsPage() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) redirect("/auth/login");
 
-  // Resolve the user's org deterministically. A user should own exactly one
-  // org, but legacy duplicate rows (from the old slug-collision retry bug) must
-  // never make this throw — .single() errors on >1 row, which silently sent
-  // this page to /onboarding and made connectors look "deleted". Always pick
-  // the oldest owned org (the one all real data is attached to).
-  const { data: org } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("owner_id", user.id)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-
+  // Connectors are scoped to the ACTIVE org — switching orgs in the sidebar
+  // swaps which connectors show here.
+  const { userId, org } = await getActiveOrg();
+  if (!userId) redirect("/auth/login");
   if (!org) redirect("/onboarding");
 
   // ── Fetch API-key connectors + drive connections in parallel ───────────────
