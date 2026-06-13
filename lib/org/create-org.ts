@@ -49,10 +49,17 @@ export async function insertOrg(
 
     if (!error && data) return { orgId: data.id };
 
-    // 23505 = unique_violation on slug — retry with a new random suffix.
-    if ((error as { code?: string } | null)?.code !== "23505") {
-      return { error: error?.message ?? "Failed to create organisation." };
+    const code = (error as { code?: string } | null)?.code;
+    const message = (error as { message?: string } | null)?.message ?? "";
+
+    // Retry ONLY on a genuine SLUG collision (random suffix → astronomically
+    // rare). Any other unique violation (e.g. a stray UNIQUE(owner_id) left over
+    // from the abandoned one-org-per-owner migration) is NOT a slug problem —
+    // looping just hides it behind a misleading message, so surface it instead.
+    if (code === "23505" && message.toLowerCase().includes("slug")) {
+      continue;
     }
+    return { error: message || "Failed to create organisation." };
   }
 
   return { error: "Could not generate a unique slug. Please try again." };
