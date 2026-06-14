@@ -3,23 +3,21 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  TrendingUp, LayoutDashboard, DollarSign, ArrowLeftRight,
-  Brain, Plug, Table2, LogOut, User, Users,
+  TrendingUp, LayoutDashboard, Plug, Table2, LogOut, User, Users,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { OrgSwitcher, type SwitcherOrg } from "@/components/dashboard/org-switcher";
 
 // ─── Nav definitions ──────────────────────────────────────────────────────────
+// Analytical views (Revenue, Cash Flow, Collections, Intelligence) live as TABS
+// on the dashboard now (see DashboardTabs), so the sidebar keeps only the hub +
+// tools + settings.
 
 const workspaceNav = [
-  { href: "/dashboard",              slug: "dashboard",    label: "War Room",     Icon: LayoutDashboard, exact: true,  hint: "⌘1" },
-  { href: "/dashboard/revenue",      slug: "revenue",      label: "Revenue",      Icon: TrendingUp,      exact: false, hint: "⌘2" },
-  { href: "/dashboard/cashflow",     slug: "cashflow",     label: "Cash Flow",    Icon: ArrowLeftRight,  exact: false, hint: "⌘3" },
-  { href: "/dashboard/collections",  slug: "collections",  label: "Collections",  Icon: DollarSign,      exact: false, hint: "⌘4" },
-  { href: "/dashboard/intelligence", slug: "intelligence", label: "Intelligence", Icon: Brain,           exact: false, hint: "⌘5" },
-  { href: "/dashboard/connectors",   slug: "connectors",   label: "Connectors",   Icon: Plug,            exact: false, hint: "⌘6" },
-  { href: "/dashboard/data",         slug: "data",         label: "Raw Data",     Icon: Table2,          exact: false, hint: "⌘7" },
+  { href: "/dashboard",            slug: "dashboard",  label: "Dashboard",  Icon: LayoutDashboard, exact: true,  hint: "⌘1" },
+  { href: "/dashboard/connectors", slug: "connectors", label: "Connectors", Icon: Plug,            exact: false, hint: "⌘2" },
+  { href: "/dashboard/data",       slug: "data",       label: "Raw Data",   Icon: Table2,          exact: false, hint: "⌘3" },
 ];
 
 const settingsNav = [

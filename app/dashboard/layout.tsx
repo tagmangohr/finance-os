@@ -2,13 +2,11 @@ import * as React from "react";
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
-import { calculateRevenue } from "@/lib/intelligence/revenue";
-import { calculateRunway } from "@/lib/intelligence/runway";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
 import { TopBar } from "@/components/dashboard/top-bar";
 import { MobileSidebarWrapper } from "@/components/dashboard/mobile-sidebar-wrapper";
 import { AutoRefresh } from "@/components/dashboard/auto-refresh";
-import { Ticker } from "@/components/dashboard/ticker";
+import { DashboardTabs } from "@/components/dashboard/dashboard-tabs";
 import { CoPilot } from "@/components/dashboard/co-pilot";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -36,22 +34,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
     await getActiveOrg();
   if (!org) redirect("/onboarding");
 
-  // ── Parallel data fetching ─────────────────────────────────────────────────
-  const [connectorsResult, entitiesResult, revenueMetrics, runwayMetrics] =
-    await Promise.all([
-      supabase
-        .from("connectors")
-        .select("id, status, last_synced_at")
-        .eq("org_id", org.id),
-      supabase
-        .from("entities")
-        .select("outstanding_amount")
-        .eq("org_id", org.id),
-      calculateRevenue(org.id, supabase),
-      calculateRunway(org.id, supabase),
-    ]);
+  // ── Connector status for the sidebar ───────────────────────────────────────
+  const { data: connectors } = await supabase
+    .from("connectors")
+    .select("id, status, last_synced_at")
+    .eq("org_id", org.id);
 
-  const connectors     = connectorsResult.data;
   const connectorCount = connectors?.length ?? 0;
   const liveCount      = connectors?.filter((c) => c.status === "active").length ?? 0;
   const lastSyncedAt   = connectors
@@ -59,9 +47,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .filter(Boolean)
     .sort()
     .at(-1) ?? null;
-
-  const totalOutstanding =
-    entitiesResult.data?.reduce((s, e) => s + (e.outstanding_amount ?? 0), 0) ?? 0;
 
   const userName = (user.user_metadata?.full_name as string | undefined) ?? "";
 
@@ -97,13 +82,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       {/* Main column */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <TopBar orgId={org.id} orgName={org.name} />
-        <Ticker
-          cash={runwayMetrics.cash_balance}
-          mrr={revenueMetrics.mrr}
-          burnRate={runwayMetrics.burn_rate}
-          runwayDays={runwayMetrics.runway_days}
-          totalOutstanding={totalOutstanding}
-        />
+        <DashboardTabs pageAccess={pageAccess} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-5 bg-background">
           <AutoRefresh />
           {children}

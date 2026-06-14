@@ -6,6 +6,29 @@ import {
   TrendingUp, Send, Search, Receipt, Zap, Wallet, Gauge, Coins, Flame,
   AlertCircle, AlertTriangle, Info,
 } from "lucide-react";
+
+// ─── Small presentational helpers (health signals + unit tiles) ──────
+function Signal({ label, tone }: { label: string; tone: "good" | "warn" | "bad" }) {
+  const dot = tone === "good" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-destructive";
+  return (
+    <div className="flex items-center gap-2 text-muted-foreground">
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
+      <span className="truncate">{label}</span>
+    </div>
+  );
+}
+function Unit({ label, value, color }: { label: string; value?: string; color?: string }) {
+  return (
+    <div>
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      {value ? (
+        <p className="text-[15px] font-semibold" style={color ? { color } : undefined}>{value}</p>
+      ) : (
+        <span className="inline-block mt-1 text-[10px] font-medium text-primary bg-primary/10 rounded px-1.5 py-0.5">add data</span>
+      )}
+    </div>
+  );
+}
 import { getFinancialSummary, getOrgId } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RevenueChart } from "@/components/charts/revenue-chart";
@@ -98,6 +121,17 @@ export default async function DashboardPage() {
   const mrrSparkline = revenueByMonth.slice(-8).map((r) => r.amount);
   const balanceSparkline = cashFlowData.slice(-12).map((c) => c.balance);
   const totalOutstanding = topDebtors.reduce((s, d) => s + (d.outstanding_amount ?? 0), 0);
+
+  // Financial-health score — only meaningful once there's data (avoid a fake
+  // "great score" when everything is ₹0 and runway is artificially infinite).
+  const runwayMonths = runwayDays / 30;
+  const healthScore = hasData
+    ? Math.max(0, Math.min(100, Math.round(
+        (Math.min(runwayMonths, 18) / 18) * 60 + (burnRate > 0 ? Math.min(mrr / burnRate, 1) : 1) * 40
+      )))
+    : null;
+  const ringC = 2 * Math.PI * 40;
+  const ringDash = healthScore != null ? (healthScore / 100) * ringC : 0;
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -223,6 +257,41 @@ export default async function DashboardPage() {
             </div>
           )}
         </SectionCard>
+      </div>
+
+      {/* ── Financial health + unit economics ───────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-3">
+        <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
+          <svg viewBox="0 0 96 96" width="90" height="90" className="flex-shrink-0" role="img" aria-label={`Financial health score ${healthScore ?? "not available"}`}>
+            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--accent))" strokeWidth="9" />
+            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--metric-profit))" strokeWidth="9" strokeLinecap="round"
+              strokeDasharray={`${ringDash} ${ringC}`} transform="rotate(-90 48 48)" />
+            <text x="48" y="46" textAnchor="middle" className="fill-foreground" style={{ fontSize: 22, fontWeight: 700 }}>
+              {healthScore != null ? healthScore : "—"}
+            </text>
+            <text x="48" y="62" textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 9 }}>health</text>
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-foreground mb-2">Financial health</p>
+            <div className="space-y-1.5 text-[11.5px]">
+              <Signal label={`Runway ${formatRunway(runwayDays)}`} tone={!hasData ? "warn" : runwayMonths >= 12 ? "good" : runwayMonths >= 6 ? "warn" : "bad"} />
+              <Signal label={`Burn ${formatCurrency(burnRate, "INR", true)}/mo`} tone={burnRate === 0 || mrr >= burnRate ? "good" : "warn"} />
+              <Signal label={`MRR ${formatCurrency(mrr, "INR", true)}`} tone={mrr > 0 ? "good" : "bad"} />
+            </div>
+          </div>
+        </div>
+
+        <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
+          <p className="text-[13px] font-semibold text-foreground mb-3">Unit economics</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
+            <Unit label="MRR" value={formatCurrency(mrr, "INR", true)} color="hsl(var(--metric-revenue))" />
+            <Unit label="ARR" value={formatCurrency(mrr * 12, "INR", true)} color="hsl(var(--metric-profit))" />
+            <Unit label="Customers" />
+            <Unit label="ARPU" />
+            <Unit label="CAC" />
+            <Unit label="LTV / CAC" />
+          </div>
+        </div>
       </div>
 
       {/* ── Alerts + quick actions ──────────────────────────────────── */}
