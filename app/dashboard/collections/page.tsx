@@ -1,277 +1,112 @@
 export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { Send } from "lucide-react";
+import { Receipt, Percent, Clock, Users } from "lucide-react";
 import { getOrgId, getCollectionsData } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { SectionCard } from "@/components/dashboard/section-card";
+import { PreviewBanner } from "@/components/dashboard/preview-banner";
+import { formatCurrency } from "@/lib/utils";
 
-function Panel({ title, subtitle, children }: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      className="rounded-xl border border-border overflow-hidden transition-all duration-200 hover:border-border"
-      style={{ background: "hsl(var(--card))" }}
-    >
-      <div className="px-4 pt-3.5 pb-0">
-        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">{title}</p>
-        {subtitle && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{subtitle}</p>}
-      </div>
-      <div className="px-4 pb-4 pt-2">{children}</div>
-    </div>
-  );
-}
+type DebtorLite = { name: string; outstanding_amount: number };
+
+const SAMPLE = {
+  totalOutstanding: 540000, collectionRate: 86,
+  aging: { overdue030: 180000, overdue3160: 120000, overdue6190: 70000, overdue90plus: 40000 },
+  debtors: [
+    { name: "Acme Corp", outstanding_amount: 180000 },
+    { name: "Globex", outstanding_amount: 120000 },
+    { name: "Initech", outstanding_amount: 90000 },
+    { name: "Umbrella Co", outstanding_amount: 85000 },
+    { name: "Soylent", outstanding_amount: 65000 },
+  ] as DebtorLite[],
+};
 
 export default async function CollectionsPage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
 
-  const { overdueInvoices, debtors, aging, totalOutstanding, collectionRate } =
-    await getCollectionsData(orgId);
+  const real = await getCollectionsData(orgId);
+  const preview = real.totalOutstanding === 0 && real.debtors.length === 0;
 
-  const agingBuckets = [
-    { label: "0–30 days",  amount: aging.overdue030,    color: "#f59116", bg: "rgba(245,145,22,0.12)",  textColor: "#f59116" },
-    { label: "31–60 days", amount: aging.overdue3160,   color: "#f97316", bg: "rgba(249,115,22,0.12)",  textColor: "#f97316" },
-    { label: "61–90 days", amount: aging.overdue6190,   color: "#e83a3a", bg: "rgba(232,58,58,0.12)",   textColor: "#e83a3a" },
-    { label: "90+ days",   amount: aging.overdue90plus, color: "#b91c1c", bg: "rgba(185,28,28,0.12)",   textColor: "#ef4444" },
+  const v = preview ? SAMPLE : {
+    totalOutstanding: real.totalOutstanding,
+    collectionRate: real.collectionRate,
+    aging: {
+      overdue030: real.aging.overdue030, overdue3160: real.aging.overdue3160,
+      overdue6190: real.aging.overdue6190, overdue90plus: real.aging.overdue90plus,
+    },
+    debtors: (real.debtors as unknown as DebtorLite[]).map((d) => ({ name: d.name, outstanding_amount: d.outstanding_amount ?? 0 })),
+  };
+
+  const buckets = [
+    { label: "0–30 days",  amount: v.aging.overdue030,    color: "hsl(var(--warning))" },
+    { label: "31–60 days", amount: v.aging.overdue3160,   color: "hsl(var(--metric-opex))" },
+    { label: "61–90 days", amount: v.aging.overdue6190,   color: "hsl(var(--metric-runway))" },
+    { label: "90+ days",   amount: v.aging.overdue90plus, color: "hsl(var(--destructive))" },
   ];
-  const maxAmount = Math.max(...agingBuckets.map((b) => b.amount), 1);
+  const maxBucket = Math.max(...buckets.map((b) => b.amount), 1);
+  const overdueTotal = buckets.reduce((s, b) => s + b.amount, 0);
+  const maxDebtor = Math.max(...v.debtors.map((d) => d.outstanding_amount), 1);
 
   return (
     <div className="space-y-3 max-w-[1400px]">
+      {preview && <PreviewBanner />}
 
-      {/* ── Page header ──────────────────────────────────────────────── */}
-      <div className="animate-enter">
-        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-muted-foreground/70 mb-0.5">Finance OS</p>
-        <h1 className="text-[22px] font-bold tracking-tight text-foreground leading-none">Collections</h1>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
+        <MetricCard title="Outstanding" value={formatCurrency(v.totalOutstanding, "INR", true)} subtitle="total receivable"
+          icon={<Receipt className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
+        <MetricCard title="Collection Rate" value={`${Math.round(v.collectionRate)}%`} subtitle="of invoiced"
+          icon={<Percent className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
+        <MetricCard title="Overdue" value={formatCurrency(overdueTotal, "INR", true)} subtitle="past due date"
+          icon={<Clock className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
+        <MetricCard title="Debtors" value={String(v.debtors.length)} subtitle="with balance"
+          icon={<Users className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
       </div>
 
-      {/* ── 4 metric cards ───────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter-delay-1">
-        <MetricCard
-          title="Total Outstanding"
-          value={formatCurrency(totalOutstanding, "INR", true)}
-          subtitle="All receivables"
-          severity={totalOutstanding > 0 ? "warning" : "good"}
-        />
-        <MetricCard
-          title="0–30 Days"
-          value={formatCurrency(aging.overdue030, "INR", true)}
-          subtitle="Recently overdue"
-          severity={aging.overdue030 > 0 ? "warning" : "good"}
-        />
-        <MetricCard
-          title="31–60 Days"
-          value={formatCurrency(aging.overdue3160, "INR", true)}
-          subtitle="Needs follow-up"
-          severity={aging.overdue3160 > 0 ? "warning" : "good"}
-        />
-        <MetricCard
-          title="90+ Days"
-          value={formatCurrency(aging.overdue90plus, "INR", true)}
-          subtitle="Serious default risk"
-          severity={aging.overdue90plus > 0 ? "critical" : "good"}
-        />
-      </div>
-
-      {/* ── Debtor table + Aging buckets ─────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-delay-2">
-
-        {/* Debtor table */}
-        <div
-          className="lg:col-span-2 rounded-xl border border-border overflow-hidden transition-all duration-200 hover:border-border"
-          style={{ background: "hsl(var(--card))" }}
-        >
-          <div className="px-4 pt-3.5 pb-0">
-            <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">Outstanding Debtors</p>
-          </div>
-          <div className="px-4 pb-4 pt-2">
-            {debtors.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-32 gap-2">
-                <div className="h-9 w-9 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
-                  <span className="text-success">✓</span>
-                </div>
-                <p className="text-[12px] text-muted-foreground/70">No outstanding receivables</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto mt-1">
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr>
-                      <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Entity</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Outstanding</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden md:table-cell">Avg Days</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden md:table-cell">Last Invoice</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {debtors.map((debtor) => {
-                      const avgDays = debtor.avg_payment_days ?? 0;
-                      const isCritical = avgDays > 90;
-                      const isWarning = avgDays > 30 && !isCritical;
-                      return (
-                        <tr key={debtor.id} className="border-t border-border group">
-                          <td className="py-2.5">
-                            <p className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">{debtor.name}</p>
-                            {debtor.email && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{debtor.email}</p>}
-                          </td>
-                          <td className="py-2.5 text-right num font-bold text-muted-foreground">
-                            {formatCurrency(debtor.outstanding_amount, "INR", true)}
-                          </td>
-                          <td className="py-2.5 text-right hidden md:table-cell">
-                            {avgDays > 0 ? (
-                              <span
-                                className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-semibold num"
-                                style={isCritical
-                                  ? { background: "rgba(232,58,58,0.12)", color: "#e83a3a" }
-                                  : isWarning
-                                  ? { background: "rgba(245,145,22,0.12)", color: "#f59116" }
-                                  : { background: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
-                                }
-                              >
-                                {Math.round(avgDays)}d
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground/70">—</span>
-                            )}
-                          </td>
-                          <td className="py-2.5 text-right text-muted-foreground/70 hidden md:table-cell">
-                            {debtor.last_transaction_date ? formatDate(debtor.last_transaction_date) : "—"}
-                          </td>
-                          <td className="py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <Link
-                                href={`/dashboard/intelligence?ask=Send reminder to ${encodeURIComponent(debtor.name)}`}
-                                className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-primary/20 bg-primary/[0.07] text-primary/60 hover:text-primary hover:bg-primary/[0.12] transition-all"
-                              >
-                                <Send className="h-2.5 w-2.5" />
-                                Remind
-                              </Link>
-                              {isCritical && (
-                                <Link
-                                  href={`/dashboard/intelligence?ask=Escalation steps for ${encodeURIComponent(debtor.name)}`}
-                                  className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-red-400/20 bg-red-400/[0.07] text-destructive/60 hover:text-destructive hover:bg-red-400/[0.12] transition-all"
-                                >
-                                  Escalate
-                                </Link>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Aging breakdown */}
-        <Panel title="Overdue Aging">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
+        <SectionCard title="Aging" subtitle="overdue by bucket">
           <div className="space-y-3 mt-1">
-            {agingBuckets.map((bucket) => (
-              <div key={bucket.label}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[11px] text-muted-foreground">{bucket.label}</span>
-                  <span className="num text-[12px] font-semibold" style={{ color: bucket.textColor }}>
-                    {formatCurrency(bucket.amount, "INR", true)}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden">
-                  <div
-                    className="h-full rounded-full transition-all duration-700"
-                    style={{
-                      width: `${(bucket.amount / maxAmount) * 100}%`,
-                      background: bucket.color,
-                      opacity: 0.75,
-                    }}
-                  />
-                </div>
+            {buckets.map((b) => (
+              <div key={b.label} className="flex items-center gap-2.5 text-[11.5px]">
+                <span className="text-muted-foreground w-[72px] flex-shrink-0">{b.label}</span>
+                <span className="flex-1 h-2 rounded-full bg-accent overflow-hidden">
+                  <span className="block h-full rounded-full" style={{ width: `${(b.amount / maxBucket) * 100}%`, background: b.color }} />
+                </span>
+                <span className="num text-foreground/70 w-[56px] text-right flex-shrink-0">{formatCurrency(b.amount, "INR", true)}</span>
               </div>
             ))}
+          </div>
+        </SectionCard>
 
-            {totalOutstanding > 0 && (
-              <div className="pt-3 border-t border-border">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-muted-foreground/70">Collection rate</span>
-                  <span className="num text-[13px] font-bold text-muted-foreground">{collectionRate.toFixed(1)}%</span>
-                </div>
+        <SectionCard title="Top Debtors" className="lg:col-span-2">
+          {v.debtors.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-[160px] gap-2">
+              <div className="h-9 w-9 rounded-full bg-success/10 border border-success/20 flex items-center justify-center">
+                <span className="text-success">✓</span>
               </div>
-            )}
-          </div>
-        </Panel>
-
+              <p className="text-[12px] text-muted-foreground">No outstanding receivables</p>
+            </div>
+          ) : (
+            <div className="space-y-2.5 mt-1">
+              {v.debtors.slice(0, 6).map((d, i) => (
+                <div key={i} className="flex items-center gap-2.5">
+                  <div className="h-6 w-6 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0 bg-primary/10 text-primary border border-primary/15">{i + 1}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-[12px] text-foreground/80 truncate">{d.name}</span>
+                      <span className="num text-[11.5px] font-semibold text-foreground/70 flex-shrink-0">{formatCurrency(d.outstanding_amount, "INR", true)}</span>
+                    </div>
+                    <span className="block h-1.5 rounded-full bg-accent overflow-hidden">
+                      <span className="block h-full rounded-full bg-metric-margin" style={{ width: `${(d.outstanding_amount / maxDebtor) * 100}%` }} />
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
       </div>
-
-      {/* ── Overdue invoices table ────────────────────────────────────── */}
-      <Panel title="Overdue Invoices">
-        {overdueInvoices.length === 0 ? (
-          <div className="flex items-center justify-center h-20 text-[13px] text-muted-foreground/70">
-            No overdue invoices
-          </div>
-        ) : (
-          <div className="overflow-x-auto mt-1">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr>
-                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Invoice #</th>
-                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Customer</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Amount</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden sm:table-cell">Due Date</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Overdue</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {overdueInvoices.map((invoice) => {
-                  const isCritical = invoice.days_overdue > 90;
-                  const isWarning = invoice.days_overdue > 30 && !isCritical;
-                  return (
-                    <tr key={invoice.invoice_id} className="border-t border-border group">
-                      <td className="py-2 t-mono text-[11px] text-muted-foreground/70">{invoice.invoice_number}</td>
-                      <td className="py-2 font-medium text-muted-foreground group-hover:text-foreground transition-colors">{invoice.entity_name}</td>
-                      <td className="py-2 text-right num font-semibold text-muted-foreground">
-                        {formatCurrency(invoice.amount, "INR", true)}
-                      </td>
-                      <td className="py-2 text-right text-muted-foreground/70 hidden sm:table-cell">
-                        {formatDate(invoice.due_date)}
-                      </td>
-                      <td className="py-2 text-right">
-                        <span
-                          className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-semibold num"
-                          style={isCritical
-                            ? { background: "rgba(232,58,58,0.12)", color: "#e83a3a" }
-                            : isWarning
-                            ? { background: "rgba(245,145,22,0.12)", color: "#f59116" }
-                            : { background: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
-                          }
-                        >
-                          {invoice.days_overdue}d
-                        </span>
-                      </td>
-                      <td className="py-2 text-right">
-                        <Link
-                          href={`/dashboard/intelligence?ask=Draft reminder for ${encodeURIComponent(invoice.entity_name)}`}
-                          className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-border bg-accent/40 text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all"
-                        >
-                          <Send className="h-2.5 w-2.5" />
-                          Send
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Panel>
     </div>
   );
 }
