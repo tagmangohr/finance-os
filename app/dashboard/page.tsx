@@ -3,95 +3,112 @@ export const dynamic = 'force-dynamic';
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
-  TrendingUp, Send, Search, Receipt, Zap, Wallet, Gauge, Coins, Flame,
-  AlertCircle, AlertTriangle, Info,
+  TrendingUp, Receipt, Zap, Wallet, Gauge, Coins, Flame, Sparkles, ArrowRight,
 } from "lucide-react";
-
-// ─── Small presentational helpers (health signals + unit tiles) ──────
-function Signal({ label, tone }: { label: string; tone: "good" | "warn" | "bad" }) {
-  const dot = tone === "good" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-destructive";
-  return (
-    <div className="flex items-center gap-2 text-muted-foreground">
-      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
-      <span className="truncate">{label}</span>
-    </div>
-  );
-}
-function Unit({ label, value, color }: { label: string; value?: string; color?: string }) {
-  return (
-    <div>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
-      {value ? (
-        <p className="text-[15px] font-semibold" style={color ? { color } : undefined}>{value}</p>
-      ) : (
-        <span className="inline-block mt-1 text-[10px] font-medium text-primary bg-primary/10 rounded px-1.5 py-0.5">add data</span>
-      )}
-    </div>
-  );
-}
 import { getFinancialSummary, getOrgId } from "@/lib/data";
+import type { DashboardSummary } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { RevenueChart } from "@/components/charts/revenue-chart";
-import { CashFlowChart } from "@/components/charts/cashflow-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
-import { Button } from "@/components/ui/button";
+import { InflowOutflowChart } from "@/components/charts/inflow-outflow-chart";
 import { formatCurrency, formatRunway } from "@/lib/utils";
-import type { IntelligenceAlert } from "@/lib/supabase/types";
 
-// ─── Alert severity styling (token-based) ───────────────────────────
-const alertIcons = {
-  critical: { Icon: AlertCircle,   dot: "bg-destructive", border: "border-destructive/20", bg: "bg-destructive/[0.06]", color: "text-destructive" },
-  warning:  { Icon: AlertTriangle, dot: "bg-warning",     border: "border-warning/20",     bg: "bg-warning/[0.06]",     color: "text-warning" },
-  info:     { Icon: Info,          dot: "bg-primary/60",  border: "border-primary/15",     bg: "bg-primary/[0.05]",     color: "text-primary" },
+// ─── View model ──────────────────────────────────────────────────────
+type DebtorLite = { id: string; name: string; outstanding_amount: number };
+type View = {
+  preview: boolean;
+  cash: number; runwayDays: number; mrr: number; burn: number; receivables: number;
+  cashSpark: number[]; mrrSpark: number[];
+  mrrGrowth: number | null; burnChange: number | null;
+  inflowOutflow: { label: string; inflow: number; outflow: number }[];
+  expenses: { category: string; amount: number; pct: number }[];
+  revenue: { month: string; amount: number }[];
+  debtors: DebtorLite[];
+  healthScore: number;
 };
 
-function AlertsCard({ alerts }: { alerts: IntelligenceAlert[] }) {
-  const top = alerts.slice(0, 4);
-  return (
-    <div className="rounded-xl border border-border bg-card p-3.5 flex flex-col gap-1 transition-all duration-200 hover:border-border/80 h-full">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">Active Alerts</span>
-        {alerts.length > 0 && (
-          <span className="inline-flex items-center justify-center h-4 min-w-[16px] rounded-full bg-warning/20 text-warning text-[9px] font-bold px-1">
-            {alerts.length}
-          </span>
-        )}
-      </div>
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-      {top.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center py-4 gap-2">
-          <div className="h-7 w-7 rounded-full bg-success/10 border border-success/20 flex items-center justify-center">
-            <span className="text-success text-xs">✓</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground">All clear</p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-1.5 mt-1">
-          {top.map((alert) => {
-            const cfg = alertIcons[alert.severity];
-            return (
-              <div key={alert.id} className={`flex items-start gap-2 rounded-lg border p-2 ${cfg.bg} ${cfg.border}`}>
-                <span className={`h-1.5 w-1.5 rounded-full mt-1.5 flex-shrink-0 ${cfg.dot}`} />
-                <div className="min-w-0">
-                  <p className={`text-[11px] font-semibold truncate ${cfg.color}`}>{alert.title}</p>
-                  <p className="text-[10.5px] text-muted-foreground mt-0.5 line-clamp-1">{alert.message}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+// Rich sample data so the dashboard looks fully alive before any source is connected.
+const SAMPLE: View = {
+  preview: true,
+  cash: 14200000, runwayDays: 426, mrr: 820000, burn: 920000, receivables: 540000,
+  cashSpark: [11000000, 11500000, 12000000, 12400000, 13000000, 13200000, 13800000, 14200000],
+  mrrSpark: [540000, 590000, 610000, 660000, 700000, 740000, 780000, 820000],
+  mrrGrowth: 12, burnChange: 6,
+  inflowOutflow: [
+    { label: "Feb", inflow: 620000, outflow: 500000 },
+    { label: "Mar", inflow: 680000, outflow: 460000 },
+    { label: "Apr", inflow: 550000, outflow: 580000 },
+    { label: "May", inflow: 800000, outflow: 400000 },
+    { label: "Jun", inflow: 720000, outflow: 600000 },
+    { label: "Jul", inflow: 900000, outflow: 480000 },
+    { label: "Aug", inflow: 660000, outflow: 540000 },
+    { label: "Sep", inflow: 840000, outflow: 420000 },
+  ],
+  expenses: [
+    { category: "Production", amount: 2304200, pct: 48 },
+    { category: "Marketing", amount: 1223000, pct: 25 },
+    { category: "Logistics", amount: 540500, pct: 11 },
+    { category: "People", amount: 420000, pct: 9 },
+    { category: "Operations", amount: 210000, pct: 4 },
+    { category: "Other", amount: 120000, pct: 3 },
+  ],
+  revenue: [
+    { month: "2024-07", amount: 520000 }, { month: "2024-08", amount: 560000 },
+    { month: "2024-09", amount: 540000 }, { month: "2024-10", amount: 600000 },
+    { month: "2024-11", amount: 640000 }, { month: "2024-12", amount: 700000 },
+    { month: "2025-01", amount: 680000 }, { month: "2025-02", amount: 720000 },
+    { month: "2025-03", amount: 760000 }, { month: "2025-04", amount: 790000 },
+    { month: "2025-05", amount: 800000 }, { month: "2025-06", amount: 820000 },
+  ],
+  debtors: [
+    { id: "s1", name: "Acme Corp", outstanding_amount: 180000 },
+    { id: "s2", name: "Globex", outstanding_amount: 120000 },
+    { id: "s3", name: "Initech", outstanding_amount: 90000 },
+    { id: "s4", name: "Umbrella Co", outstanding_amount: 85000 },
+    { id: "s5", name: "Soylent", outstanding_amount: 65000 },
+  ],
+  healthScore: 78,
+};
+
+function buildReal(s: DashboardSummary): View {
+  // Aggregate daily cash flow into the last ~8 months for the grouped bars.
+  const byMonth = new Map<string, { inflow: number; outflow: number }>();
+  for (const d of s.cashFlowData) {
+    const key = d.date.slice(0, 7);
+    const cur = byMonth.get(key) ?? { inflow: 0, outflow: 0 };
+    cur.inflow += d.inflow; cur.outflow += d.outflow;
+    byMonth.set(key, cur);
+  }
+  const inflowOutflow = [...byMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-8)
+    .map(([k, v]) => ({ label: MONTHS[Number(k.slice(5, 7)) - 1] ?? k, inflow: v.inflow, outflow: v.outflow }));
+
+  const runwayMonths = s.runwayDays / 30;
+  const healthScore = Math.max(0, Math.min(100, Math.round(
+    (Math.min(runwayMonths, 18) / 18) * 60 + (s.burnRate > 0 ? Math.min(s.mrr / s.burnRate, 1) : 1) * 40
+  )));
+
+  return {
+    preview: false,
+    cash: s.cashBalance, runwayDays: s.runwayDays, mrr: s.mrr, burn: s.burnRate,
+    receivables: s.topDebtors.reduce((a, d) => a + (d.outstanding_amount ?? 0), 0),
+    cashSpark: s.cashFlowData.slice(-12).map((c) => c.balance),
+    mrrSpark: s.revenueByMonth.slice(-8).map((r) => r.amount),
+    mrrGrowth: s.mrrGrowth || null, burnChange: s.burnChange || null,
+    inflowOutflow,
+    expenses: s.categoryBreakdown,
+    revenue: s.revenueByMonth,
+    debtors: s.topDebtors.map((d) => ({ id: d.id, name: d.name, outstanding_amount: d.outstanding_amount })),
+    healthScore,
+  };
 }
 
-// ─── Section card wrapper ─────────────────────────────────────────────
+// ─── Section wrapper ─────────────────────────────────────────────────
 function SectionCard({ title, subtitle, action, children, className }: {
-  title: string;
-  subtitle?: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
+  title: string; subtitle?: string; action?: React.ReactNode; children: React.ReactNode; className?: string;
 }) {
   return (
     <div className={`rounded-xl border border-border bg-card overflow-hidden transition-all duration-200 hover:border-border/80${className ? " " + className : ""}`}>
@@ -107,111 +124,130 @@ function SectionCard({ title, subtitle, action, children, className }: {
   );
 }
 
+function Signal({ label, tone }: { label: string; tone: "good" | "warn" | "bad" }) {
+  const dot = tone === "good" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-destructive";
+  return (
+    <div className="flex items-center gap-2 text-muted-foreground">
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
+      <span className="truncate">{label}</span>
+    </div>
+  );
+}
+function Unit({ label, value, color }: { label: string; value?: string; color?: string }) {
+  return (
+    <div>
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      {value ? (
+        <p className="text-[16px] font-semibold" style={color ? { color } : undefined}>{value}</p>
+      ) : (
+        <span className="inline-block mt-1 text-[10px] font-medium text-primary bg-primary/10 rounded px-1.5 py-0.5">add data</span>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────────
 export default async function DashboardPage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
 
   const summary = await getFinancialSummary();
-  const {
-    alerts, topDebtors, revenueByMonth, cashFlowData, categoryBreakdown,
-    mrr, burnRate, cashBalance, runwayDays, mrrGrowth, burnChange, hasData,
-  } = summary;
+  const v = summary.hasData ? buildReal(summary) : SAMPLE;
 
-  const mrrSparkline = revenueByMonth.slice(-8).map((r) => r.amount);
-  const balanceSparkline = cashFlowData.slice(-12).map((c) => c.balance);
-  const totalOutstanding = topDebtors.reduce((s, d) => s + (d.outstanding_amount ?? 0), 0);
-
-  // Financial-health score — only meaningful once there's data (avoid a fake
-  // "great score" when everything is ₹0 and runway is artificially infinite).
-  const runwayMonths = runwayDays / 30;
-  const healthScore = hasData
-    ? Math.max(0, Math.min(100, Math.round(
-        (Math.min(runwayMonths, 18) / 18) * 60 + (burnRate > 0 ? Math.min(mrr / burnRate, 1) : 1) * 40
-      )))
-    : null;
+  const runwayMonths = v.runwayDays / 30;
   const ringC = 2 * Math.PI * 40;
-  const ringDash = healthScore != null ? (healthScore / 100) * ringC : 0;
+  const ringDash = (v.healthScore / 100) * ringC;
 
   return (
     <div className="space-y-3 max-w-[1400px]">
 
-      {/* ── Empty state ─────────────────────────────────────────────── */}
-      {!hasData && (
-        <div className="rounded-xl border border-dashed border-border p-12 text-center bg-accent/30 animate-enter">
-          <div className="mx-auto h-14 w-14 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
-            <Receipt className="h-7 w-7 text-primary" />
-          </div>
-          <h3 className="font-bold text-foreground text-base mb-2">Connect your data</h3>
-          <p className="text-[13px] text-muted-foreground mb-5 max-w-sm mx-auto leading-relaxed">
-            Link a payment gateway or accounting tool to unlock your financial intelligence dashboard.
+      {/* Preview banner (sample data) */}
+      {v.preview && (
+        <div className="flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/[0.06] px-4 py-2.5 animate-enter">
+          <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
+          <p className="text-[12.5px] text-foreground/80 flex-1 min-w-0">
+            <span className="font-semibold text-foreground">Preview — sample data.</span>{" "}
+            Connect a source to replace this with your real numbers.
           </p>
-          <Button asChild className="gap-2">
-            <Link href="/dashboard/connectors">
-              <Zap className="h-4 w-4" />
-              Connect a data source
-            </Link>
-          </Button>
+          <Link href="/dashboard/connectors" className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors flex-shrink-0">
+            <Zap className="h-3.5 w-3.5" /> Connect
+          </Link>
         </div>
       )}
 
-      {/* ── KPI strip ──────────────────────────────────────────────── */}
+      {/* KPI strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 animate-enter">
-        <MetricCard
-          title="Cash Balance" value={formatCurrency(cashBalance, "INR", true)}
-          icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))"
-          sparklineData={balanceSparkline.length >= 2 ? balanceSparkline : undefined}
-        />
-        <MetricCard
-          title="Runway" value={formatRunway(runwayDays)}
-          subtitle={`${formatCurrency(burnRate, "INR", true)}/mo burn`}
-          icon={<Gauge className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))"
-        />
-        <MetricCard
-          title="MRR" value={formatCurrency(mrr, "INR", true)}
-          trend={mrrGrowth !== 0 ? mrrGrowth : undefined} trendLabel="MoM"
-          icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))"
-          sparklineData={mrrSparkline.length >= 2 ? mrrSparkline : undefined}
-        />
-        <MetricCard
-          title="ARR" value={formatCurrency(mrr * 12, "INR", true)}
-          subtitle="Annual run rate"
-          icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))"
-        />
-        <MetricCard
-          title="Burn Rate" value={`${formatCurrency(burnRate, "INR", true)}/mo`}
-          subtitle={burnChange !== 0 ? `${burnChange > 0 ? "+" : ""}${burnChange.toFixed(0)}% MoM` : "Operating burn"}
-          icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))"
-        />
-        <MetricCard
-          title="Receivables" value={formatCurrency(totalOutstanding, "INR", true)}
-          subtitle="Top accounts"
-          icon={<Receipt className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))"
-        />
+        <MetricCard title="Cash Balance" value={formatCurrency(v.cash, "INR", true)}
+          icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" sparklineData={v.cashSpark} />
+        <MetricCard title="Runway" value={formatRunway(v.runwayDays)} subtitle={`${formatCurrency(v.burn, "INR", true)}/mo burn`}
+          icon={<Gauge className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
+        <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)}
+          trend={v.mrrGrowth ?? undefined} trendLabel="MoM"
+          icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" sparklineData={v.mrrSpark} />
+        <MetricCard title="ARR" value={formatCurrency(v.mrr * 12, "INR", true)} subtitle="Annual run rate"
+          icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
+        <MetricCard title="Burn Rate" value={`${formatCurrency(v.burn, "INR", true)}/mo`}
+          subtitle={v.burnChange != null ? `${v.burnChange > 0 ? "+" : ""}${v.burnChange.toFixed(0)}% MoM` : "Operating burn"}
+          icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))" />
+        <MetricCard title="Receivables" value={formatCurrency(v.receivables, "INR", true)} subtitle="Top accounts"
+          icon={<Receipt className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
       </div>
 
-      {/* ── Revenue (2/3) + Top debtors (1/3) ───────────────────────── */}
+      {/* Inflow vs outflow + expense donut */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
-        <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
-          {revenueByMonth.length > 0 ? (
-            <RevenueChart data={revenueByMonth} />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-52 text-center gap-3">
-              <TrendingUp className="h-7 w-7 text-muted-foreground/40" />
-              <p className="text-[13px] text-muted-foreground">No revenue data yet</p>
-              <Link href="/dashboard/connectors" className="text-[12px] text-primary hover:underline">Connect a source →</Link>
-            </div>
-          )}
+        <SectionCard title="Inflow vs Outflow" subtitle="last 8 months" className="lg:col-span-2"
+          action={<span className="text-[11px] text-muted-foreground"><span className="text-metric-revenue">●</span> in <span className="text-metric-runway">●</span> out</span>}>
+          <InflowOutflowChart data={v.inflowOutflow} />
         </SectionCard>
+        <SectionCard title="Expense Breakdown">
+          <CategoryChart data={v.expenses} />
+        </SectionCard>
+      </div>
 
-        <SectionCard
-          title="Top Debtors"
-          action={topDebtors.length > 0 ? (
+      {/* Health ring + unit economics */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-2">
+        <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
+          <svg viewBox="0 0 96 96" width="92" height="92" className="flex-shrink-0" role="img" aria-label={`Financial health score ${v.healthScore}`}>
+            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--accent))" strokeWidth="9" />
+            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--metric-profit))" strokeWidth="9" strokeLinecap="round"
+              strokeDasharray={`${ringDash} ${ringC}`} transform="rotate(-90 48 48)" />
+            <text x="48" y="46" textAnchor="middle" className="fill-foreground" style={{ fontSize: 22, fontWeight: 700 }}>{v.healthScore}</text>
+            <text x="48" y="62" textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 9 }}>health</text>
+          </svg>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-foreground mb-2">Financial health</p>
+            <div className="space-y-1.5 text-[11.5px]">
+              <Signal label={`Runway ${formatRunway(v.runwayDays)}`} tone={runwayMonths >= 12 ? "good" : runwayMonths >= 6 ? "warn" : "bad"} />
+              <Signal label={`Burn ${formatCurrency(v.burn, "INR", true)}/mo`} tone={v.burn === 0 || v.mrr >= v.burn ? "good" : "warn"} />
+              <Signal label={`MRR ${formatCurrency(v.mrr, "INR", true)}`} tone={v.mrr > 0 ? "good" : "bad"} />
+            </div>
+          </div>
+        </div>
+
+        <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
+          <p className="text-[13px] font-semibold text-foreground mb-3">Unit economics</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
+            <Unit label="MRR" value={formatCurrency(v.mrr, "INR", true)} color="hsl(var(--metric-revenue))" />
+            <Unit label="ARR" value={formatCurrency(v.mrr * 12, "INR", true)} color="hsl(var(--metric-profit))" />
+            <Unit label="Customers" value={v.preview ? "1,284" : undefined} color="hsl(var(--metric-cash))" />
+            <Unit label="ARPU" value={v.preview ? "₹6,380" : undefined} color="hsl(var(--metric-margin))" />
+            <Unit label="CAC" />
+            <Unit label="LTV / CAC" />
+          </div>
+        </div>
+      </div>
+
+      {/* Revenue trend + top debtors */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-3">
+        <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
+          <RevenueChart data={v.revenue} />
+        </SectionCard>
+        <SectionCard title="Top Debtors"
+          action={!v.preview && v.debtors.length > 0 ? (
             <Link href="/dashboard/collections" className="text-[10.5px] text-muted-foreground hover:text-primary transition-colors">View all →</Link>
-          ) : undefined}
-        >
-          {topDebtors.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-[220px] gap-2">
+          ) : undefined}>
+          {v.debtors.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-[200px] gap-2">
               <div className="h-9 w-9 rounded-full bg-success/10 border border-success/20 flex items-center justify-center">
                 <span className="text-success">✓</span>
               </div>
@@ -219,14 +255,14 @@ export default async function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-2 mt-1">
-              {topDebtors.slice(0, 5).map((debtor, idx) => (
-                <div key={debtor.id} className="flex items-center gap-2.5 group">
+              {v.debtors.slice(0, 5).map((d, idx) => (
+                <div key={d.id} className="flex items-center gap-2.5 group">
                   <div className="h-6 w-6 rounded-md flex items-center justify-center text-[10px] font-bold flex-shrink-0 bg-primary/10 text-primary border border-primary/15">
                     {idx + 1}
                   </div>
-                  <p className="text-[12px] text-muted-foreground truncate flex-1 group-hover:text-foreground transition-colors">{debtor.name}</p>
+                  <p className="text-[12px] text-muted-foreground truncate flex-1 group-hover:text-foreground transition-colors">{d.name}</p>
                   <p className="num text-[12px] font-semibold text-foreground/80 flex-shrink-0">
-                    {formatCurrency(debtor.outstanding_amount, "INR", true)}
+                    {formatCurrency(d.outstanding_amount, "INR", true)}
                   </p>
                 </div>
               ))}
@@ -235,84 +271,13 @@ export default async function DashboardPage() {
         </SectionCard>
       </div>
 
-      {/* ── Cash flow + Expense breakdown ───────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 animate-enter-2">
-        <SectionCard title="Cash Flow" subtitle="last 30 days">
-          {cashFlowData.length > 0 ? (
-            <CashFlowChart data={cashFlowData} />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-52 text-center gap-2">
-              <p className="text-[13px] text-muted-foreground">No transaction data yet</p>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard title="Expense Breakdown">
-          {categoryBreakdown.length > 0 ? (
-            <CategoryChart data={categoryBreakdown} />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-52 text-center gap-2">
-              <Receipt className="h-7 w-7 text-muted-foreground/40" />
-              <p className="text-[13px] text-muted-foreground">No expense data yet</p>
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      {/* ── Financial health + unit economics ───────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-3">
-        <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-4">
-          <svg viewBox="0 0 96 96" width="90" height="90" className="flex-shrink-0" role="img" aria-label={`Financial health score ${healthScore ?? "not available"}`}>
-            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--accent))" strokeWidth="9" />
-            <circle cx="48" cy="48" r="40" fill="none" stroke="hsl(var(--metric-profit))" strokeWidth="9" strokeLinecap="round"
-              strokeDasharray={`${ringDash} ${ringC}`} transform="rotate(-90 48 48)" />
-            <text x="48" y="46" textAnchor="middle" className="fill-foreground" style={{ fontSize: 22, fontWeight: 700 }}>
-              {healthScore != null ? healthScore : "—"}
-            </text>
-            <text x="48" y="62" textAnchor="middle" className="fill-muted-foreground" style={{ fontSize: 9 }}>health</text>
-          </svg>
-          <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-semibold text-foreground mb-2">Financial health</p>
-            <div className="space-y-1.5 text-[11.5px]">
-              <Signal label={`Runway ${formatRunway(runwayDays)}`} tone={!hasData ? "warn" : runwayMonths >= 12 ? "good" : runwayMonths >= 6 ? "warn" : "bad"} />
-              <Signal label={`Burn ${formatCurrency(burnRate, "INR", true)}/mo`} tone={burnRate === 0 || mrr >= burnRate ? "good" : "warn"} />
-              <Signal label={`MRR ${formatCurrency(mrr, "INR", true)}`} tone={mrr > 0 ? "good" : "bad"} />
-            </div>
-          </div>
-        </div>
-
-        <div className="lg:col-span-2 rounded-xl border border-border bg-card p-4">
-          <p className="text-[13px] font-semibold text-foreground mb-3">Unit economics</p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
-            <Unit label="MRR" value={formatCurrency(mrr, "INR", true)} color="hsl(var(--metric-revenue))" />
-            <Unit label="ARR" value={formatCurrency(mrr * 12, "INR", true)} color="hsl(var(--metric-profit))" />
-            <Unit label="Customers" />
-            <Unit label="ARPU" />
-            <Unit label="CAC" />
-            <Unit label="LTV / CAC" />
-          </div>
-        </div>
-      </div>
-
-      {/* ── Alerts + quick actions ──────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-3">
-        <AlertsCard alerts={alerts} />
-        <div className="lg:col-span-2 rounded-xl border border-border bg-card p-3.5">
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground mb-2.5">Quick Actions</p>
-          <div className="flex flex-wrap gap-2">
-            {topDebtors.length > 0 && (
-              <Link href="/dashboard/collections" className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:bg-accent transition-all duration-150">
-                <Send className="h-3 w-3" />
-                Collect from {topDebtors[0].name}
-              </Link>
-            )}
-            <Link href="/dashboard/intelligence" className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[11.5px] font-medium border border-primary/20 bg-primary/[0.06] text-primary hover:bg-primary/[0.12] hover:border-primary/30 transition-all duration-150">
-              <Search className="h-3 w-3" />
-              Ask AI anything
-            </Link>
-          </div>
-        </div>
-      </div>
+      {/* Connect CTA (only in preview, footer) */}
+      {v.preview && (
+        <Link href="/dashboard/connectors" className="flex items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-accent/30 py-3 text-[12.5px] font-medium text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors animate-enter-4">
+          Connect a payment gateway or accounting tool to see your own numbers
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      )}
     </div>
   );
 }
