@@ -66,7 +66,7 @@ function RoleBadge({ role }: { role: Role }) {
   const { label, Icon } = ROLE_META[role];
   const styles: Record<Role, string> = {
     admin:   "bg-violet-500/[0.12] text-violet-400 border-violet-500/20",
-    manager: "bg-amber-500/[0.10] text-amber-400/90 border-amber-500/20",
+    manager: "bg-amber-500/[0.10] text-warning/90 border-amber-500/20",
     viewer:  "bg-blue-500/[0.10] text-blue-400/80 border-blue-500/15",
   };
   return (
@@ -81,7 +81,7 @@ function PageChip({ label, active }: { label: string; active: boolean }) {
     <span
       className={cn(
         "text-[9.5px] font-medium px-1.5 py-0.5 rounded",
-        active ? "bg-emerald-500/[0.12] text-emerald-400/80" : "bg-white/[0.04] text-white/20 line-through"
+        active ? "bg-emerald-500/[0.12] text-success/80" : "bg-accent/40 text-muted-foreground/70 line-through"
       )}
     >
       {label}
@@ -158,21 +158,21 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm" />
         <Dialog.Content
-          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none"
+          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none"
           style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
         >
           {/* Header */}
-          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-white/[0.05]">
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
             <div>
-              <Dialog.Title className="text-[14px] font-semibold text-white/85">
+              <Dialog.Title className="text-[14px] font-semibold text-foreground">
                 {mode === "invite" ? "Invite Team Member" : "Edit Permissions"}
               </Dialog.Title>
-              <p className="flex items-center gap-1 text-[11px] text-white/35 mt-0.5">
+              <p className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
                 <Building2 className="w-3 h-3" /> {orgName}
               </p>
             </div>
             <Dialog.Close asChild>
-              <button className="p-1.5 rounded-lg text-white/25 hover:text-white/60 hover:bg-white/[0.05] transition-colors">
+              <button className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </Dialog.Close>
@@ -182,11 +182,11 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
             {/* Email (invite only) */}
             {mode === "invite" && (
               <div>
-                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30 block mb-1.5">
+                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/20" />
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
                   <input
                     type="email"
                     value={email}
@@ -194,8 +194,8 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                     onKeyDown={(e) => e.key === "Enter" && handleSave()}
                     placeholder="colleague@company.com"
                     autoFocus
-                    className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-white/75 placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
-                    style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+                    className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                    style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
                   />
                 </div>
               </div>
@@ -203,7 +203,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
 
             {/* Role */}
             <div>
-              <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30 block mb-1.5">
+              <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
                 Role
               </label>
               <div className="grid grid-cols-3 gap-2">
@@ -217,17 +217,17 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                       onClick={() => setRole(r)}
                       className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
                       style={{
-                        background: active ? "rgba(124,82,240,0.10)" : "rgba(255,255,255,0.025)",
-                        border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "rgba(255,255,255,0.06)"}`,
+                        background: active ? "rgba(124,82,240,0.10)" : "hsl(var(--accent))",
+                        border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "hsl(var(--border))"}`,
                       }}
                     >
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-white/25")} />
-                        <span className={cn("text-[12px] font-semibold", active ? "text-white/85" : "text-white/40")}>
+                        <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-muted-foreground/70")} />
+                        <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
                           {label}
                         </span>
                       </div>
-                      <span className="text-[9.5px] leading-tight text-white/25">{desc}</span>
+                      <span className="text-[9.5px] leading-tight text-muted-foreground/70">{desc}</span>
                     </button>
                   );
                 })}
@@ -237,7 +237,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
             {/* Page access */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30">
+                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
                   Page Access
                 </label>
                 {restrictsPages && (
@@ -262,17 +262,17 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                       className={cn(
                         "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
                         on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
-                           : "bg-white/[0.025] border border-white/[0.05] hover:bg-white/[0.04]",
+                           : "bg-accent/40 border border-border hover:bg-accent",
                         !restrictsPages && "opacity-60"
                       )}
                     >
                       <div className={cn(
                         "w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0 border",
-                        on ? "bg-emerald-500/20 border-emerald-500/40" : "border-white/[0.12]"
+                        on ? "bg-emerald-500/20 border-emerald-500/40" : "border-border"
                       )}>
-                        {on && <Check className="w-2 h-2 text-emerald-400" />}
+                        {on && <Check className="w-2 h-2 text-success" />}
                       </div>
-                      <span className={cn("text-[11.5px] font-medium", on ? "text-white/75" : "text-white/30")}>
+                      <span className={cn("text-[11.5px] font-medium", on ? "text-muted-foreground" : "text-muted-foreground/70")}>
                         {label}
                       </span>
                     </button>
@@ -280,10 +280,10 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                 })}
               </div>
               {!restrictsPages && (
-                <p className="text-[10.5px] text-white/25 mt-1.5">Admins always have access to all pages.</p>
+                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Admins always have access to all pages.</p>
               )}
               {role === "manager" && (
-                <p className="text-[10.5px] text-white/25 mt-1.5">Managers can view and edit data on the selected pages.</p>
+                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
               )}
             </div>
           </div>
@@ -291,7 +291,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
           {/* Footer */}
           <div className="flex gap-2.5 px-5 pb-5 pt-2">
             <Dialog.Close asChild>
-              <Button variant="outline" className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]">
+              <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
                 Cancel
               </Button>
             </Dialog.Close>
@@ -338,27 +338,27 @@ function MemberRow({
   return (
     <div className={cn(
       "flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all",
-      isPending ? "border-amber-500/15 bg-amber-500/[0.03]" : "border-white/[0.06] bg-white/[0.02]"
+      isPending ? "border-amber-500/15 bg-amber-500/[0.03]" : "border-border bg-accent/40"
     )}>
       <Avatar name={member.full_name} email={member.invited_email} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-[12.5px] font-medium text-white/75 truncate">
+          <p className="text-[12.5px] font-medium text-muted-foreground truncate">
             {member.full_name || member.invited_email.split("@")[0]}
           </p>
           <RoleBadge role={member.role} />
           {isPending && (
-            <span className="text-[9.5px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/[0.12] text-amber-400/80 border border-amber-500/20">
+            <span className="text-[9.5px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/[0.12] text-warning/80 border border-amber-500/20">
               Pending
             </span>
           )}
         </div>
-        <p className="text-[10.5px] text-white/30 mt-0.5 truncate">{member.invited_email}</p>
+        <p className="text-[10.5px] text-muted-foreground/70 mt-0.5 truncate">{member.invited_email}</p>
 
         <div className="flex flex-wrap gap-1 mt-1.5">
           {member.role === "admin"
-            ? <span className="text-[9.5px] text-white/25 font-medium">All pages</span>
+            ? <span className="text-[9.5px] text-muted-foreground/70 font-medium">All pages</span>
             : PAGE_OPTIONS.map(({ value, label }) => (
                 <PageChip key={value} label={label} active={member.page_access.includes(value)} />
               ))}
@@ -369,7 +369,7 @@ function MemberRow({
         <button
           onClick={() => onEdit(member)}
           title="Edit permissions"
-          className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all"
         >
           <Settings2 className="w-3.5 h-3.5" />
         </button>
@@ -377,7 +377,7 @@ function MemberRow({
           onClick={doRevoke}
           disabled={revoking}
           title="Revoke access"
-          className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-red-500/[0.08] transition-all"
         >
           {revoking ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
         </button>
@@ -400,15 +400,15 @@ function OrgSection({
   const pending = group.members.filter((m) => m.status === "pending");
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid rgba(255,255,255,0.07)" }}>
+    <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid hsl(var(--border))" }}>
       <div
         className="px-4 py-3 flex items-center justify-between"
-        style={{ background: "rgba(255,255,255,0.02)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+        style={{ background: "hsl(var(--accent))", borderBottom: "1px solid hsl(var(--border))" }}
       >
         <div className="flex items-center gap-2 min-w-0">
-          <Building2 className="w-3.5 h-3.5 text-white/30 flex-shrink-0" />
-          <span className="text-[13px] font-semibold text-white/80 truncate">{group.org.name}</span>
-          <span className="text-[10px] text-white/25 font-mono">
+          <Building2 className="w-3.5 h-3.5 text-muted-foreground/70 flex-shrink-0" />
+          <span className="text-[13px] font-semibold text-foreground truncate">{group.org.name}</span>
+          <span className="text-[10px] text-muted-foreground/70 font-mono">
             {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
           </span>
         </div>
@@ -419,7 +419,7 @@ function OrgSection({
 
       <div className="p-3 space-y-1.5">
         {group.members.length === 0 ? (
-          <p className="text-[12px] text-white/25 text-center py-4">
+          <p className="text-[12px] text-muted-foreground/70 text-center py-4">
             No members yet — invite someone to {group.org.name}
           </p>
         ) : (
@@ -466,8 +466,8 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
   return (
     <>
       <div>
-        <h1 className="text-[18px] font-bold text-white/85 tracking-tight">Team</h1>
-        <p className="text-[12px] text-white/35 mt-0.5">
+        <h1 className="text-[18px] font-bold text-foreground tracking-tight">Team</h1>
+        <p className="text-[12px] text-muted-foreground/70 mt-0.5">
           Invite teammates to any organisation you manage and control their role &amp; page access
         </p>
       </div>
@@ -484,7 +484,7 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
         ))}
       </div>
 
-      <p className="text-[11px] text-white/25">
+      <p className="text-[11px] text-muted-foreground/70">
         Pending invites activate automatically when the invitee signs in with that email address.
       </p>
 

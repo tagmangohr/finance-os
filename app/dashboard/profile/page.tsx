@@ -29,8 +29,8 @@ export default async function ProfilePage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-[18px] font-bold text-white/85 tracking-tight">Profile</h1>
-        <p className="text-[12px] text-white/35 mt-0.5">Manage your account and company settings</p>
+        <h1 className="text-[18px] font-bold text-foreground tracking-tight">Profile</h1>
+        <p className="text-[12px] text-muted-foreground/70 mt-0.5">Manage your account and company settings</p>
       </div>
 
       <ProfileClient

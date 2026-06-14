@@ -61,7 +61,7 @@ function Field({
 }) {
   return (
     <div>
-      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30 block mb-1.5">
+      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
         {label}
       </label>
       {children ?? (
@@ -71,11 +71,11 @@ function Field({
           onChange={(e) => onChange?.(e.target.value)}
           disabled={disabled}
           readOnly={readOnly}
-          className="w-full px-3 py-2 rounded-lg text-[13px] text-white/75 placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed read-only:opacity-50 read-only:cursor-default transition-all"
-          style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+          className="w-full px-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed read-only:opacity-50 read-only:cursor-default transition-all"
+          style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
         />
       )}
-      {hint && <p className="text-[10.5px] text-white/25 mt-1">{hint}</p>}
+      {hint && <p className="text-[10.5px] text-muted-foreground/70 mt-1">{hint}</p>}
     </div>
   );
 }
@@ -88,18 +88,18 @@ function SelectField({
 }) {
   return (
     <div>
-      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/30 block mb-1.5">
+      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
         {label}
       </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         disabled={disabled}
-        className="w-full px-3 py-2 rounded-lg text-[13px] text-white/75 focus:outline-none focus:ring-1 focus:ring-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed appearance-none"
-        style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+        className="w-full px-3 py-2 rounded-lg text-[13px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-violet-500/30 disabled:opacity-40 disabled:cursor-not-allowed appearance-none"
+        style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
       >
         {options.map((opt) => (
-          <option key={opt.value} value={opt.value} className="bg-[#0c1221]">{opt.label}</option>
+          <option key={opt.value} value={opt.value} className="bg-popover">{opt.label}</option>
         ))}
       </select>
     </div>
@@ -114,7 +114,7 @@ function Card({ icon: Icon, title, children }: {
   return (
     <div
       className="rounded-2xl p-5 space-y-4"
-      style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.07)" }}
+      style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
     >
       <div className="flex items-center gap-2.5 mb-1">
         <div
@@ -123,7 +123,7 @@ function Card({ icon: Icon, title, children }: {
         >
           <Icon className="w-3.5 h-3.5 text-violet-400" />
         </div>
-        <h2 className="text-[13px] font-semibold text-white/80">{title}</h2>
+        <h2 className="text-[13px] font-semibold text-foreground">{title}</h2>
       </div>
       {children}
     </div>
@@ -206,10 +206,10 @@ export function ProfileClient({ initial }: { initial: ProfileData }) {
             {avatarLetters}
           </div>
           <div>
-            <p className="text-[14px] font-semibold text-white/85">
+            <p className="text-[14px] font-semibold text-foreground">
               {fullName || data.user.email.split("@")[0]}
             </p>
-            <p className="text-[11px] text-white/35 mt-0.5">{data.user.email}</p>
+            <p className="text-[11px] text-muted-foreground/70 mt-0.5">{data.user.email}</p>
             {data.is_owner && (
               <div className="flex items-center gap-1 mt-1.5">
                 <Shield className="w-3 h-3 text-violet-400" />
@@ -269,7 +269,7 @@ export function ProfileClient({ initial }: { initial: ProfileData }) {
 
       {/* Save bar */}
       <div className="flex items-center justify-between pt-1">
-        <p className="text-[11px] text-white/25">
+        <p className="text-[11px] text-muted-foreground/70">
           {dirty ? "You have unsaved changes" : "All changes saved"}
         </p>
         <Button

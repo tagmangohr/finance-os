@@ -14,12 +14,12 @@ function Panel({ title, subtitle, children }: {
 }) {
   return (
     <div
-      className="rounded-xl border border-white/[0.06] overflow-hidden transition-all duration-200 hover:border-white/[0.09]"
-      style={{ background: "hsl(220 40% 7%)" }}
+      className="rounded-xl border border-border overflow-hidden transition-all duration-200 hover:border-border"
+      style={{ background: "hsl(var(--card))" }}
     >
       <div className="px-4 pt-3.5 pb-0">
-        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/40">{title}</p>
-        {subtitle && <p className="text-[10.5px] text-white/20 mt-0.5">{subtitle}</p>}
+        <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">{title}</p>
+        {subtitle && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{subtitle}</p>}
       </div>
       <div className="px-4 pb-4 pt-2">{children}</div>
     </div>
@@ -46,8 +46,8 @@ export default async function CollectionsPage() {
 
       {/* ── Page header ──────────────────────────────────────────────── */}
       <div className="animate-enter">
-        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-white/25 mb-0.5">Finance OS</p>
-        <h1 className="text-[22px] font-bold tracking-tight text-white/90 leading-none">Collections</h1>
+        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-muted-foreground/70 mb-0.5">Finance OS</p>
+        <h1 className="text-[22px] font-bold tracking-tight text-foreground leading-none">Collections</h1>
       </div>
 
       {/* ── 4 metric cards ───────────────────────────────────────────── */}
@@ -83,30 +83,30 @@ export default async function CollectionsPage() {
 
         {/* Debtor table */}
         <div
-          className="lg:col-span-2 rounded-xl border border-white/[0.06] overflow-hidden transition-all duration-200 hover:border-white/[0.09]"
-          style={{ background: "hsl(220 40% 7%)" }}
+          className="lg:col-span-2 rounded-xl border border-border overflow-hidden transition-all duration-200 hover:border-border"
+          style={{ background: "hsl(var(--card))" }}
         >
           <div className="px-4 pt-3.5 pb-0">
-            <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/40">Outstanding Debtors</p>
+            <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">Outstanding Debtors</p>
           </div>
           <div className="px-4 pb-4 pt-2">
             {debtors.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-32 gap-2">
                 <div className="h-9 w-9 rounded-full bg-emerald-400/10 border border-emerald-400/20 flex items-center justify-center">
-                  <span className="text-emerald-400">✓</span>
+                  <span className="text-success">✓</span>
                 </div>
-                <p className="text-[12px] text-white/25">No outstanding receivables</p>
+                <p className="text-[12px] text-muted-foreground/70">No outstanding receivables</p>
               </div>
             ) : (
               <div className="overflow-x-auto mt-1">
                 <table className="w-full text-[12px]">
                   <thead>
                     <tr>
-                      <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Entity</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Outstanding</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25 hidden md:table-cell">Avg Days</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25 hidden md:table-cell">Last Invoice</th>
-                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Action</th>
+                      <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Entity</th>
+                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Outstanding</th>
+                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden md:table-cell">Avg Days</th>
+                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden md:table-cell">Last Invoice</th>
+                      <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -115,12 +115,12 @@ export default async function CollectionsPage() {
                       const isCritical = avgDays > 90;
                       const isWarning = avgDays > 30 && !isCritical;
                       return (
-                        <tr key={debtor.id} className="border-t border-white/[0.04] group">
+                        <tr key={debtor.id} className="border-t border-border group">
                           <td className="py-2.5">
-                            <p className="font-medium text-white/60 group-hover:text-white/80 transition-colors">{debtor.name}</p>
-                            {debtor.email && <p className="text-[10.5px] text-white/25 mt-0.5">{debtor.email}</p>}
+                            <p className="font-medium text-muted-foreground group-hover:text-foreground transition-colors">{debtor.name}</p>
+                            {debtor.email && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{debtor.email}</p>}
                           </td>
-                          <td className="py-2.5 text-right num font-bold text-white/70">
+                          <td className="py-2.5 text-right num font-bold text-muted-foreground">
                             {formatCurrency(debtor.outstanding_amount, "INR", true)}
                           </td>
                           <td className="py-2.5 text-right hidden md:table-cell">
@@ -131,16 +131,16 @@ export default async function CollectionsPage() {
                                   ? { background: "rgba(232,58,58,0.12)", color: "#e83a3a" }
                                   : isWarning
                                   ? { background: "rgba(245,145,22,0.12)", color: "#f59116" }
-                                  : { background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.35)" }
+                                  : { background: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
                                 }
                               >
                                 {Math.round(avgDays)}d
                               </span>
                             ) : (
-                              <span className="text-white/20">—</span>
+                              <span className="text-muted-foreground/70">—</span>
                             )}
                           </td>
-                          <td className="py-2.5 text-right text-white/30 hidden md:table-cell">
+                          <td className="py-2.5 text-right text-muted-foreground/70 hidden md:table-cell">
                             {debtor.last_transaction_date ? formatDate(debtor.last_transaction_date) : "—"}
                           </td>
                           <td className="py-2.5 text-right">
@@ -155,7 +155,7 @@ export default async function CollectionsPage() {
                               {isCritical && (
                                 <Link
                                   href={`/dashboard/intelligence?ask=Escalation steps for ${encodeURIComponent(debtor.name)}`}
-                                  className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-red-400/20 bg-red-400/[0.07] text-red-400/60 hover:text-red-400 hover:bg-red-400/[0.12] transition-all"
+                                  className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-red-400/20 bg-red-400/[0.07] text-destructive/60 hover:text-destructive hover:bg-red-400/[0.12] transition-all"
                                 >
                                   Escalate
                                 </Link>
@@ -178,12 +178,12 @@ export default async function CollectionsPage() {
             {agingBuckets.map((bucket) => (
               <div key={bucket.label}>
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[11px] text-white/45">{bucket.label}</span>
+                  <span className="text-[11px] text-muted-foreground">{bucket.label}</span>
                   <span className="num text-[12px] font-semibold" style={{ color: bucket.textColor }}>
                     {formatCurrency(bucket.amount, "INR", true)}
                   </span>
                 </div>
-                <div className="h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
+                <div className="h-1.5 rounded-full bg-accent/40 overflow-hidden">
                   <div
                     className="h-full rounded-full transition-all duration-700"
                     style={{
@@ -197,10 +197,10 @@ export default async function CollectionsPage() {
             ))}
 
             {totalOutstanding > 0 && (
-              <div className="pt-3 border-t border-white/[0.05]">
+              <div className="pt-3 border-t border-border">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] text-white/35">Collection rate</span>
-                  <span className="num text-[13px] font-bold text-white/65">{collectionRate.toFixed(1)}%</span>
+                  <span className="text-[11px] text-muted-foreground/70">Collection rate</span>
+                  <span className="num text-[13px] font-bold text-muted-foreground">{collectionRate.toFixed(1)}%</span>
                 </div>
               </div>
             )}
@@ -212,7 +212,7 @@ export default async function CollectionsPage() {
       {/* ── Overdue invoices table ────────────────────────────────────── */}
       <Panel title="Overdue Invoices">
         {overdueInvoices.length === 0 ? (
-          <div className="flex items-center justify-center h-20 text-[13px] text-white/25">
+          <div className="flex items-center justify-center h-20 text-[13px] text-muted-foreground/70">
             No overdue invoices
           </div>
         ) : (
@@ -220,12 +220,12 @@ export default async function CollectionsPage() {
             <table className="w-full text-[12px]">
               <thead>
                 <tr>
-                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Invoice #</th>
-                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Customer</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Amount</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25 hidden sm:table-cell">Due Date</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Overdue</th>
-                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Action</th>
+                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Invoice #</th>
+                  <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Customer</th>
+                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Amount</th>
+                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden sm:table-cell">Due Date</th>
+                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Overdue</th>
+                  <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -233,13 +233,13 @@ export default async function CollectionsPage() {
                   const isCritical = invoice.days_overdue > 90;
                   const isWarning = invoice.days_overdue > 30 && !isCritical;
                   return (
-                    <tr key={invoice.invoice_id} className="border-t border-white/[0.04] group">
-                      <td className="py-2 t-mono text-[11px] text-white/30">{invoice.invoice_number}</td>
-                      <td className="py-2 font-medium text-white/60 group-hover:text-white/80 transition-colors">{invoice.entity_name}</td>
-                      <td className="py-2 text-right num font-semibold text-white/70">
+                    <tr key={invoice.invoice_id} className="border-t border-border group">
+                      <td className="py-2 t-mono text-[11px] text-muted-foreground/70">{invoice.invoice_number}</td>
+                      <td className="py-2 font-medium text-muted-foreground group-hover:text-foreground transition-colors">{invoice.entity_name}</td>
+                      <td className="py-2 text-right num font-semibold text-muted-foreground">
                         {formatCurrency(invoice.amount, "INR", true)}
                       </td>
-                      <td className="py-2 text-right text-white/30 hidden sm:table-cell">
+                      <td className="py-2 text-right text-muted-foreground/70 hidden sm:table-cell">
                         {formatDate(invoice.due_date)}
                       </td>
                       <td className="py-2 text-right">
@@ -249,7 +249,7 @@ export default async function CollectionsPage() {
                             ? { background: "rgba(232,58,58,0.12)", color: "#e83a3a" }
                             : isWarning
                             ? { background: "rgba(245,145,22,0.12)", color: "#f59116" }
-                            : { background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.35)" }
+                            : { background: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
                           }
                         >
                           {invoice.days_overdue}d
@@ -258,7 +258,7 @@ export default async function CollectionsPage() {
                       <td className="py-2 text-right">
                         <Link
                           href={`/dashboard/intelligence?ask=Draft reminder for ${encodeURIComponent(invoice.entity_name)}`}
-                          className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-white/[0.07] bg-white/[0.02] text-white/35 hover:text-white/70 hover:bg-white/[0.05] transition-all"
+                          className="inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-medium border border-border bg-accent/40 text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all"
                         >
                           <Send className="h-2.5 w-2.5" />
                           Send

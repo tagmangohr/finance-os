@@ -161,24 +161,24 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
         <Dialog.Content
-          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[640px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[640px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
           style={{ top: 0, left: 0, right: 0, bottom: 0, margin: "auto", maxHeight: "calc(100vh - 32px)" }}
         >
           {/* Header */}
-          <div className="flex items-start justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-white/[0.05]">
+          <div className="flex items-start justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-border">
             <div className="flex items-start gap-2.5">
               <Sparkles className="h-4 w-4 text-violet-400 mt-0.5 flex-shrink-0" />
               <div>
-                <Dialog.Title className="text-[14px] font-semibold text-white/85 leading-snug">
+                <Dialog.Title className="text-[14px] font-semibold text-foreground leading-snug">
                   Map Columns — {file.file_name}
                 </Dialog.Title>
-                <p className="text-[11px] text-white/30 mt-0.5">
+                <p className="text-[11px] text-muted-foreground/70 mt-0.5">
                   AI has suggested a mapping. Review and adjust before syncing.
                 </p>
               </div>
             </div>
             <Dialog.Close asChild>
-              <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06] flex-shrink-0">
+              <button className="text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded-lg p-1.5 hover:bg-accent flex-shrink-0">
                 <X className="h-4 w-4" />
               </button>
             </Dialog.Close>
@@ -188,15 +188,15 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
           <div className="px-5 py-4 overflow-y-auto flex-1 space-y-4">
             {loading && (
               <div className="flex items-center gap-2 py-6 justify-center">
-                <RefreshCw className="h-4 w-4 animate-spin text-white/30" />
-                <span className="text-sm text-white/30">Analysing columns with AI…</span>
+                <RefreshCw className="h-4 w-4 animate-spin text-muted-foreground/70" />
+                <span className="text-sm text-muted-foreground/70">Analysing columns with AI…</span>
               </div>
             )}
 
             {error && (
               <div className="flex items-start gap-2.5 rounded-xl px-3.5 py-3 bg-red-500/[0.08] border border-red-500/20">
-                <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0 mt-0.5" />
-                <p className="text-[12.5px] text-red-400/90">{error}</p>
+                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-[12.5px] text-destructive/90">{error}</p>
               </div>
             )}
 
@@ -205,15 +205,15 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                 {/* Sample data preview */}
                 {sampleRows.length > 0 && (
                   <div>
-                    <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/30 mb-2">
+                    <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 mb-2">
                       Sample Data Preview
                     </p>
-                    <div className="overflow-x-auto rounded-xl border border-white/[0.06] bg-white/[0.02]">
+                    <div className="overflow-x-auto rounded-xl border border-border bg-accent/40">
                       <table className="w-full text-[11px] font-mono">
                         <thead>
-                          <tr className="border-b border-white/[0.06]">
+                          <tr className="border-b border-border">
                             {headers.map((h) => (
-                              <th key={h} className="px-2.5 py-2 text-left text-white/40 font-medium whitespace-nowrap">
+                              <th key={h} className="px-2.5 py-2 text-left text-muted-foreground font-medium whitespace-nowrap">
                                 {h}
                               </th>
                             ))}
@@ -221,10 +221,10 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                         </thead>
                         <tbody>
                           {sampleRows.slice(0, 3).map((row, i) => (
-                            <tr key={i} className="border-b border-white/[0.03] last:border-0">
+                            <tr key={i} className="border-b border-border last:border-0">
                               {row.map((cell, j) => (
-                                <td key={j} className="px-2.5 py-1.5 text-white/50 whitespace-nowrap max-w-[120px] truncate">
-                                  {cell || <span className="text-white/15">—</span>}
+                                <td key={j} className="px-2.5 py-1.5 text-muted-foreground whitespace-nowrap max-w-[120px] truncate">
+                                  {cell || <span className="text-muted-foreground/70">—</span>}
                                 </td>
                               ))}
                             </tr>
@@ -237,10 +237,10 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
 
                 {/* Column mapping */}
                 <div>
-                  <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/30 mb-2">
+                  <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 mb-2">
                     Column Mapping
                   </p>
-                  <p className="text-[11px] text-white/25 mb-3">
+                  <p className="text-[11px] text-muted-foreground/70 mb-3">
                     Map each column to its financial meaning. AI suggestions are pre-filled — adjust any that look wrong.
                   </p>
 
@@ -258,10 +258,10 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
 
                       return (
                         <div key={col} className="flex items-center gap-2">
-                          <span className="text-[11px] text-white/40 font-mono bg-white/[0.04] border border-white/[0.06] px-2 py-1 rounded-lg flex-shrink-0 w-40 truncate">
+                          <span className="text-[11px] text-muted-foreground font-mono bg-accent/40 border border-border px-2 py-1 rounded-lg flex-shrink-0 w-40 truncate">
                             {col}
                           </span>
-                          <span className="text-[11px] text-white/20 flex-shrink-0">→</span>
+                          <span className="text-[11px] text-muted-foreground/70 flex-shrink-0">→</span>
 
                           {/* ── Inline creation mode ── */}
                           {creatingCustomFor === col ? (
@@ -276,7 +276,7 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                                   if (e.key === "Escape") { setCreatingCustomFor(null); setCustomInput(""); }
                                 }}
                                 placeholder="e.g. GST Number, Order ID, Tier…"
-                                className="flex-1 text-[12px] rounded-lg border border-violet-500/30 bg-violet-500/[0.05] text-white/75 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/40 placeholder:text-white/20"
+                                className="flex-1 text-[12px] rounded-lg border border-violet-500/30 bg-violet-500/[0.05] text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/40 placeholder:text-muted-foreground/70"
                               />
                               <button
                                 onClick={() => customInput.trim() && confirmCustomField(col)}
@@ -287,7 +287,7 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                               </button>
                               <button
                                 onClick={() => { setCreatingCustomFor(null); setCustomInput(""); }}
-                                className="p-1.5 rounded-lg text-white/25 hover:text-white/50 transition-colors"
+                                className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground transition-colors"
                               >
                                 <X className="h-3.5 w-3.5" />
                               </button>
@@ -328,23 +328,23 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                                   return next;
                                 });
                               }}
-                              className="flex-1 text-[12px] rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/65 px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                              className="flex-1 text-[12px] rounded-lg border border-border bg-accent/40 text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
                             >
                               {MAPPING_OPTS.map((opt) => (
-                                <option key={opt.value} value={opt.value} className="bg-[#0c1221]">
+                                <option key={opt.value} value={opt.value} className="bg-popover">
                                   {opt.label}
                                 </option>
                               ))}
                               {existingCustoms.length > 0 && (
                                 <optgroup label="Custom Fields">
                                   {existingCustoms.map((label) => (
-                                    <option key={`custom:${label}`} value={`custom:${label}`} className="bg-[#0c1221]">
+                                    <option key={`custom:${label}`} value={`custom:${label}`} className="bg-popover">
                                       {label}
                                     </option>
                                   ))}
                                 </optgroup>
                               )}
-                              <option value="__create__" className="bg-[#0c1221]">
+                              <option value="__create__" className="bg-popover">
                                 + Create custom field…
                               </option>
                             </select>
@@ -362,9 +362,9 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
           </div>
 
           {/* Footer */}
-          <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
+          <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-border flex-shrink-0">
             <Dialog.Close asChild>
-              <Button variant="outline" className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]">
+              <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
                 Cancel
               </Button>
             </Dialog.Close>
@@ -396,7 +396,7 @@ function MappingSummary({ mapping }: { mapping: DriveColumnMapping }) {
       className="rounded-xl px-3.5 py-3 space-y-1.5"
       style={{ background: "rgba(124,82,240,0.06)", border: "1px solid rgba(124,82,240,0.10)" }}
     >
-      <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/25 mb-1">Mapping Summary</p>
+      <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 mb-1">Mapping Summary</p>
       <MappingCheck label="Date column"   ok={hasDate}   detail={mapping.date ?? "not set"} />
       {hasSplit
         ? <>
@@ -408,26 +408,26 @@ function MappingSummary({ mapping }: { mapping: DriveColumnMapping }) {
 
       {/* Custom fields — informational, not required for validity */}
       {customFields.length > 0 && (
-        <div className="mt-1 pt-2 border-t border-white/[0.05]">
-          <p className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/20 mb-1.5">
+        <div className="mt-1 pt-2 border-t border-border">
+          <p className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 mb-1.5">
             Custom Fields ({customFields.length})
           </p>
           {customFields.map(([label, col]) => (
             <div key={label} className="flex items-center gap-2 py-0.5">
               <div className="h-1.5 w-1.5 rounded-full bg-violet-400/40 flex-shrink-0" />
-              <span className="text-[11.5px] text-white/45">{label}</span>
-              <span className="text-[11px] text-white/25 font-mono ml-auto truncate max-w-[140px]">{col}</span>
+              <span className="text-[11.5px] text-muted-foreground">{label}</span>
+              <span className="text-[11px] text-muted-foreground/70 font-mono ml-auto truncate max-w-[140px]">{col}</span>
             </div>
           ))}
-          <p className="text-[10.5px] text-white/20 mt-1">Stored in transaction metadata — queryable but not required.</p>
+          <p className="text-[10.5px] text-muted-foreground/70 mt-1">Stored in transaction metadata — queryable but not required.</p>
         </div>
       )}
 
       {!hasDate && (
-        <p className="text-[11px] text-amber-400/80 mt-1">⚠ You must map a Date column before syncing.</p>
+        <p className="text-[11px] text-warning/80 mt-1">⚠ You must map a Date column before syncing.</p>
       )}
       {!hasAmount && (
-        <p className="text-[11px] text-amber-400/80">⚠ Map at least one amount column (Amount, Debit, or Credit).</p>
+        <p className="text-[11px] text-warning/80">⚠ Map at least one amount column (Amount, Debit, or Credit).</p>
       )}
     </div>
   );
@@ -437,11 +437,11 @@ function MappingCheck({ label, ok, detail }: { label: string; ok: boolean; detai
   return (
     <div className="flex items-center gap-2">
       {ok
-        ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 flex-shrink-0" />
-        : <AlertCircle  className="h-3.5 w-3.5 text-amber-400/60 flex-shrink-0" />
+        ? <CheckCircle2 className="h-3.5 w-3.5 text-success flex-shrink-0" />
+        : <AlertCircle  className="h-3.5 w-3.5 text-warning/60 flex-shrink-0" />
       }
-      <span className="text-[11.5px] text-white/50">{label}</span>
-      <span className="text-[11px] text-white/25 font-mono ml-auto">{detail}</span>
+      <span className="text-[11.5px] text-muted-foreground">{label}</span>
+      <span className="text-[11px] text-muted-foreground/70 font-mono ml-auto">{detail}</span>
     </div>
   );
 }
@@ -495,20 +495,20 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
         <Dialog.Content
-          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
           style={{ top: 0, left: 0, right: 0, bottom: 0, margin: "auto", maxHeight: "calc(100vh - 32px)" }}
         >
-          <div className="flex items-start justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-white/[0.05]">
+          <div className="flex items-start justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-border">
             <div>
-              <Dialog.Title className="text-[14px] font-semibold text-white/85">
+              <Dialog.Title className="text-[14px] font-semibold text-foreground">
                 Add {provider === "google_drive" ? "Google Drive" : "OneDrive"} Folder
               </Dialog.Title>
-              <p className="text-[11px] text-white/30 mt-0.5">
+              <p className="text-[11px] text-muted-foreground/70 mt-0.5">
                 CSV / Excel files in this folder and its subfolders will be discovered.
               </p>
             </div>
             <Dialog.Close asChild>
-              <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+              <button className="text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded-lg p-1.5 hover:bg-accent">
                 <X className="h-4 w-4" />
               </button>
             </Dialog.Close>
@@ -516,26 +516,26 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
 
           <div className="px-5 py-4 space-y-3 flex-1">
             <div>
-              <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+              <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
                 {provider === "google_drive" ? "Folder URL" : "Folder Path or URL"}
               </label>
               <div className="relative">
-                <Link className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/20" />
+                <Link className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/70" />
                 <input
                   type="text"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) handleAdd(); }}
                   placeholder={placeholder}
-                  className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] text-white/75 placeholder:text-white/20 focus:outline-none focus:ring-1 focus:ring-violet-500/30 transition-all"
-                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+                  className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30 transition-all"
+                  style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
                 />
               </div>
             </div>
 
             {/* Folder type selector */}
             <div>
-              <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+              <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
                 Folder Type
               </label>
               <div className="grid grid-cols-2 gap-1.5">
@@ -548,8 +548,8 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                       onClick={() => setFolderType(opt.value)}
                       className="flex flex-col items-start px-3 py-2 rounded-lg text-left transition-all"
                       style={{
-                        background: active ? `${opt.color}14` : "rgba(255,255,255,0.025)",
-                        border: `1px solid ${active ? `${opt.color}45` : "rgba(255,255,255,0.06)"}`,
+                        background: active ? `${opt.color}14` : "hsl(var(--accent))",
+                        border: `1px solid ${active ? `${opt.color}45` : "hsl(var(--border))"}`,
                       }}
                     >
                       <div className="flex items-center gap-1.5 mb-0.5">
@@ -559,12 +559,12 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                         />
                         <span
                           className="text-[11.5px] font-semibold leading-none"
-                          style={{ color: active ? opt.color : "rgba(255,255,255,0.50)" }}
+                          style={{ color: active ? opt.color : "hsl(var(--muted-foreground))" }}
                         >
                           {opt.label}
                         </span>
                       </div>
-                      <span className="text-[10px] text-white/25 leading-snug pl-3">{opt.description}</span>
+                      <span className="text-[10px] text-muted-foreground/70 leading-snug pl-3">{opt.description}</span>
                     </button>
                   );
                 })}
@@ -573,10 +573,10 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
 
             {provider === "onedrive" && (
               <div
-                className="rounded-xl px-3 py-2.5 text-[11.5px] text-white/35"
-                style={{ background: "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.05)" }}
+                className="rounded-xl px-3 py-2.5 text-[11.5px] text-muted-foreground/70"
+                style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
               >
-                <span className="text-white/50 font-medium">Tip:</span> Enter a folder path like{" "}
+                <span className="text-muted-foreground font-medium">Tip:</span> Enter a folder path like{" "}
                 <code className="text-violet-400/70 font-mono text-[11px]">/Documents/Finance</code>{" "}
                 or paste a OneDrive share link.
               </div>
@@ -584,15 +584,15 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
 
             {error && (
               <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 bg-red-500/[0.08] border border-red-500/20">
-                <AlertCircle className="h-3.5 w-3.5 text-red-400 flex-shrink-0 mt-0.5" />
-                <p className="text-[11.5px] text-red-400/90">{error}</p>
+                <AlertCircle className="h-3.5 w-3.5 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-[11.5px] text-destructive/90">{error}</p>
               </div>
             )}
           </div>
 
-          <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
+          <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-border flex-shrink-0">
             <Dialog.Close asChild>
-              <Button variant="outline" className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]">
+              <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
                 Cancel
               </Button>
             </Dialog.Close>
@@ -663,7 +663,7 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
         className={cn(
           "flex items-center gap-2.5 px-3 py-2.5 rounded-xl border transition-all",
           file.mapping_confirmed
-            ? "border-white/[0.06] bg-white/[0.025]"
+            ? "border-border bg-accent/40"
             : "border-amber-500/15 bg-amber-500/[0.03]"
         )}
       >
@@ -672,7 +672,7 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
           className={cn(
             "flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded font-mono",
             isCsv
-              ? "bg-emerald-500/[0.15] text-emerald-400/70"
+              ? "bg-emerald-500/[0.15] text-success/70"
               : "bg-blue-500/[0.15] text-blue-400/70"
           )}
         >
@@ -681,8 +681,8 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
 
         {/* File info */}
         <div className="flex-1 min-w-0">
-          <p className="text-[12px] font-medium text-white/70 truncate">{file.file_name}</p>
-          <p className="text-[10px] text-white/25 mt-0.5">
+          <p className="text-[12px] font-medium text-muted-foreground truncate">{file.file_name}</p>
+          <p className="text-[10px] text-muted-foreground/70 mt-0.5">
             {file.mapping_confirmed
               ? file.last_sync_at
                 ? `Synced ${formatDate(file.last_sync_at)} · ${file.row_count?.toLocaleString() ?? "?"} rows`
@@ -693,12 +693,12 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
 
         {/* Status badge */}
         {file.mapping_confirmed ? (
-          <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-emerald-400/60">
+          <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-success/60">
             <CheckCircle2 className="h-3 w-3" />
             Mapped
           </span>
         ) : (
-          <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-amber-400/60">
+          <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-warning/60">
             <AlertCircle className="h-3 w-3" />
             Unmapped
           </span>
@@ -710,7 +710,7 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
             <button
               onClick={handleResetMapping}
               title="Reset mapping"
-              className="p-1.5 rounded-lg text-white/15 hover:text-white/50 hover:bg-white/[0.06] transition-all"
+              className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all"
             >
               <Sparkles className="h-3.5 w-3.5" />
             </button>
@@ -722,7 +722,7 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
             className={cn(
               "p-1.5 rounded-lg transition-all",
               file.mapping_confirmed
-                ? "text-white/20 hover:text-white/60 hover:bg-white/[0.06]"
+                ? "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
                 : "text-violet-400/50 hover:text-violet-400 hover:bg-violet-500/[0.08]"
             )}
           >
@@ -826,7 +826,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
   };
 
   return (
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] overflow-hidden">
+    <div className="rounded-xl border border-border bg-accent/40 overflow-hidden">
       {/* Folder header */}
       <div className="flex items-center gap-2 px-3 py-2.5">
         <button
@@ -834,11 +834,11 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
           className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
         >
           {expanded
-            ? <ChevronDown  className="h-3.5 w-3.5 text-white/25 flex-shrink-0" />
-            : <ChevronRight className="h-3.5 w-3.5 text-white/25 flex-shrink-0" />
+            ? <ChevronDown  className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0" />
+            : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0" />
           }
-          <span className="text-[12px] font-medium text-white/65 truncate">{folder.folder_name}</span>
-          <span className="text-[10px] text-white/25 ml-1 flex-shrink-0">
+          <span className="text-[12px] font-medium text-muted-foreground truncate">{folder.folder_name}</span>
+          <span className="text-[10px] text-muted-foreground/70 ml-1 flex-shrink-0">
             {folder.drive_files.length} file{folder.drive_files.length !== 1 ? "s" : ""}
           </span>
         </button>
@@ -847,7 +847,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
           target="_blank"
           rel="noopener noreferrer"
           title="Open in Drive"
-          className="p-1.5 rounded-lg text-white/15 hover:text-white/50 hover:bg-white/[0.06] transition-all flex-shrink-0"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all flex-shrink-0"
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
@@ -855,7 +855,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
           onClick={handleRescan}
           disabled={rescanning}
           title="Rescan folder for new files"
-          className="p-1.5 rounded-lg text-white/15 hover:text-violet-400 hover:bg-violet-500/[0.08] transition-all flex-shrink-0"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-violet-400 hover:bg-violet-500/[0.08] transition-all flex-shrink-0"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${rescanning ? "animate-spin" : ""}`} />
         </button>
@@ -863,7 +863,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
           onClick={handleRemove}
           disabled={removing}
           title="Remove folder"
-          className="p-1.5 rounded-lg text-white/15 hover:text-red-400 hover:bg-red-500/[0.08] transition-all flex-shrink-0"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-red-500/[0.08] transition-all flex-shrink-0"
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -873,7 +873,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
       {expanded && (
         <div className="px-3 pb-3 space-y-1.5">
           {folder.drive_files.length === 0 ? (
-            <p className="text-[11px] text-white/25 text-center py-2">No CSV or Excel files found</p>
+            <p className="text-[11px] text-muted-foreground/70 text-center py-2">No CSV or Excel files found</p>
           ) : (
             folder.drive_files.map((file) => (
               <DriveFileRow
@@ -970,7 +970,7 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
   return (
     <div
       className={cn(
-        "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-white/[0.1] shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
+        "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-border shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
         hasActive
           ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
           : "border-border/60"
@@ -978,17 +978,17 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
     >
       {/* Header */}
       <div className="flex items-start gap-3">
-        <div className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-white/[0.04] border border-white/[0.06]">
+        <div className="h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-accent/40 border border-border">
           {isGoogle ? <GoogleDriveIcon size={22} /> : <OneDriveIcon size={22} />}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white/80">{name}</p>
-          <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{desc}</p>
+          <p className="text-sm font-semibold text-foreground">{name}</p>
+          <p className="text-xs text-muted-foreground/70 mt-0.5 leading-relaxed">{desc}</p>
         </div>
         {hasActive && (
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-            <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
+            <span className="text-[10px] text-success/70 font-medium">Live</span>
           </div>
         )}
       </div>
@@ -1000,44 +1000,44 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
           <div
             className={cn(
               "rounded-xl border transition-all",
-              confirmDisconnect ? "border-red-500/30 bg-red-500/[0.06]" : "border-white/[0.06] bg-white/[0.025]"
+              confirmDisconnect ? "border-red-500/30 bg-red-500/[0.06]" : "border-border bg-accent/40"
             )}
           >
             {!confirmDisconnect ? (
               <div className="flex items-center gap-2 px-3 py-2.5">
-                <HardDrive className="h-3.5 w-3.5 text-white/25 flex-shrink-0" />
+                <HardDrive className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-white/70 truncate">
+                  <p className="text-xs font-medium text-muted-foreground truncate">
                     {connection.account_name ?? name}
                   </p>
-                  <p className="text-[10px] text-white/25 font-mono truncate">
+                  <p className="text-[10px] text-muted-foreground/70 font-mono truncate">
                     {connection.account_email ?? `Connected ${formatDate(connection.created_at)}`}
                   </p>
                 </div>
                 <button
                   onClick={() => setConfirmDisconnect(true)}
                   title="Disconnect"
-                  className="p-1.5 rounded-lg text-white/15 hover:text-red-400 hover:bg-red-500/[0.08] transition-all flex-shrink-0"
+                  className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-red-500/[0.08] transition-all flex-shrink-0"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             ) : (
               <div className="px-3 py-2.5 space-y-2">
-                <p className="text-[11px] text-red-400/90 leading-snug">
+                <p className="text-[11px] text-destructive/90 leading-snug">
                   Disconnect <span className="font-semibold">{name}</span>? All synced transactions will also be removed.
                 </p>
                 <div className="flex gap-1.5">
                   <button
                     onClick={() => setConfirmDisconnect(false)}
-                    className="flex-1 text-[11px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] rounded-lg py-1 transition-all"
+                    className="flex-1 text-[11px] font-medium text-muted-foreground hover:text-muted-foreground bg-accent/40 hover:bg-accent border border-border rounded-lg py-1 transition-all"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleDisconnect}
                     disabled={disconnecting}
-                    className="flex-1 text-[11px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50"
+                    className="flex-1 text-[11px] font-medium text-destructive hover:text-destructive bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50"
                   >
                     {disconnecting ? "Removing…" : "Yes, remove"}
                   </button>
@@ -1059,7 +1059,7 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
           {/* Add folder button */}
           <button
             onClick={() => setAddingFolder(true)}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-white/35 hover:text-white/65 transition-all border border-dashed border-white/[0.07] hover:border-violet-500/30 hover:bg-violet-500/[0.04]"
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-muted-foreground/70 hover:text-muted-foreground transition-all border border-dashed border-border hover:border-violet-500/30 hover:bg-violet-500/[0.04]"
           >
             <FolderPlus className="h-3.5 w-3.5" />
             Add Folder

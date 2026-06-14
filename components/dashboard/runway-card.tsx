@@ -45,10 +45,10 @@ export function RunwayCard({
   return (
     <div
       className={cn(
-        "relative rounded-xl border border-white/[0.06] p-4 flex flex-col gap-3 overflow-hidden transition-all duration-200 hover:border-white/[0.10] hover:-translate-y-px",
+        "relative rounded-xl border border-border p-4 flex flex-col gap-3 overflow-hidden transition-all duration-200 hover:border-border hover:-translate-y-px",
         className
       )}
-      style={{ background: "hsl(220 40% 7%)" }}
+      style={{ background: "hsl(var(--card))" }}
     >
       {/* Ambient glow behind ring */}
       <div
@@ -64,7 +64,7 @@ export function RunwayCard({
             <circle
               cx="90" cy="90" r={R}
               fill="none"
-              stroke="rgba(255,255,255,0.06)"
+              stroke="hsl(var(--border))"
               strokeWidth="10"
             />
             {/* progress */}
@@ -80,8 +80,8 @@ export function RunwayCard({
           </svg>
           {/* centre label */}
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/30">Runway</span>
-            <span className="num text-[11px] font-bold text-white/60 mt-0.5">{displayMonths}</span>
+            <span className="text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Runway</span>
+            <span className="num text-[11px] font-bold text-muted-foreground mt-0.5">{displayMonths}</span>
           </div>
         </div>
 
@@ -102,7 +102,7 @@ export function RunwayCard({
               {days > 0 ? days : "—"}
               <span style={{ fontSize: "0.45em", opacity: 0.7 }}>d</span>
             </div>
-            <p className="text-[10px] text-white/25 mt-0.5">
+            <p className="text-[10px] text-muted-foreground/70 mt-0.5">
               Zero cash on{" "}
               {days > 0
                 ? new Date(Date.now() + days * 864e5).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
@@ -113,18 +113,18 @@ export function RunwayCard({
           {/* Meta rows */}
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Burn</p>
-              <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedBurn}<span className="text-white/30">/mo</span></p>
+              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Burn</p>
+              <p className="num text-[12px] font-semibold text-muted-foreground mt-0.5">{formattedBurn}<span className="text-muted-foreground/70">/mo</span></p>
             </div>
             {cashBalance !== undefined && formattedCash && (
               <div>
-                <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Cash</p>
-                <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedCash}</p>
+                <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Cash</p>
+                <p className="num text-[12px] font-semibold text-muted-foreground mt-0.5">{formattedCash}</p>
               </div>
             )}
             <div>
-              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-white/25">Net Burn</p>
-              <p className="num text-[12px] font-semibold text-white/65 mt-0.5">{formattedBurn}<span className="text-white/30">/mo</span></p>
+              <p className="text-[9px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Net Burn</p>
+              <p className="num text-[12px] font-semibold text-muted-foreground mt-0.5">{formattedBurn}<span className="text-muted-foreground/70">/mo</span></p>
             </div>
           </div>
         </div>

@@ -58,6 +58,14 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        metric: {
+          revenue: "hsl(var(--metric-revenue))",
+          margin: "hsl(var(--metric-margin))",
+          opex: "hsl(var(--metric-opex))",
+          profit: "hsl(var(--metric-profit))",
+          cash: "hsl(var(--metric-cash))",
+          runway: "hsl(var(--metric-runway))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
