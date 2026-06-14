@@ -19,13 +19,13 @@ function Panel({ title, subtitle, action, children }: {
 }) {
   return (
     <div
-      className="rounded-xl border border-white/[0.06] overflow-hidden transition-all duration-200 hover:border-white/[0.09]"
-      style={{ background: "hsl(220 40% 7%)" }}
+      className="rounded-xl border border-border overflow-hidden transition-all duration-200 hover:border-border"
+      style={{ background: "hsl(var(--card))" }}
     >
       <div className="flex items-center justify-between px-4 pt-3.5 pb-0">
         <div>
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/40">{title}</p>
-          {subtitle && <p className="text-[10.5px] text-white/20 mt-0.5">{subtitle}</p>}
+          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">{title}</p>
+          {subtitle && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{subtitle}</p>}
         </div>
         {action}
       </div>
@@ -48,8 +48,8 @@ export default async function RevenuePage() {
 
       {/* ── Page header ──────────────────────────────────────────────── */}
       <div className="animate-enter">
-        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-white/25 mb-0.5">Finance OS</p>
-        <h1 className="text-[22px] font-bold tracking-tight text-white/90 leading-none">Revenue</h1>
+        <p className="text-[10px] font-bold tracking-[0.16em] uppercase text-muted-foreground/70 mb-0.5">Finance OS</p>
+        <h1 className="text-[22px] font-bold tracking-tight text-foreground leading-none">Revenue</h1>
       </div>
 
       {/* ── 4 metric cards ───────────────────────────────────────────── */}
@@ -88,8 +88,8 @@ export default async function RevenuePage() {
           <RevenueChart data={revenueByMonth} height={280} />
         ) : (
           <div className="flex flex-col items-center justify-center h-64 gap-3">
-            <TrendingUp className="h-7 w-7 text-white/10" />
-            <p className="text-[13px] text-white/25">No revenue data yet.</p>
+            <TrendingUp className="h-7 w-7 text-muted-foreground/70" />
+            <p className="text-[13px] text-muted-foreground/70">No revenue data yet.</p>
             <Button variant="link" asChild className="text-primary/60 hover:text-primary h-auto p-0">
               <Link href="/dashboard/connectors">Connect a data source →</Link>
             </Button>
@@ -103,7 +103,7 @@ export default async function RevenuePage() {
         {/* Customer revenue breakdown */}
         <Panel title="Revenue by Customer">
           {customers.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-[13px] text-white/25">
+            <div className="flex items-center justify-center h-32 text-[13px] text-muted-foreground/70">
               No customer data yet
             </div>
           ) : (
@@ -111,10 +111,10 @@ export default async function RevenuePage() {
               <table className="w-full text-[12px]">
                 <thead>
                   <tr>
-                    <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Customer</th>
-                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Revenue</th>
-                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25 hidden sm:table-cell">Share</th>
-                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25 hidden md:table-cell">Last Payment</th>
+                    <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Customer</th>
+                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Revenue</th>
+                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden sm:table-cell">Share</th>
+                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 hidden md:table-cell">Last Payment</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -122,11 +122,11 @@ export default async function RevenuePage() {
                     const pct = totalRevenue > 0 ? (customer.total_revenue / totalRevenue) * 100 : 0;
                     const isHighConc = pct > 30;
                     return (
-                      <tr key={customer.id} className="border-t border-white/[0.04] group">
-                        <td className="py-2.5 font-medium text-white/60 max-w-[140px] truncate group-hover:text-white/80 transition-colors">
+                      <tr key={customer.id} className="border-t border-border group">
+                        <td className="py-2.5 font-medium text-muted-foreground max-w-[140px] truncate group-hover:text-foreground transition-colors">
                           {customer.name}
                         </td>
-                        <td className="py-2.5 text-right num text-white/70 font-semibold">
+                        <td className="py-2.5 text-right num text-muted-foreground font-semibold">
                           {formatCurrency(customer.total_revenue, "INR", true)}
                         </td>
                         <td className="py-2.5 text-right hidden sm:table-cell">
@@ -134,13 +134,13 @@ export default async function RevenuePage() {
                             className="inline-flex items-center px-1.5 py-0.5 rounded text-[10.5px] font-semibold"
                             style={isHighConc
                               ? { background: "rgba(245,145,22,0.12)", color: "#f59116" }
-                              : { background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.35)" }
+                              : { background: "hsl(var(--border))", color: "hsl(var(--muted-foreground))" }
                             }
                           >
                             {pct.toFixed(1)}%
                           </span>
                         </td>
-                        <td className="py-2.5 text-right text-white/30 hidden md:table-cell">
+                        <td className="py-2.5 text-right text-muted-foreground/70 hidden md:table-cell">
                           {customer.last_transaction_date ? formatDate(customer.last_transaction_date) : "—"}
                         </td>
                       </tr>
@@ -150,13 +150,13 @@ export default async function RevenuePage() {
               </table>
 
               {/* Concentration bars */}
-              <div className="mt-3 pt-3 border-t border-white/[0.05] space-y-1.5">
+              <div className="mt-3 pt-3 border-t border-border space-y-1.5">
                 {customers.slice(0, 5).map((customer) => {
                   const pct = totalRevenue > 0 ? (customer.total_revenue / totalRevenue) * 100 : 0;
                   return (
                     <div key={customer.id} className="flex items-center gap-2.5">
-                      <span className="text-[10.5px] text-white/35 w-28 truncate flex-shrink-0">{customer.name}</span>
-                      <div className="flex-1 h-1.5 rounded-full bg-white/[0.05] overflow-hidden">
+                      <span className="text-[10.5px] text-muted-foreground/70 w-28 truncate flex-shrink-0">{customer.name}</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-accent/40 overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all duration-700"
                           style={{
@@ -166,7 +166,7 @@ export default async function RevenuePage() {
                           }}
                         />
                       </div>
-                      <span className="num text-[10.5px] text-white/40 w-9 text-right flex-shrink-0">{pct.toFixed(1)}%</span>
+                      <span className="num text-[10.5px] text-muted-foreground w-9 text-right flex-shrink-0">{pct.toFixed(1)}%</span>
                     </div>
                   );
                 })}
@@ -178,7 +178,7 @@ export default async function RevenuePage() {
         {/* MRR trend table */}
         <Panel title="MRR Trend">
           {mrrTrend.length === 0 ? (
-            <div className="flex items-center justify-center h-32 text-[13px] text-white/25">
+            <div className="flex items-center justify-center h-32 text-[13px] text-muted-foreground/70">
               No MRR history yet
             </div>
           ) : (
@@ -186,9 +186,9 @@ export default async function RevenuePage() {
               <table className="w-full text-[12px]">
                 <thead>
                   <tr>
-                    <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">Month</th>
-                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">MRR</th>
-                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-white/25">MoM</th>
+                    <th className="text-left pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Month</th>
+                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">MRR</th>
+                    <th className="text-right pb-2 text-[9.5px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">MoM</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -201,9 +201,9 @@ export default async function RevenuePage() {
                     }
                     const isUp = row.momChange >= 0;
                     return (
-                      <tr key={row.month} className="border-t border-white/[0.04] group">
-                        <td className="py-2.5 font-medium text-white/55 group-hover:text-white/75 transition-colors">{displayMonth}</td>
-                        <td className="py-2.5 text-right num text-white/70 font-semibold">
+                      <tr key={row.month} className="border-t border-border group">
+                        <td className="py-2.5 font-medium text-muted-foreground group-hover:text-muted-foreground transition-colors">{displayMonth}</td>
+                        <td className="py-2.5 text-right num text-muted-foreground font-semibold">
                           {formatCurrency(row.revenue, "INR", true)}
                         </td>
                         <td className="py-2.5 text-right">
@@ -218,7 +218,7 @@ export default async function RevenuePage() {
                               {isUp ? "+" : ""}{row.momChange.toFixed(1)}%
                             </span>
                           ) : (
-                            <span className="text-white/20 text-[11px]">—</span>
+                            <span className="text-muted-foreground/70 text-[11px]">—</span>
                           )}
                         </td>
                       </tr>

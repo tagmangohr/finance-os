@@ -54,12 +54,12 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
       onClick={onClose}
     >
       <div
-        className="w-[520px] max-w-[90vw] bg-card border border-white/[0.10] rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] animate-scale-in"
+        className="w-[520px] max-w-[90vw] bg-card border border-border rounded-2xl overflow-hidden shadow-[0_30px_80px_rgba(0,0,0,0.7)] animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search input */}
-        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-white/[0.06]">
-          <Search className="h-3.5 w-3.5 text-white/30 flex-shrink-0" />
+        <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-border">
+          <Search className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0" />
           <input
             ref={inputRef}
             value={query}
@@ -69,24 +69,24 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               if (e.key === "Enter" && filtered[0]) navigate(filtered[0].href);
             }}
             placeholder="Search pages, or ask co-pilot…"
-            className="flex-1 bg-transparent border-none outline-none text-[14px] text-white/85 placeholder:text-white/25"
+            className="flex-1 bg-transparent border-none outline-none text-[14px] text-foreground placeholder:text-muted-foreground/70"
           />
-          <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-white/[0.06] border border-white/[0.08] rounded text-white/40">esc</kbd>
+          <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-accent/40 border border-border rounded text-muted-foreground">esc</kbd>
         </div>
 
         {/* Jump to section */}
         {filtered.length > 0 && (
           <>
-            <div className="px-4 pt-2 pb-1 text-[9.5px] font-bold tracking-[0.14em] text-white/25 uppercase">Jump to</div>
+            <div className="px-4 pt-2 pb-1 text-[9.5px] font-bold tracking-[0.14em] text-muted-foreground/70 uppercase">Jump to</div>
             {filtered.map((n) => (
               <button
                 key={n.href}
                 onClick={() => navigate(n.href)}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] text-white/55 hover:bg-primary/[0.10] hover:text-white transition-all"
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] text-muted-foreground hover:bg-primary/[0.10] hover:text-white transition-all"
               >
                 <n.Icon className="h-3.5 w-3.5 flex-shrink-0" />
                 <span className="flex-1">{n.label}</span>
-                <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-white/[0.06] border border-white/[0.08] rounded text-white/30">{n.hint}</kbd>
+                <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-accent/40 border border-border rounded text-muted-foreground/70">{n.hint}</kbd>
               </button>
             ))}
           </>
@@ -95,16 +95,16 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
         {/* Ask co-pilot section */}
         {!query && (
           <>
-            <div className="px-4 pt-3 pb-1 text-[9.5px] font-bold tracking-[0.14em] text-white/25 uppercase">Ask co-pilot</div>
+            <div className="px-4 pt-3 pb-1 text-[9.5px] font-bold tracking-[0.14em] text-muted-foreground/70 uppercase">Ask co-pilot</div>
             {AI_PROMPTS.map((p) => (
               <button
                 key={p}
                 onClick={() => { router.push("/dashboard/intelligence?q=" + encodeURIComponent(p)); onClose(); }}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] text-white/55 hover:bg-primary/[0.10] hover:text-white transition-all"
+                className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] text-muted-foreground hover:bg-primary/[0.10] hover:text-white transition-all"
               >
                 <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary/60" />
                 <span className="flex-1">{p}</span>
-                <ArrowRight className="h-3 w-3 text-white/20" />
+                <ArrowRight className="h-3 w-3 text-muted-foreground/70" />
               </button>
             ))}
           </>

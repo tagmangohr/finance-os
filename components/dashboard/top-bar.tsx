@@ -57,7 +57,7 @@ export function TopBar({ orgId, orgName }: TopBarProps) {
             <span className="font-semibold text-foreground">{page.label}</span>
           </div>
 
-          <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10.5px] font-semibold border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25">
+          <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10.5px] font-semibold border bg-emerald-500/10 text-success dark:text-success border-emerald-500/25">
             <span className="w-1 h-1 rounded-full bg-emerald-500 dark:bg-emerald-400" />
             LIVE
           </span>

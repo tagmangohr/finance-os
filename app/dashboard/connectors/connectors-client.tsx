@@ -212,14 +212,14 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     type: "bank_statement",
     name: "Bank Statement",
     description: "Upload bank statement CSV/Excel",
-    icon: <LucideIcon bg="#1B3A5C" icon={<Landmark className="h-[18px] w-[18px] text-white/80" />} />,
+    icon: <LucideIcon bg="#1B3A5C" icon={<Landmark className="h-[18px] w-[18px] text-foreground" />} />,
     isCSV: true,
   },
   {
     type: "csv",
     name: "Generic CSV",
     description: "Upload any CSV with transactions",
-    icon: <LucideIcon bg="#1A3A28" icon={<FileSpreadsheet className="h-[18px] w-[18px] text-white/80" />} />,
+    icon: <LucideIcon bg="#1A3A28" icon={<FileSpreadsheet className="h-[18px] w-[18px] text-foreground" />} />,
     isCSV: true,
   },
 ];
@@ -685,7 +685,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       <div
         key={def.type}
         className={cn(
-          "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-white/[0.1] shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
+          "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-border shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
           hasActive
             ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
             : "border-border/60"
@@ -696,13 +696,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         <div className="flex items-start gap-3">
           {def.icon}
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white/80">{def.name}</p>
-            <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{def.description}</p>
+            <p className="text-sm font-semibold text-foreground">{def.name}</p>
+            <p className="text-xs text-muted-foreground/70 mt-0.5 leading-relaxed">{def.description}</p>
           </div>
           {hasActive && (
             <div className="flex items-center gap-1.5 flex-shrink-0">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-              <span className="text-[10px] text-emerald-400/70 font-medium">Live</span>
+              <span className="text-[10px] text-success/70 font-medium">Live</span>
             </div>
           )}
         </div>
@@ -728,18 +728,18 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       ? "border-red-500/20 bg-red-500/[0.04]"
                       : isConfirming
                       ? "border-red-500/30 bg-red-500/[0.06]"
-                      : "border-white/[0.06] bg-white/[0.025]"
+                      : "border-border bg-accent/40"
                   )}
                 >
                   {!isConfirming ? (
                     <div className="flex items-center gap-2 px-3 py-2.5">
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-white/70 truncate">{inst.name}</p>
-                        <p className="text-[10px] text-white/25 truncate font-mono">{subtitle}</p>
+                        <p className="text-xs font-medium text-muted-foreground truncate">{inst.name}</p>
+                        <p className="text-[10px] text-muted-foreground/70 truncate font-mono">{subtitle}</p>
                       </div>
                       <div className="flex items-center gap-0.5 flex-shrink-0">
                         <button onClick={() => handleOpenEdit(inst)} title="Edit credentials"
-                          className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all">
+                          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all">
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <SyncDropdown
@@ -755,23 +755,23 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         />
                         <button onClick={() => setConfirmRemove(inst)} disabled={disconnectingId === inst.id}
                           title="Remove"
-                          className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-500/[0.08] transition-all disabled:opacity-40">
+                          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-red-500/[0.08] transition-all disabled:opacity-40">
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     </div>
                   ) : (
                     <div className="px-3 py-2.5 space-y-2">
-                      <p className="text-[11px] text-red-400/90 leading-snug">
+                      <p className="text-[11px] text-destructive/90 leading-snug">
                         Remove <span className="font-semibold">{inst.name}</span> and all its synced transactions?
                       </p>
                       <div className="flex gap-1.5">
                         <button onClick={() => setConfirmRemove(null)}
-                          className="flex-1 text-[11px] font-medium text-white/40 hover:text-white/70 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] rounded-lg py-1 transition-all">
+                          className="flex-1 text-[11px] font-medium text-muted-foreground hover:text-muted-foreground bg-accent/40 hover:bg-accent border border-border rounded-lg py-1 transition-all">
                           Cancel
                         </button>
                         <button onClick={() => handleDisconnect(inst.id)} disabled={disconnectingId === inst.id}
-                          className="flex-1 text-[11px] font-medium text-red-400 hover:text-red-300 bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50">
+                          className="flex-1 text-[11px] font-medium text-destructive hover:text-destructive bg-red-500/[0.1] hover:bg-red-500/[0.18] border border-red-500/20 rounded-lg py-1 transition-all disabled:opacity-50">
                           {disconnectingId === inst.id ? "Removing…" : "Yes, remove"}
                         </button>
                       </div>
@@ -787,7 +787,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         {!def.isCSV ? (
           <Button size="sm" variant={instances.length > 0 ? "outline" : "default"}
             className={cn("gap-1.5 w-full transition-all",
-              instances.length > 0 && "border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]")}
+              instances.length > 0 && "border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border")}
             onClick={() => handleOpenNew(def)}>
             {instances.length > 0
               ? <><Plus className="h-3.5 w-3.5" /> Add Account</>
@@ -805,8 +805,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   return (
     <div className="space-y-6 max-w-[1400px]">
       <div className="animate-enter">
-        <h1 className="text-xl font-bold text-white/85">Connectors</h1>
-        <p className="text-sm text-white/30 mt-0.5">
+        <h1 className="text-xl font-bold text-foreground">Connectors</h1>
+        <p className="text-sm text-muted-foreground/70 mt-0.5">
           Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
         </p>
       </div>
@@ -816,10 +816,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-emerald-400/60">
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-success/60">
               Connected ({connectedDefs.length})
             </span>
-            <div className="flex-1 h-px bg-white/[0.05]" />
+            <div className="flex-1 h-px bg-accent/40" />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {connectedDefs.map((def, i) => renderCard(def, i))}
@@ -831,11 +831,11 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       <div className="space-y-3">
         {hasAnySplit && (
           <div className="flex items-center gap-2">
-            <div className="h-1.5 w-1.5 rounded-full bg-white/20" />
-            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-white/25">
+            <div className="h-1.5 w-1.5 rounded-full bg-accent/40" />
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">
               Not connected ({notConnectedDefs.length})
             </span>
-            <div className="flex-1 h-px bg-white/[0.04]" />
+            <div className="flex-1 h-px bg-accent/40" />
           </div>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -847,13 +847,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       {children && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <div className="flex-1 h-px bg-white/[0.05]" />
-            <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/20">
+            <div className="flex-1 h-px bg-accent/40" />
+            <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
               Cloud Storage
             </span>
-            <div className="flex-1 h-px bg-white/[0.05]" />
+            <div className="flex-1 h-px bg-accent/40" />
           </div>
-          <p className="text-xs text-white/25">
+          <p className="text-xs text-muted-foreground/70">
             Store raw transaction files in Google Drive or OneDrive — Finance OS fetches them automatically,
             normalises columns with AI, and keeps data in sync.
           </p>
@@ -872,7 +872,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
               centered (null) and free-floating (pixel coords) without class conflicts */}
           <Dialog.Content
             ref={dialogContentRef}
-            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
             style={
               dialogPos
                 // Dragging: explicit pixel position, clear inset constraints
@@ -883,13 +883,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           >
             {/* ── Drag-handle header ─────────────────────────────────────── */}
             <div
-              className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 cursor-grab active:cursor-grabbing select-none border-b border-white/[0.05]"
+              className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 cursor-grab active:cursor-grabbing select-none border-b border-border"
               onMouseDown={handleDragStart}
             >
               <div className="flex items-start gap-2.5">
-                <GripVertical className="h-4 w-4 text-white/15 mt-0.5 flex-shrink-0" />
+                <GripVertical className="h-4 w-4 text-muted-foreground/70 mt-0.5 flex-shrink-0" />
                 <div>
-                  <Dialog.Title className="text-[14px] font-semibold text-white/85 leading-snug">
+                  <Dialog.Title className="text-[14px] font-semibold text-foreground leading-snug">
                     {editingConnector
                       ? `Edit ${openModal?.name}`
                       : openModal?.isCSV
@@ -897,7 +897,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       : `Connect ${openModal?.name}`}
                   </Dialog.Title>
                   {editingConnector && (
-                    <p className="text-[11px] text-white/30 mt-0.5">
+                    <p className="text-[11px] text-muted-foreground/70 mt-0.5">
                       Leave password fields blank to keep existing credentials
                     </p>
                   )}
@@ -906,7 +906,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
               {/* stopPropagation so clicking × doesn't start a drag */}
               <Dialog.Close asChild>
                 <button
-                  className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06] flex-shrink-0"
+                  className="text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded-lg p-1.5 hover:bg-accent flex-shrink-0"
                   onMouseDown={(e) => e.stopPropagation()}
                 >
                   <X className="h-4 w-4" />
@@ -936,9 +936,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
                   {/* Credentials divider */}
                   <div className="flex items-center gap-2 py-1">
-                    <div className="flex-1 h-px bg-white/[0.05]" />
-                    <span className="text-[10px] text-white/20 uppercase tracking-widest">Credentials</span>
-                    <div className="flex-1 h-px bg-white/[0.05]" />
+                    <div className="flex-1 h-px bg-accent/40" />
+                    <span className="text-[10px] text-muted-foreground/70 uppercase tracking-widest">Credentials</span>
+                    <div className="flex-1 h-px bg-accent/40" />
                   </div>
 
                   {/* Required credential fields */}
@@ -961,9 +961,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                   {openModal?.fields?.some((f) => f.isOptional) && (
                     <>
                       <div className="flex items-center gap-2 py-1">
-                        <div className="flex-1 h-px bg-white/[0.05]" />
-                        <span className="text-[10px] text-white/20 uppercase tracking-widest">Optional info</span>
-                        <div className="flex-1 h-px bg-white/[0.05]" />
+                        <div className="flex-1 h-px bg-accent/40" />
+                        <span className="text-[10px] text-muted-foreground/70 uppercase tracking-widest">Optional info</span>
+                        <div className="flex-1 h-px bg-accent/40" />
                       </div>
                       {openModal?.fields?.filter((f) => f.isOptional).map((field) => (
                         <FormField
@@ -981,11 +981,11 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
             </div>
 
             {/* ── Sticky footer — always visible ─────────────────────────── */}
-            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
+            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-border flex-shrink-0">
               <Dialog.Close asChild>
                 <Button
                   variant="outline"
-                  className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                  className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border"
                 >
                   Cancel
                 </Button>
@@ -1013,21 +1013,21 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-md animate-fade-in" />
           <Dialog.Content
-            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[400px] bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
+            className="fixed z-[201] w-[calc(100vw-32px)] max-w-[400px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none animate-scale-in flex flex-col"
             style={{ top: 0, left: 0, right: 0, bottom: 0, margin: "auto", maxHeight: "calc(100vh - 32px)" }}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-white/[0.05]">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-border">
               <div>
-                <Dialog.Title className="text-[14px] font-semibold text-white/85">
+                <Dialog.Title className="text-[14px] font-semibold text-foreground">
                   Custom Sync Range
                 </Dialog.Title>
                 {customSyncConnector && (
-                  <p className="text-[11px] text-white/30 mt-0.5">{customSyncConnector.name}</p>
+                  <p className="text-[11px] text-muted-foreground/70 mt-0.5">{customSyncConnector.name}</p>
                 )}
               </div>
               <Dialog.Close asChild>
-                <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+                <button className="text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded-lg p-1.5 hover:bg-accent">
                   <X className="h-4 w-4" />
                 </button>
               </Dialog.Close>
@@ -1038,7 +1038,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
               {/* Date inputs */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
                     From
                   </label>
                   <input
@@ -1046,16 +1046,16 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                     value={customFrom}
                     max={customTo || todayStr}
                     onChange={(e) => setCustomFrom(e.target.value)}
-                    className="w-full rounded-lg text-[12.5px] text-white/75 focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
+                    className="w-full rounded-lg text-[12.5px] text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
                     style={{
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
+                      background: "hsl(var(--accent))",
+                      border: "1px solid hsl(var(--border))",
                       padding: "8px 10px",
                     }}
                   />
                 </div>
                 <div>
-                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-white/35 block mb-1.5">
+                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
                     To
                   </label>
                   <input
@@ -1064,10 +1064,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                     min={customFrom}
                     max={todayStr}
                     onChange={(e) => setCustomTo(e.target.value)}
-                    className="w-full rounded-lg text-[12.5px] text-white/75 focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
+                    className="w-full rounded-lg text-[12.5px] text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
                     style={{
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
+                      background: "hsl(var(--accent))",
+                      border: "1px solid hsl(var(--border))",
                       padding: "8px 10px",
                     }}
                   />
@@ -1086,14 +1086,14 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                     style={{ background: "rgba(124,82,240,0.07)", border: "1px solid rgba(124,82,240,0.12)" }}
                   >
                     <div>
-                      <p className="text-[11px] text-white/50">
-                        <span className="text-white/70 font-semibold num">{days}</span> days selected
+                      <p className="text-[11px] text-muted-foreground">
+                        <span className="text-muted-foreground font-semibold num">{days}</span> days selected
                       </p>
-                      <p className="text-[10.5px] text-white/30 mt-0.5">Duplicates skipped automatically</p>
+                      <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">Duplicates skipped automatically</p>
                     </div>
                     <div className="text-right">
                       <p className="text-[18px] font-bold text-primary/80 num leading-none">{chunks}</p>
-                      <p className="text-[10px] text-white/30 mt-0.5">request{chunks !== 1 ? "s" : ""}</p>
+                      <p className="text-[10px] text-muted-foreground/70 mt-0.5">request{chunks !== 1 ? "s" : ""}</p>
                     </div>
                   </div>
                 );
@@ -1101,18 +1101,18 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
               {/* Validation warning */}
               {customFrom && customTo && customFrom > customTo && (
-                <p className="text-[11px] text-red-400/80 flex items-center gap-1.5">
+                <p className="text-[11px] text-destructive/80 flex items-center gap-1.5">
                   <span>⚠</span> &quot;From&quot; date must be before &quot;To&quot; date
                 </p>
               )}
             </div>
 
             {/* Footer */}
-            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-white/[0.05] flex-shrink-0">
+            <div className="flex gap-2.5 px-5 pb-5 pt-4 border-t border-border flex-shrink-0">
               <Dialog.Close asChild>
                 <Button
                   variant="outline"
-                  className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                  className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border"
                 >
                   Cancel
                 </Button>
@@ -1196,7 +1196,7 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
         <button
           disabled={isSyncing}
           title={isSyncing ? "Syncing…" : "Sync — choose date range"}
-          className="p-1.5 rounded-lg text-white/20 hover:text-white/60 hover:bg-white/[0.06] transition-all disabled:opacity-60"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all disabled:opacity-60"
         >
           {showProgress ? (
             <span className="text-[9px] font-bold text-primary/70 tabular-nums leading-none min-w-[28px] inline-block text-center">
@@ -1214,16 +1214,16 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
         <DropdownMenu.Content
           className="z-[300] rounded-xl overflow-hidden shadow-[0_8px_40px_rgba(0,0,0,0.7)]"
           style={{
-            background: "hsl(220 40% 8%)",
-            border: "1px solid rgba(255,255,255,0.07)",
+            background: "hsl(var(--card))",
+            border: "1px solid hsl(var(--border))",
             minWidth: 200,
           }}
           align="end"
           sideOffset={6}
         >
           {/* Header */}
-          <div className="px-3 py-2 border-b border-white/[0.05]">
-            <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-white/25">
+          <div className="px-3 py-2 border-b border-border">
+            <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
               Sync date range
             </p>
           </div>
@@ -1232,7 +1232,7 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
           {SYNC_PRESETS.map((preset) => (
             <DropdownMenu.Item
               key={preset.days}
-              className="flex items-center justify-between px-3 py-2.5 text-[12px] text-white/50 hover:text-white/85 hover:bg-white/[0.05] cursor-pointer outline-none transition-colors"
+              className="flex items-center justify-between px-3 py-2.5 text-[12px] text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer outline-none transition-colors"
               onSelect={() => {
                 const to = new Date();
                 const from = new Date(to.getTime() - preset.days * 24 * 60 * 60 * 1000);
@@ -1240,14 +1240,14 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
               }}
             >
               <span>{preset.label}</span>
-              <span className="text-[10px] text-white/20 ml-6 tabular-nums">
+              <span className="text-[10px] text-muted-foreground/70 ml-6 tabular-nums">
                 {preset.chunks} req{preset.chunks > 1 ? "s" : ""}
               </span>
             </DropdownMenu.Item>
           ))}
 
           {/* Custom range */}
-          <DropdownMenu.Separator className="h-px bg-white/[0.05] my-0.5" />
+          <DropdownMenu.Separator className="h-px bg-accent/40 my-0.5" />
           <DropdownMenu.Item
             className="flex items-center gap-2 px-3 py-2.5 text-[12px] text-primary/60 hover:text-primary hover:bg-primary/[0.06] cursor-pointer outline-none transition-colors"
             onSelect={onCustom}
@@ -1256,8 +1256,8 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
           </DropdownMenu.Item>
 
           {/* Footer note */}
-          <div className="px-3 py-2 border-t border-white/[0.05]">
-            <p className="text-[10px] text-white/20 leading-relaxed">
+          <div className="px-3 py-2 border-t border-border">
+            <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
               Each request covers 30 days.
               <br />Duplicates are skipped automatically.
             </p>
@@ -1285,7 +1285,7 @@ function FormField({
 }) {
   return (
     <div>
-      <label className="text-xs font-medium text-white/45 block mb-1.5 uppercase tracking-wide">
+      <label className="text-xs font-medium text-muted-foreground block mb-1.5 uppercase tracking-wide">
         {label}
       </label>
       <Input
@@ -1293,7 +1293,7 @@ function FormField({
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="border-white/[0.08] bg-white/[0.03] text-white/80 placeholder:text-white/20 focus:border-primary/30 focus:ring-primary/20"
+        className="border-border bg-accent/40 text-foreground placeholder:text-muted-foreground/70 focus:border-primary/30 focus:ring-primary/20"
       />
     </div>
   );
@@ -1320,20 +1320,20 @@ function CSVUploadForm({ csvFile, csvHeaders, csvMapping, onFileChange, onMappin
           "border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200",
           csvFile
             ? "border-emerald-500/30 bg-emerald-500/[0.06]"
-            : "border-white/[0.07] hover:border-primary/30 hover:bg-primary/[0.03]"
+            : "border-border hover:border-primary/30 hover:bg-primary/[0.03]"
         )}
       >
         {csvFile ? (
           <div className="flex flex-col items-center gap-1.5">
-            <CheckCircle2 className="h-6 w-6 text-emerald-400 mb-1" />
-            <p className="text-sm font-medium text-white/75">{csvFile.name}</p>
-            <p className="text-xs text-white/30">{(csvFile.size / 1024).toFixed(1)} KB · Click to change</p>
+            <CheckCircle2 className="h-6 w-6 text-success mb-1" />
+            <p className="text-sm font-medium text-muted-foreground">{csvFile.name}</p>
+            <p className="text-xs text-muted-foreground/70">{(csvFile.size / 1024).toFixed(1)} KB · Click to change</p>
           </div>
         ) : (
           <div className="flex flex-col items-center gap-1.5">
-            <Upload className="h-6 w-6 text-white/25 mb-1" />
-            <p className="text-sm font-medium text-white/55">Click to upload CSV</p>
-            <p className="text-xs text-white/25">CSV, XLS, XLSX accepted</p>
+            <Upload className="h-6 w-6 text-muted-foreground/70 mb-1" />
+            <p className="text-sm font-medium text-muted-foreground">Click to upload CSV</p>
+            <p className="text-xs text-muted-foreground/70">CSV, XLS, XLSX accepted</p>
           </div>
         )}
         <input ref={inputRef} type="file" accept=".csv,.xls,.xlsx" className="hidden"
@@ -1342,24 +1342,24 @@ function CSVUploadForm({ csvFile, csvHeaders, csvMapping, onFileChange, onMappin
 
       {csvHeaders.length > 0 && (
         <div>
-          <p className="text-xs font-medium text-white/55 mb-1.5 uppercase tracking-wide">Column Mapping</p>
-          <p className="text-xs text-white/25 mb-3">
+          <p className="text-xs font-medium text-muted-foreground mb-1.5 uppercase tracking-wide">Column Mapping</p>
+          <p className="text-xs text-muted-foreground/70 mb-3">
             Auto-detected {Object.values(csvMapping).filter(Boolean).length} of {csvHeaders.length} columns.
           </p>
           <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
             {csvHeaders.map((header) => (
               <div key={header} className="flex items-center gap-2">
-                <span className="text-xs text-white/30 w-28 truncate flex-shrink-0 font-mono bg-white/[0.04] border border-white/[0.06] px-1.5 py-0.5 rounded-md">
+                <span className="text-xs text-muted-foreground/70 w-28 truncate flex-shrink-0 font-mono bg-accent/40 border border-border px-1.5 py-0.5 rounded-md">
                   {header}
                 </span>
-                <span className="text-xs text-white/20">→</span>
+                <span className="text-xs text-muted-foreground/70">→</span>
                 <select
                   value={csvMapping[header] ?? ""}
                   onChange={(e) => onMappingChange({ ...csvMapping, [header]: e.target.value })}
-                  className="flex-1 text-xs rounded-lg border border-white/[0.07] bg-white/[0.03] text-white/60 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  className="flex-1 text-xs rounded-lg border border-border bg-accent/40 text-muted-foreground px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30"
                 >
                   {CSV_COLUMN_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value} className="bg-[#0c1221]">{opt.label}</option>
+                    <option key={opt.value} value={opt.value} className="bg-popover">{opt.label}</option>
                   ))}
                 </select>
               </div>

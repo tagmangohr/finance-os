@@ -34,7 +34,7 @@ function MessageBubble({ message }: { message: Message }) {
           "flex-shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-[10px] font-bold",
           isUser
             ? "bg-primary/20 border border-primary/30 text-primary"
-            : "bg-white/[0.04] border border-white/[0.08] text-white/30"
+            : "bg-accent/40 border border-border text-muted-foreground/70"
         )}
       >
         {isUser ? "U" : <Sparkles className="h-3 w-3" />}
@@ -45,8 +45,8 @@ function MessageBubble({ message }: { message: Message }) {
         className={cn(
           "max-w-[82%] rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed",
           isUser
-            ? "bg-primary/[0.14] border border-primary/[0.18] text-white/85 rounded-tr-sm"
-            : "bg-white/[0.04] border border-white/[0.07] text-white/75 rounded-tl-sm"
+            ? "bg-primary/[0.14] border border-primary/[0.18] text-foreground rounded-tr-sm"
+            : "bg-accent/40 border border-border text-muted-foreground rounded-tl-sm"
         )}
       >
         {isUser ? (
@@ -65,7 +65,7 @@ function formatAssistantMessage(content: string) {
     <span>
       {parts.map((part, i) => {
         if (part.startsWith("**") && part.endsWith("**")) {
-          return <strong key={i} className="font-semibold text-white/90">{part.slice(2, -2)}</strong>;
+          return <strong key={i} className="font-semibold text-foreground">{part.slice(2, -2)}</strong>;
         }
         return <span key={i} style={{ whiteSpace: "pre-wrap" }}>{part}</span>;
       })}
@@ -76,10 +76,10 @@ function formatAssistantMessage(content: string) {
 function TypingIndicator() {
   return (
     <div className="flex gap-2.5 mb-3">
-      <div className="flex-shrink-0 h-7 w-7 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
-        <Sparkles className="h-3 w-3 text-white/25" />
+      <div className="flex-shrink-0 h-7 w-7 rounded-lg bg-accent/40 border border-border flex items-center justify-center">
+        <Sparkles className="h-3 w-3 text-muted-foreground/70" />
       </div>
-      <div className="bg-white/[0.04] border border-white/[0.07] rounded-xl rounded-tl-sm px-3.5 py-2.5 flex items-center gap-1.5">
+      <div className="bg-accent/40 border border-border rounded-xl rounded-tl-sm px-3.5 py-2.5 flex items-center gap-1.5">
         {[0, 1, 2].map((i) => (
           <span
             key={i}
@@ -191,17 +191,17 @@ export default function IntelligencePage() {
       <div className="hidden lg:flex flex-col gap-2 w-[220px] flex-shrink-0 overflow-y-auto">
         {/* Header */}
         <div
-          className="rounded-xl border border-white/[0.06] p-3.5"
-          style={{ background: "hsl(220 40% 7%)" }}
+          className="rounded-xl border border-border p-3.5"
+          style={{ background: "hsl(var(--card))" }}
         >
-          <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-white/25 mb-2.5">Quick Asks</p>
+          <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 mb-2.5">Quick Asks</p>
           <div className="space-y-0.5">
             {QUICK_ASKS.map((ask) => (
               <button
                 key={ask}
                 onClick={() => sendMessage(ask)}
                 disabled={isLoading}
-                className="w-full text-left flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11.5px] text-white/40 hover:text-white/75 hover:bg-white/[0.04] transition-all duration-150 disabled:opacity-40 group"
+                className="w-full text-left flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11.5px] text-muted-foreground hover:text-muted-foreground hover:bg-accent transition-all duration-150 disabled:opacity-40 group"
               >
                 <ChevronRight className="h-2.5 w-2.5 text-primary/40 group-hover:text-primary/70 flex-shrink-0" />
                 {ask}
@@ -216,22 +216,22 @@ export default function IntelligencePage() {
           style={{ background: "rgba(124,82,240,0.04)" }}
         >
           <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-primary/50 mb-1.5">Pro tip</p>
-          <p className="text-[11px] text-white/30 leading-relaxed">
+          <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
             Ask follow-up questions in context. Try{" "}
-            <span className="text-white/55 font-medium">&quot;Why?&quot;</span> after any answer to dig deeper.
+            <span className="text-muted-foreground font-medium">&quot;Why?&quot;</span> after any answer to dig deeper.
           </p>
         </div>
       </div>
 
       {/* ── Main chat panel ──────────────────────────────────────────── */}
       <div
-        className="flex flex-col flex-1 min-w-0 rounded-xl border border-white/[0.06] overflow-hidden animate-scale-in"
-        style={{ background: "hsl(220 40% 7%)" }}
+        className="flex flex-col flex-1 min-w-0 rounded-xl border border-border overflow-hidden animate-scale-in"
+        style={{ background: "hsl(var(--card))" }}
       >
         {/* Chat header */}
         <div
-          className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.05] flex-shrink-0"
-          style={{ background: "rgba(255,255,255,0.012)" }}
+          className="flex items-center gap-3 px-4 py-3 border-b border-border flex-shrink-0"
+          style={{ background: "hsl(var(--accent))" }}
         >
           <div
             className="h-8 w-8 rounded-xl flex items-center justify-center"
@@ -244,12 +244,12 @@ export default function IntelligencePage() {
             <Sparkles className="h-3.5 w-3.5 text-white" />
           </div>
           <div>
-            <p className="text-[13px] font-semibold text-white/85">Finance Intelligence</p>
-            <p className="text-[10.5px] text-white/30">Powered by Claude</p>
+            <p className="text-[13px] font-semibold text-foreground">Finance Intelligence</p>
+            <p className="text-[10.5px] text-muted-foreground/70">Powered by Claude</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" style={{ boxShadow: "0 0 6px rgba(29,184,132,0.8)" }} />
-            <span className="text-[10.5px] text-white/30">Online</span>
+            <span className="text-[10.5px] text-muted-foreground/70">Online</span>
           </div>
         </div>
 
@@ -264,8 +264,8 @@ export default function IntelligencePage() {
 
         {/* Input */}
         <div
-          className="px-4 pb-4 pt-3 border-t border-white/[0.05] flex-shrink-0"
-          style={{ background: "rgba(255,255,255,0.012)" }}
+          className="px-4 pb-4 pt-3 border-t border-border flex-shrink-0"
+          style={{ background: "hsl(var(--accent))" }}
         >
           {/* Mobile quick asks */}
           <div className="lg:hidden flex gap-1.5 overflow-x-auto pb-2 mb-2 scrollbar-none">
@@ -274,7 +274,7 @@ export default function IntelligencePage() {
                 key={ask}
                 onClick={() => sendMessage(ask)}
                 disabled={isLoading}
-                className="flex-shrink-0 h-6 px-2.5 rounded-full border border-white/[0.07] bg-white/[0.02] text-[10.5px] text-white/40 hover:text-white/70 hover:bg-white/[0.05] transition-all disabled:opacity-40"
+                className="flex-shrink-0 h-6 px-2.5 rounded-full border border-border bg-accent/40 text-[10.5px] text-muted-foreground hover:text-muted-foreground hover:bg-accent transition-all disabled:opacity-40"
               >
                 {ask}
               </button>
@@ -289,14 +289,14 @@ export default function IntelligencePage() {
               onKeyDown={handleKeyDown}
               placeholder="Ask about your finances… (Enter to send)"
               rows={2}
-              className="flex-1 resize-none rounded-xl text-[13px] text-white/80 placeholder:text-white/20 focus:outline-none disabled:opacity-50 transition-all duration-150"
+              className="flex-1 resize-none rounded-xl text-[13px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none disabled:opacity-50 transition-all duration-150"
               style={{
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                background: "hsl(var(--accent))",
+                border: "1px solid hsl(var(--border))",
                 padding: "10px 14px",
               }}
               onFocus={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(124,82,240,0.35)"; }}
-              onBlur={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(255,255,255,0.08)"; }}
+              onBlur={(e) => { (e.target as HTMLTextAreaElement).style.borderColor = "hsl(var(--border))"; }}
               disabled={isLoading}
             />
             <button

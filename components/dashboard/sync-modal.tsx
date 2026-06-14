@@ -38,33 +38,33 @@ function ResultRow({ r }: { r: SyncResult }) {
   return (
     <div className={cn(
       "rounded-xl border transition-all duration-150",
-      hasError ? "border-red-500/20 bg-red-500/[0.04]" : "border-white/[0.07] bg-white/[0.02]"
+      hasError ? "border-red-500/20 bg-red-500/[0.04]" : "border-border bg-accent/40"
     )}>
       <button
         className="w-full flex items-center gap-3 px-4 py-3 text-left"
         onClick={() => setOpen((o) => !o)}
       >
         {hasError ? (
-          <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
+          <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
         ) : (
-          <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+          <CheckCircle2 className="h-4 w-4 text-success flex-shrink-0" />
         )}
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-white/80 capitalize">{r.connector_name}</span>
-            <span className="text-[10px] text-white/25 uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/[0.05]">
+            <span className="text-sm font-semibold text-foreground capitalize">{r.connector_name}</span>
+            <span className="text-[10px] text-muted-foreground/70 uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/40">
               {r.type}
             </span>
             {r.warnings && r.warnings.length > 0 && !hasError && (
-              <span className="text-[10px] text-amber-400/70 uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400/[0.08] border border-amber-400/20">
+              <span className="text-[10px] text-warning/70 uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-400/[0.08] border border-amber-400/20">
                 {r.warnings.length} skipped
               </span>
             )}
           </div>
           {!hasError && (
-            <p className="text-xs text-white/35 mt-0.5">
-              <span className={cn("font-semibold", hasChanges ? "text-emerald-400" : "text-white/40")}>
+            <p className="text-xs text-muted-foreground/70 mt-0.5">
+              <span className={cn("font-semibold", hasChanges ? "text-success" : "text-muted-foreground")}>
                 {r.inserted} new
               </span>
               {r.updated > 0 && (
@@ -79,20 +79,20 @@ function ResultRow({ r }: { r: SyncResult }) {
             </p>
           )}
           {hasError && (
-            <p className="text-xs text-red-400/70 mt-0.5 truncate">{r.error}</p>
+            <p className="text-xs text-destructive/70 mt-0.5 truncate">{r.error}</p>
           )}
         </div>
 
         <ChevronDown
           className={cn(
-            "h-3.5 w-3.5 text-white/25 transition-transform duration-150 flex-shrink-0",
+            "h-3.5 w-3.5 text-muted-foreground/70 transition-transform duration-150 flex-shrink-0",
             open && "rotate-180"
           )}
         />
       </button>
 
       {open && (
-        <div className="px-4 pb-3 pt-0 border-t border-white/[0.05]">
+        <div className="px-4 pb-3 pt-0 border-t border-border">
           <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mt-3">
             <DetailRow label="Fetched from API" value={String(r.fetched)} />
             <DetailRow label="New inserted" value={String(r.inserted)} highlight={r.inserted > 0} />
@@ -105,9 +105,9 @@ function ResultRow({ r }: { r: SyncResult }) {
           </div>
           {r.warnings && r.warnings.length > 0 && (
             <div className="mt-3 space-y-1.5">
-              <p className="text-[10px] font-semibold text-amber-400/50 uppercase tracking-widest">Unavailable endpoints</p>
+              <p className="text-[10px] font-semibold text-warning/50 uppercase tracking-widest">Unavailable endpoints</p>
               {r.warnings.map((w, i) => (
-                <p key={i} className="text-[11px] text-amber-400/50 leading-relaxed">{w}</p>
+                <p key={i} className="text-[11px] text-warning/50 leading-relaxed">{w}</p>
               ))}
             </div>
           )}
@@ -120,8 +120,8 @@ function ResultRow({ r }: { r: SyncResult }) {
 function DetailRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[11px] text-white/25">{label}</span>
-      <span className={cn("text-[11px] font-semibold", highlight ? "text-emerald-400" : "text-white/50")}>
+      <span className="text-[11px] text-muted-foreground/70">{label}</span>
+      <span className={cn("text-[11px] font-semibold", highlight ? "text-success" : "text-muted-foreground")}>
         {value}
       </span>
     </div>
@@ -222,21 +222,21 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
     <Dialog.Root open={open} onOpenChange={handleClose}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-md animate-fade-in" />
-        <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-[#0c1221] border border-white/[0.08] rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] focus:outline-none animate-scale-in">
+        <Dialog.Content className="fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.7)] focus:outline-none animate-scale-in">
 
           {/* Header */}
-          <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-white/[0.05]">
+          <div className="flex items-center justify-between px-6 pt-5 pb-4 border-b border-border">
             <div className="flex items-center gap-2.5">
               <div className="h-8 w-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center">
                 <Database className="h-4 w-4 text-primary" />
               </div>
               <div>
-                <Dialog.Title className="text-sm font-semibold text-white/85">Sync Data</Dialog.Title>
-                <p className="text-[11px] text-white/30">Pull transactions from connected sources</p>
+                <Dialog.Title className="text-sm font-semibold text-foreground">Sync Data</Dialog.Title>
+                <p className="text-[11px] text-muted-foreground/70">Pull transactions from connected sources</p>
               </div>
             </div>
             <Dialog.Close asChild>
-              <button className="text-white/25 hover:text-white/60 transition-colors rounded-lg p-1.5 hover:bg-white/[0.06]">
+              <button className="text-muted-foreground/70 hover:text-muted-foreground transition-colors rounded-lg p-1.5 hover:bg-accent">
                 <X className="h-4 w-4" />
               </button>
             </Dialog.Close>
@@ -246,7 +246,7 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
 
             {/* Date range section */}
             <div>
-              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-3">Date Range</p>
+              <p className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest mb-3">Date Range</p>
 
               {/* Presets */}
               <div className="flex gap-1.5 mb-3">
@@ -259,7 +259,7 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                       "flex-1 h-7 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-40",
                       activePreset === p.days
                         ? "bg-primary/15 border border-primary/30 text-primary"
-                        : "bg-white/[0.03] border border-white/[0.07] text-white/35 hover:text-white/60 hover:bg-white/[0.06]"
+                        : "bg-accent/40 border border-border text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
                     )}
                   >
                     {p.label}
@@ -272,7 +272,7 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                     "flex-1 h-7 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-40",
                     activePreset === 0
                       ? "bg-primary/15 border border-primary/30 text-primary"
-                      : "bg-white/[0.03] border border-white/[0.07] text-white/35 hover:text-white/60 hover:bg-white/[0.06]"
+                      : "bg-accent/40 border border-border text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
                   )}
                 >
                   Custom
@@ -282,19 +282,19 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
               {/* Date inputs */}
               <div className="flex items-center gap-2">
                 <div className="flex-1">
-                  <label className="text-[10px] text-white/25 block mb-1">From</label>
+                  <label className="text-[10px] text-muted-foreground/70 block mb-1">From</label>
                   <input
                     type="date"
                     value={fromDate}
                     max={toDate}
                     onChange={(e) => handleFromChange(e.target.value)}
                     disabled={state === "syncing"}
-                    className="w-full h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 text-xs text-white/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
+                    className="w-full h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
                   />
                 </div>
-                <ArrowRight className="h-3.5 w-3.5 text-white/20 flex-shrink-0 mt-4" />
+                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0 mt-4" />
                 <div className="flex-1">
-                  <label className="text-[10px] text-white/25 block mb-1">To</label>
+                  <label className="text-[10px] text-muted-foreground/70 block mb-1">To</label>
                   <input
                     type="date"
                     value={toDate}
@@ -302,16 +302,16 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                     max={toDateInputValue(new Date())}
                     onChange={(e) => handleToChange(e.target.value)}
                     disabled={state === "syncing"}
-                    className="w-full h-9 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 text-xs text-white/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
+                    className="w-full h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 disabled:opacity-40 [color-scheme:dark]"
                   />
                 </div>
               </div>
 
               {daysDiff > 0 && (
-                <p className="text-[11px] text-white/25 mt-2">
-                  Pulling <span className="text-white/50 font-medium">{daysDiff} days</span> of data
+                <p className="text-[11px] text-muted-foreground/70 mt-2">
+                  Pulling <span className="text-muted-foreground font-medium">{daysDiff} days</span> of data
                   {daysDiff > 90 && (
-                    <span className="text-amber-400/60 ml-2">· may take a moment for large datasets</span>
+                    <span className="text-warning/60 ml-2">· may take a moment for large datasets</span>
                   )}
                 </p>
               )}
@@ -320,14 +320,14 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
             {/* Results */}
             {state !== "idle" && (
               <div>
-                <p className="text-[10px] font-semibold text-white/30 uppercase tracking-widest mb-3">Results</p>
+                <p className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest mb-3">Results</p>
 
                 {state === "syncing" && (
-                  <div className="flex items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-4">
+                  <div className="flex items-center gap-3 rounded-xl border border-border bg-accent/40 px-4 py-4">
                     <RefreshCw className="h-4 w-4 text-primary animate-spin flex-shrink-0" />
                     <div>
-                      <p className="text-sm text-white/60 font-medium">Syncing…</p>
-                      <p className="text-xs text-white/25 mt-0.5">Fetching from all connected sources</p>
+                      <p className="text-sm text-muted-foreground font-medium">Syncing…</p>
+                      <p className="text-xs text-muted-foreground/70 mt-0.5">Fetching from all connected sources</p>
                     </div>
                   </div>
                 )}
@@ -337,16 +337,16 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
                     {/* Error (no connectors / network error) */}
                     {response.error && (
                       <div className="flex items-center gap-2.5 rounded-xl border border-red-500/20 bg-red-500/[0.04] px-4 py-3">
-                        <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
-                        <p className="text-sm text-red-400/80">{response.error}</p>
+                        <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0" />
+                        <p className="text-sm text-destructive/80">{response.error}</p>
                       </div>
                     )}
 
                     {/* No connectors */}
                     {!response.error && response.results.length === 0 && (
-                      <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] px-4 py-4 text-center">
-                        <p className="text-sm text-white/35">No active connectors found.</p>
-                        <p className="text-xs text-white/20 mt-1">Connect Razorpay or Stripe first.</p>
+                      <div className="rounded-xl border border-border bg-accent/40 px-4 py-4 text-center">
+                        <p className="text-sm text-muted-foreground/70">No active connectors found.</p>
+                        <p className="text-xs text-muted-foreground/70 mt-1">Connect Razorpay or Stripe first.</p>
                       </div>
                     )}
 
@@ -357,18 +357,18 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
 
                     {/* Summary */}
                     {response.results.length > 0 && (
-                      <div className="flex items-center justify-between rounded-xl bg-white/[0.025] border border-white/[0.05] px-4 py-3 mt-1">
-                        <span className="text-xs text-white/30">Total</span>
+                      <div className="flex items-center justify-between rounded-xl bg-accent/40 border border-border px-4 py-3 mt-1">
+                        <span className="text-xs text-muted-foreground/70">Total</span>
                         <div className="flex items-center gap-4 text-xs">
-                          <span className="text-white/35">{response.total_fetched} fetched</span>
-                          <span className={cn("font-semibold", response.total_inserted > 0 ? "text-emerald-400" : "text-white/40")}>
+                          <span className="text-muted-foreground/70">{response.total_fetched} fetched</span>
+                          <span className={cn("font-semibold", response.total_inserted > 0 ? "text-success" : "text-muted-foreground")}>
                             {response.total_inserted} new
                           </span>
                           {response.total_updated > 0 && (
                             <span className="font-semibold text-violet-400">{response.total_updated} refreshed</span>
                           )}
                           {response.total_skipped > 0 && (
-                            <span className="text-white/25">{response.total_skipped} skipped</span>
+                            <span className="text-muted-foreground/70">{response.total_skipped} skipped</span>
                           )}
                         </div>
                       </div>
@@ -384,7 +384,7 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
             <Dialog.Close asChild>
               <Button
                 variant="outline"
-                className="flex-1 border-white/[0.07] bg-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.04] hover:border-white/[0.12]"
+                className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border"
               >
                 {state === "done" ? "Close" : "Cancel"}
               </Button>
