@@ -95,12 +95,12 @@ export function SidebarNav({
   const avatarLetter = (userName?.charAt(0) || userEmail.charAt(0)).toUpperCase();
 
   return (
-    <aside className="relative flex flex-col w-56 bg-[rgba(4,7,15,0.7)] border-r border-white/[0.06] z-[1]">
+    <aside className="relative flex flex-col w-56 bg-card border-r border-border z-[1]">
       {/* Ambient top gradient */}
       <div className="pointer-events-none absolute top-0 left-0 right-0 h-28 bg-gradient-to-b from-primary/[0.06] to-transparent" />
 
       {/* Logo */}
-      <div className="relative flex items-center gap-2.5 px-4 pt-4 pb-4 border-b border-white/[0.06]">
+      <div className="relative flex items-center gap-2.5 px-4 pt-4 pb-4 border-b border-border">
         <div
           className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
           style={{
@@ -112,7 +112,7 @@ export function SidebarNav({
           <TrendingUp className="w-3.5 h-3.5 text-white" />
         </div>
         <div className="overflow-hidden">
-          <p className="font-semibold text-[13px] leading-none text-white/90 tracking-tight">Finance OS</p>
+          <p className="font-semibold text-[13px] leading-none text-foreground tracking-tight">Finance OS</p>
         </div>
       </div>
 
@@ -125,7 +125,7 @@ export function SidebarNav({
 
       {/* Workspace nav */}
       <div className="px-3 pt-3 pb-1">
-        <span className="text-[9.5px] font-bold tracking-[0.16em] text-white/20 uppercase">Workspace</span>
+        <span className="text-[9.5px] font-bold tracking-[0.16em] text-muted-foreground/70 uppercase">Workspace</span>
       </div>
       <nav className="px-2.5 space-y-px">
         {visibleWorkspace.map((item) => {
@@ -137,8 +137,8 @@ export function SidebarNav({
               className={cn(
                 "group relative flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[12.5px] font-medium transition-all duration-150",
                 active
-                  ? "bg-primary/[0.12] text-white"
-                  : "text-white/35 hover:bg-white/[0.03] hover:text-white/70"
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
               )}
             >
               {active && (
@@ -149,12 +149,12 @@ export function SidebarNav({
               )}
               <item.Icon className={cn(
                 "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
-                active ? "text-primary" : "text-white/35 group-hover:text-white/60"
+                active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
               )} />
               <span className="flex-1">{item.label}</span>
               <span className={cn(
                 "text-[9.5px] font-mono flex-shrink-0",
-                active ? "text-primary/50" : "text-white/15 group-hover:text-white/25"
+                active ? "text-primary/50" : "text-muted-foreground/50 group-hover:text-muted-foreground"
               )}>
                 {item.hint}
               </span>
@@ -165,7 +165,7 @@ export function SidebarNav({
 
       {/* Settings nav */}
       <div className="px-3 pt-3 pb-1 mt-2">
-        <span className="text-[9.5px] font-bold tracking-[0.16em] text-white/20 uppercase">Settings</span>
+        <span className="text-[9.5px] font-bold tracking-[0.16em] text-muted-foreground/70 uppercase">Settings</span>
       </div>
       <nav className="px-2.5 space-y-px">
         {settingsNav
@@ -179,8 +179,8 @@ export function SidebarNav({
                 className={cn(
                   "group relative flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[12.5px] font-medium transition-all duration-150",
                   active
-                    ? "bg-primary/[0.12] text-white"
-                    : "text-white/35 hover:bg-white/[0.03] hover:text-white/70"
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 )}
               >
                 {active && (
@@ -191,7 +191,7 @@ export function SidebarNav({
                 )}
                 <item.Icon className={cn(
                   "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
-                  active ? "text-primary" : "text-white/35 group-hover:text-white/60"
+                  active ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                 )} />
                 <span className="flex-1">{item.label}</span>
               </Link>
@@ -201,20 +201,20 @@ export function SidebarNav({
 
       {/* Connector status */}
       {connectorCount > 0 && (
-        <div className="mx-2.5 mt-3 mb-2 p-2 border border-white/[0.06] rounded-lg bg-white/[0.015]">
-          <div className="text-[9.5px] font-bold tracking-[0.14em] text-white/20 uppercase mb-2">Status</div>
+        <div className="mx-2.5 mt-3 mb-2 p-2 border border-border rounded-lg bg-accent/40">
+          <div className="text-[9.5px] font-bold tracking-[0.14em] text-muted-foreground/70 uppercase mb-2">Status</div>
           <div className="space-y-1.5">
-            <div className="flex items-center gap-2 text-[11px] text-white/45">
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"
                 style={{ boxShadow: "0 0 6px rgba(29,184,132,0.6)" }} />
               <span className="flex-1">{connectorCount} connector{connectorCount !== 1 ? "s" : ""}</span>
-              <span className="text-white/25 font-mono text-[10px]">{liveCount} live</span>
+              <span className="text-muted-foreground/70 font-mono text-[10px]">{liveCount} live</span>
             </div>
             {lastSyncedAt && (
-              <div className="flex items-center gap-2 text-[11px] text-white/45">
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
                 <span className="flex-1">Last sync</span>
-                <span className="text-white/25 font-mono text-[10px]">{timeAgo(lastSyncedAt)}</span>
+                <span className="text-muted-foreground/70 font-mono text-[10px]">{timeAgo(lastSyncedAt)}</span>
               </div>
             )}
           </div>
@@ -222,10 +222,10 @@ export function SidebarNav({
       )}
 
       {/* User footer */}
-      <div className="p-2.5 border-t border-white/[0.06] mt-auto">
+      <div className="p-2.5 border-t border-border mt-auto">
         <Link
           href="/dashboard/profile"
-          className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-lg hover:bg-white/[0.03] transition-all group"
+          className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-lg hover:bg-accent transition-all group"
         >
           <div
             className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white"
@@ -234,15 +234,15 @@ export function SidebarNav({
             {avatarLetter}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[12px] font-medium text-white/70 truncate group-hover:text-white/85 transition-colors">
+            <p className="text-[12px] font-medium text-foreground/80 truncate group-hover:text-foreground transition-colors">
               {displayName}
             </p>
-            <p className="text-[10px] text-white/25 truncate">{userEmail}</p>
+            <p className="text-[10px] text-muted-foreground truncate">{userEmail}</p>
           </div>
         </Link>
         <button
           onClick={handleSignOut}
-          className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-[12px] text-white/25 hover:bg-red-500/[0.08] hover:text-red-400 transition-all duration-150"
+          className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-[12px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-all duration-150"
         >
           <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
           Sign out

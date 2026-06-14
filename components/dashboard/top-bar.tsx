@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { RefreshCw, Bell, Search } from "lucide-react";
 import { SyncModal } from "@/components/dashboard/sync-modal";
 import { CommandPalette, useCommandPalette } from "@/components/dashboard/command-palette";
+import { ThemeToggle } from "@/components/dashboard/theme-toggle";
 
 const PAGE_META: Record<string, { label: string }> = {
   "/dashboard":              { label: "War Room" },
@@ -46,50 +47,48 @@ export function TopBar({ orgId, orgName }: TopBarProps) {
   return (
     <>
       <header
-        className="sticky top-0 z-[5] h-12 flex items-center gap-3 px-4 border-b border-white/[0.06] flex-shrink-0"
-        style={{ background: "rgba(4,7,15,0.75)", backdropFilter: "blur(20px)" }}
+        className="sticky top-0 z-[5] h-12 flex items-center gap-3 px-4 border-b border-border flex-shrink-0 bg-background/75 backdrop-blur-xl"
       >
         {/* Left: breadcrumb + LIVE pill + clock */}
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <div className="flex items-center gap-1.5 text-[12px]">
-            <span className="text-white/30">{orgName}</span>
-            <span className="text-white/20">/</span>
-            <span className="font-semibold text-white/85">{page.label}</span>
+            <span className="text-muted-foreground">{orgName}</span>
+            <span className="text-muted-foreground/60">/</span>
+            <span className="font-semibold text-foreground">{page.label}</span>
           </div>
 
-          <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10.5px] font-semibold border bg-emerald-500/10 text-emerald-400 border-emerald-500/25">
-            <span className="w-1 h-1 rounded-full bg-emerald-400" />
+          <span className="inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10.5px] font-semibold border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25">
+            <span className="w-1 h-1 rounded-full bg-emerald-500 dark:bg-emerald-400" />
             LIVE
           </span>
 
           {clock && (
-            <span className="num text-[11px] text-white/25 hidden md:block">{clock}</span>
+            <span className="num text-[11px] text-muted-foreground/80 hidden md:block">{clock}</span>
           )}
         </div>
 
-        {/* Right: ⌘K search + refresh + bell */}
+        {/* Right: ⌘K search + theme + refresh + bell */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <button
             onClick={() => setCmdOpen(true)}
-            className="hidden sm:flex items-center gap-2 h-[30px] w-[260px] px-2.5 rounded-lg text-[12px] cursor-pointer transition-all"
-            style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.3)" }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.10)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.06)"; }}
+            className="hidden sm:flex items-center gap-2 h-[30px] w-[260px] px-2.5 rounded-lg text-[12px] text-muted-foreground cursor-pointer transition-colors bg-accent/60 border border-border hover:border-border/80"
           >
             <Search className="h-3 w-3 flex-shrink-0" />
             <span className="flex-1 text-left">Ask anything or jump to…</span>
-            <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded text-white/30"
-              style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>⌘K</kbd>
+            <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded text-muted-foreground bg-background border border-border">⌘K</kbd>
           </button>
+
+          <ThemeToggle />
 
           <button
             onClick={() => setSyncOpen(true)}
-            className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-white/35 hover:text-white/70 hover:bg-white/[0.04] transition-all"
+            aria-label="Sync"
+            className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
 
-          <button className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-white/35 hover:text-white/70 hover:bg-white/[0.04] transition-all">
+          <button aria-label="Notifications" className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
             <Bell className="w-3.5 h-3.5" />
           </button>
         </div>
