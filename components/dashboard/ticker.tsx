@@ -37,18 +37,18 @@ export function Ticker({ cash, mrr, burnRate, runwayDays, totalOutstanding }: Ti
   ];
 
   return (
-    <div className="h-[30px] flex-shrink-0 overflow-hidden border-b border-white/[0.06] bg-white/[0.015] relative z-[4]">
+    <div className="h-[30px] flex-shrink-0 overflow-hidden border-b border-border bg-accent/30 relative z-[4]">
       <div className="flex items-center gap-7 px-4 h-full animate-ticker whitespace-nowrap">
         {[...items, ...items].map((it, i) => (
           <div key={i} className="flex items-center gap-1.5 text-[11.5px]">
-            <span className="text-[9.5px] font-bold tracking-[0.12em] text-white/25 uppercase">{it.label}</span>
-            <span className="num font-semibold text-white/85">{it.value}</span>
+            <span className="text-[9.5px] font-bold tracking-[0.12em] text-muted-foreground/70 uppercase">{it.label}</span>
+            <span className="num font-semibold text-foreground">{it.value}</span>
             <span
               className={[
                 "text-[10.5px] px-1.5 py-px rounded font-semibold",
-                it.up === true  ? "bg-emerald-500/10 text-emerald-400" :
-                it.up === false ? "bg-red-500/10 text-red-400" :
-                                  "bg-amber-500/10 text-amber-400",
+                it.up === true  ? "bg-success/10 text-success" :
+                it.up === false ? "bg-destructive/10 text-destructive" :
+                                  "bg-warning/10 text-warning",
               ].join(" ")}
             >
               {it.delta}

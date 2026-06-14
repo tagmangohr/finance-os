@@ -74,7 +74,7 @@ export function CoPilot({ orgId }: CoPilotProps) {
   return (
     <aside
       className={cn(
-        "relative z-[2] flex-shrink-0 flex flex-col bg-[rgba(7,10,20,0.85)] backdrop-blur-xl border-l border-white/[0.06] transition-all duration-250",
+        "relative z-[2] flex-shrink-0 flex flex-col bg-card/85 backdrop-blur-xl border-l border-border transition-all duration-250",
         open ? "w-[280px]" : "w-12"
       )}
     >
@@ -82,7 +82,7 @@ export function CoPilot({ orgId }: CoPilotProps) {
         /* Collapsed rail */
         <button
           onClick={toggleOpen}
-          className="flex flex-col items-center gap-1.5 pt-4 w-full text-white/35 hover:text-white/70 transition-colors"
+          className="flex flex-col items-center gap-1.5 pt-4 w-full text-muted-foreground hover:text-foreground transition-colors"
           style={{ writingMode: "vertical-rl" }}
         >
           <Sparkles className="h-4 w-4 text-primary mb-2 flex-shrink-0" style={{ writingMode: "horizontal-tb" }} />
@@ -91,13 +91,13 @@ export function CoPilot({ orgId }: CoPilotProps) {
       ) : (
         <>
           {/* Header */}
-          <div className="h-12 px-3.5 border-b border-white/[0.06] flex items-center justify-between flex-shrink-0">
+          <div className="h-12 px-3.5 border-b border-border flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full animate-orb flex-shrink-0"
                 style={{ background: "radial-gradient(circle at 30% 30%, #fff, #7c52f0 65%)", boxShadow: "0 0 12px rgba(124,82,240,0.6)" }} />
-              <span className="text-[13px] font-semibold text-white/85">Co-pilot</span>
+              <span className="text-[13px] font-semibold text-foreground">Co-pilot</span>
             </div>
-            <button onClick={toggleOpen} className="text-white/25 hover:text-white/60 transition-colors p-1 rounded">
+            <button onClick={toggleOpen} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded">
               <ChevronRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -110,12 +110,12 @@ export function CoPilot({ orgId }: CoPilotProps) {
                 className={cn(
                   "text-xs leading-relaxed rounded-xl p-2.5 border",
                   m.role === "assistant"
-                    ? "bg-white/[0.015] border-white/[0.06] border-l-2 border-l-primary/50 text-white/80"
-                    : "bg-primary/[0.10] border-primary/20 text-white/80 ml-2"
+                    ? "bg-accent/40 border-border border-l-2 border-l-primary/50 text-foreground/80"
+                    : "bg-primary/[0.10] border-primary/20 text-foreground/80 ml-2"
                 )}
               >
                 {m.role === "assistant" && (
-                  <div className="text-[9.5px] font-bold tracking-[0.12em] text-white/30 uppercase mb-1.5 flex items-center gap-1">
+                  <div className="text-[9.5px] font-bold tracking-[0.12em] text-muted-foreground/70 uppercase mb-1.5 flex items-center gap-1">
                     <Sparkles className="h-2.5 w-2.5" /> Co-pilot
                   </div>
                 )}
@@ -123,8 +123,8 @@ export function CoPilot({ orgId }: CoPilotProps) {
               </div>
             ))}
             {loading && (
-              <div className="bg-white/[0.015] border border-white/[0.06] border-l-2 border-l-primary/50 rounded-xl p-2.5">
-                <div className="text-[9.5px] font-bold tracking-[0.12em] text-white/30 uppercase mb-1.5 flex items-center gap-1">
+              <div className="bg-accent/40 border border-border border-l-2 border-l-primary/50 rounded-xl p-2.5">
+                <div className="text-[9.5px] font-bold tracking-[0.12em] text-muted-foreground/70 uppercase mb-1.5 flex items-center gap-1">
                   <Sparkles className="h-2.5 w-2.5" /> thinking
                 </div>
                 <div className="flex gap-1">
@@ -143,7 +143,7 @@ export function CoPilot({ orgId }: CoPilotProps) {
               <button
                 key={s}
                 onClick={() => send(s)}
-                className="h-[22px] px-2 rounded text-[10.5px] text-white/45 bg-white/[0.03] border border-white/[0.06] hover:bg-white/[0.06] hover:text-white/70 transition-all"
+                className="h-[22px] px-2 rounded text-[10.5px] text-muted-foreground bg-accent/40 border border-border hover:bg-accent hover:text-foreground transition-all"
               >
                 {s}
               </button>
@@ -151,13 +151,13 @@ export function CoPilot({ orgId }: CoPilotProps) {
           </div>
 
           {/* Input */}
-          <div className="px-3 pb-3 pt-1 border-t border-white/[0.06] flex gap-1.5 flex-shrink-0">
+          <div className="px-3 pb-3 pt-1 border-t border-border flex gap-1.5 flex-shrink-0">
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send(input)}
               placeholder="Ask co-pilot…"
-              className="flex-1 h-[30px] px-2.5 rounded-lg bg-white/[0.04] border border-white/[0.06] text-xs text-white/80 placeholder:text-white/25 focus:outline-none focus:border-primary/40 transition-colors"
+              className="flex-1 h-[30px] px-2.5 rounded-lg bg-accent/40 border border-border text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors"
             />
             <button
               onClick={() => send(input)}
