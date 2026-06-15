@@ -39,6 +39,20 @@ export async function getOrgId(): Promise<string | null> {
   return org?.id ?? null;
 }
 
+/**
+ * True if the org has connected at least one data source. Used to decide whether
+ * to show the sample-data PREVIEW (no connectors yet) vs the user's real data
+ * (even if a particular metric/window is currently empty). Cheap head count.
+ */
+export async function orgHasConnectors(orgId: string): Promise<boolean> {
+  const supabase = await createClient();
+  const { count } = await supabase
+    .from("connectors")
+    .select("id", { count: "exact", head: true })
+    .eq("org_id", orgId);
+  return (count ?? 0) > 0;
+}
+
 export async function getOrgWithUser(): Promise<{ orgId: string; orgName: string; userEmail: string } | null> {
   const { org } = await getActiveOrg();
   if (!org) return null;

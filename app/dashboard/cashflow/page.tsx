@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
 import { Wallet, Flame, ArrowLeftRight, TrendingUp } from "lucide-react";
-import { getOrgId, getCashFlowDetails } from "@/lib/data";
+import { getOrgId, getCashFlowDetails, orgHasConnectors } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
@@ -39,7 +39,8 @@ export default async function CashFlowPage() {
   if (!orgId) redirect("/auth/login");
 
   const real = await getCashFlowDetails(orgId);
-  const preview = real.cashFlowData.length === 0;
+  // Sample preview only when nothing is connected yet (not just an empty window).
+  const preview = !(await orgHasConnectors(orgId));
 
   const realMonthly = real.monthlyData.slice(-8).map((m) => ({
     label: MONTHS[Number(m.month.slice(5, 7)) - 1] ?? m.month, inflow: m.inflow, outflow: m.outflow,

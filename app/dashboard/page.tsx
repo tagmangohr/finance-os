@@ -5,9 +5,10 @@ import Link from "next/link";
 import {
   TrendingUp, Receipt, Zap, Wallet, Gauge, Coins, Flame, Sparkles, ArrowRight,
 } from "lucide-react";
-import { getFinancialSummary, getOrgId } from "@/lib/data";
+import { getFinancialSummary, getOrgId, orgHasConnectors } from "@/lib/data";
 import type { DashboardSummary } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { SectionCard } from "@/components/dashboard/section-card";
 import { RevenueChart } from "@/components/charts/revenue-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
 import { InflowOutflowChart } from "@/components/charts/inflow-outflow-chart";
@@ -106,24 +107,6 @@ function buildReal(s: DashboardSummary): View {
   };
 }
 
-// ─── Section wrapper ─────────────────────────────────────────────────
-function SectionCard({ title, subtitle, action, children, className }: {
-  title: string; subtitle?: string; action?: React.ReactNode; children: React.ReactNode; className?: string;
-}) {
-  return (
-    <div className={`rounded-xl border border-border bg-card overflow-hidden transition-all duration-200 hover:border-border/80${className ? " " + className : ""}`}>
-      <div className="flex items-center justify-between px-4 pt-3.5 pb-0">
-        <div>
-          <p className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground">{title}</p>
-          {subtitle && <p className="text-[10.5px] text-muted-foreground/70 mt-0.5">{subtitle}</p>}
-        </div>
-        {action}
-      </div>
-      <div className="px-4 pb-4 pt-2">{children}</div>
-    </div>
-  );
-}
-
 function Signal({ label, tone }: { label: string; tone: "good" | "warn" | "bad" }) {
   const dot = tone === "good" ? "bg-success" : tone === "warn" ? "bg-warning" : "bg-destructive";
   return (
@@ -152,7 +135,10 @@ export default async function DashboardPage() {
   if (!orgId) redirect("/auth/login");
 
   const summary = await getFinancialSummary();
-  const v = summary.hasData ? buildReal(summary) : SAMPLE;
+  // Sample preview only when nothing is connected yet; a connected org sees its
+  // real data even if metrics are still empty (e.g. mid-sync) — never fabricated.
+  const preview = !(await orgHasConnectors(orgId));
+  const v = preview ? SAMPLE : buildReal(summary);
 
   const runwayMonths = v.runwayDays / 30;
   const ringC = 2 * Math.PI * 40;

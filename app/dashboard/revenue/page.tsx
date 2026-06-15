@@ -2,7 +2,7 @@ export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
 import { TrendingUp, Coins, ArrowUpRight, Percent } from "lucide-react";
-import { getOrgId, getRevenueDetails } from "@/lib/data";
+import { getOrgId, getRevenueDetails, orgHasConnectors } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
@@ -35,7 +35,9 @@ export default async function RevenuePage() {
   if (!orgId) redirect("/auth/login");
 
   const real = await getRevenueDetails(orgId);
-  const preview = real.revenueByMonth.length === 0;
+  // Sample preview only when nothing is connected yet — a connected org sees its
+  // real data (even if this window is empty), never fabricated numbers.
+  const preview = !(await orgHasConnectors(orgId));
   const v = preview ? SAMPLE : {
     mrr: real.mrr, arr: real.arr, momGrowth: real.momGrowth, yoyGrowth: real.yoyGrowth,
     revenueByMonth: real.revenueByMonth,
