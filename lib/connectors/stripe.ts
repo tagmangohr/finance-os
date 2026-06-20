@@ -14,6 +14,11 @@ export class StripeConnector {
     this.stripe = new Stripe(secretKey, {
       apiVersion: "2025-02-24.acacia",
       typescript: true,
+      // Per-request timeout (well under the 60 s function budget) so a single
+      // hung socket can't eat the whole sync; combined with built-in
+      // exponential backoff this absorbs transient 429/5xx without manual code.
+      timeout: 20000,
+      maxNetworkRetries: 2,
     });
   }
 
@@ -33,7 +38,11 @@ export class StripeConnector {
           lte: Math.floor(toDate.getTime() / 1000),
         },
         limit: 100,
-        expand: ["data.customer"],
+        // NOTE: deliberately NOT expanding data.customer. Expansion forces Stripe
+        // to fetch the full customer object per charge, multiplying per-page
+        // latency and pushing high-volume accounts past the function timeout.
+        // normalizeStripeCharge falls back to billing_details (always inline) for
+        // the counterparty, so we get the name without the expansion cost.
       };
       if (startingAfter) params.starting_after = startingAfter;
 

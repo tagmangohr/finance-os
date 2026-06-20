@@ -540,8 +540,14 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         // 30-day client chunks × 10 concurrent = 1 year in 2 batches (~6 s).
         // The server sub-chunks internally into 7-day Razorpay windows, so each
         // Vercel function stays fast (~3 s) regardless of transaction volume.
-        const CONCURRENCY = 10;
-        const chunks = splitDateRange(fromDate, toDate);
+        //
+        // Stripe is the exception: it paginates the FULL window in one function
+        // (no server sub-chunking), and high-volume accounts page deeply, so we
+        // use smaller windows and lower concurrency to keep every function well
+        // under the 60 s budget and well within Stripe's read rate limit.
+        const isStripe = connector.type === "stripe";
+        const CONCURRENCY = isStripe ? 5 : 10;
+        const chunks = splitDateRange(fromDate, toDate, isStripe ? 15 : CHUNK_DAYS);
         setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
         let completed = 0;
 

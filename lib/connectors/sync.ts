@@ -179,6 +179,12 @@ async function fetchConnectorTransactions(
     case "razorpay":
       return fetchWithSubChunks(connector, fromDate, toDate, fetchRazorpay);
     case "stripe":
+      // Sub-chunking keeps each Stripe pagination to a small (≤7-day) window so
+      // every function finishes well under the 60 s budget, and gives the 90-day
+      // cron useful parallelism inside its single function. The 504 came from the
+      // MANUAL path fanning these windows out × high client concurrency (storm) —
+      // fixed there by dropping the costly customer-expand and lowering the client
+      // concurrency/chunk size, not by removing sub-chunking.
       return fetchWithSubChunks(connector, fromDate, toDate, fetchStripe);
     case "cashfree":
       return fetchWithSubChunks(connector, fromDate, toDate, fetchCashfree);
