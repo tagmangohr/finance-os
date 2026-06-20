@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { BASE_CURRENCY } from "@/lib/utils";
 
 /**
@@ -110,4 +111,65 @@ export async function enrichRowsWithFx(rows: FxRow[]): Promise<void> {
       }
     }
   }
+}
+
+/**
+ * Convert EXISTING transaction rows that still lack a base-currency value.
+ * Works directly on the DB (no gateway re-fetch needed — the charges are already
+ * stored, only amount_base is missing), so it's fast and can't time out the way a
+ * full re-sync does. Idempotent + resumable: each run drains a bounded batch and
+ * reports how many rows still need conversion.
+ */
+export async function backfillMissingBaseAmounts(
+  supabase: SupabaseClient,
+  maxRows = 3000
+): Promise<{ updated: number; remaining: number }> {
+  const { data: rows } = await supabase
+    .from("transactions")
+    .select("id, amount, currency, transaction_date")
+    .is("amount_base", null)
+    .not("currency", "is", null)
+    .neq("currency", BASE_CURRENCY)
+    .limit(maxRows);
+
+  if (!rows || rows.length === 0) return { updated: 0, remaining: 0 };
+
+  const byCurrency = new Map<string, typeof rows>();
+  for (const r of rows) {
+    const list = byCurrency.get(r.currency) ?? [];
+    list.push(r);
+    byCurrency.set(r.currency, list);
+  }
+
+  let updated = 0;
+  for (const [currency, rs] of byCurrency) {
+    const rateMap = await getInrRates(currency, rs.map((r) => String(r.transaction_date).slice(0, 10)));
+    for (let i = 0; i < rs.length; i += 100) {
+      const chunk = rs.slice(i, i + 100);
+      await Promise.all(
+        chunk.map(async (r) => {
+          const rate = rateMap.get(String(r.transaction_date).slice(0, 10));
+          if (rate == null) return;
+          const { error } = await supabase
+            .from("transactions")
+            .update({
+              amount_base: Math.round(Number(r.amount) * rate * 100) / 100,
+              base_currency: BASE_CURRENCY,
+              fx_rate: rate,
+            })
+            .eq("id", r.id);
+          if (!error) updated++;
+        })
+      );
+    }
+  }
+
+  const { count } = await supabase
+    .from("transactions")
+    .select("id", { count: "exact", head: true })
+    .is("amount_base", null)
+    .not("currency", "is", null)
+    .neq("currency", BASE_CURRENCY);
+
+  return { updated, remaining: count ?? 0 };
 }

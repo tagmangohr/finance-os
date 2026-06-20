@@ -17,6 +17,10 @@ export const JOB_WINDOW_DAYS = 14;
 export const CLAIM_BATCH = 3;
 /** Stop claiming new batches once the worker has used this much of its budget. */
 export const WORKER_BUDGET_MS = 50_000;
+/** A job reclaimed this many times is being killed mid-run every pass (window too
+ *  large to finish in the function budget). Fail it instead of looping forever —
+ *  its rows are recovered by incremental sync + the FX backfill cron. */
+export const MAX_RECLAIMS = 8;
 
 /**
  * Split [from, to] into bounded windows and enqueue one job per window.
@@ -120,6 +124,16 @@ export async function drainSyncJobs(
   startedAt: number = Date.now()
 ): Promise<{ processed: number; done: number; failed: number; requeued: number }> {
   let processed = 0, done = 0, failed = 0, requeued = 0;
+
+  // Retire jobs that keep getting killed mid-run (window too large to finish in
+  // the budget) so they stop being reclaimed forever. Their data is recovered by
+  // incremental sync + the FX backfill cron.
+  await supabase
+    .from("sync_jobs")
+    .update({ status: "failed", last_error: "exceeded retry ceiling (window too large)", locked_at: null, locked_by: null })
+    .eq("status", "running")
+    .gte("attempts", MAX_RECLAIMS)
+    .lt("locked_at", new Date(Date.now() - 5 * 60_000).toISOString());
 
   while (Date.now() - startedAt < WORKER_BUDGET_MS) {
     const batch = await claimBatch(supabase, worker);
