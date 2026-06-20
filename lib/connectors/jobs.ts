@@ -11,9 +11,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Each job covers at most this many days — keeps every unit well under the
  *  function budget so a single job can never time out. */
 export const JOB_WINDOW_DAYS = 14;
-/** How many jobs a single worker invocation claims per batch. Small keeps us
- *  inside provider rate limits; the worker loops batches until its time budget. */
-export const CLAIM_BATCH = 5;
+/** How many jobs a single worker invocation claims per batch. Kept small so a few
+ *  heavy paginations don't compete for the function budget or trip provider rate
+ *  limits; the worker loops batches until its time budget. */
+export const CLAIM_BATCH = 3;
 /** Stop claiming new batches once the worker has used this much of its budget. */
 export const WORKER_BUDGET_MS = 50_000;
 

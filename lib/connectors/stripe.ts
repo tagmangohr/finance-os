@@ -38,12 +38,11 @@ export class StripeConnector {
           lte: Math.floor(toDate.getTime() / 1000),
         },
         limit: 100,
-        // Expand the balance transaction to get the settled INR amount + exchange
-        // rate for foreign-currency charges (the authoritative base-currency
-        // figure). NOT expanding data.customer — that one forces a full customer
-        // fetch per charge and blows the timeout; billing_details (inline) covers
-        // the counterparty name instead.
-        expand: ["data.balance_transaction"],
+        // No expands. balance_transaction was tried for FX but this account
+        // settles in USD (no INR there) so it added per-page latency for nothing
+        // — INR now comes from ECB rates (lib/fx). data.customer is also avoided;
+        // billing_details (inline) covers the counterparty name. Keeping pages
+        // lean is what keeps each backfill job under the function timeout.
       };
       if (startingAfter) params.starting_after = startingAfter;
 
