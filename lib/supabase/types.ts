@@ -137,9 +137,39 @@ export interface Database {
         Insert: Omit<Database["public"]["Tables"]["invoices"]["Row"], "id" | "created_at" | "updated_at">;
         Update: Partial<Database["public"]["Tables"]["invoices"]["Insert"]>;
       };
+      sync_jobs: {
+        Row: {
+          id: string;
+          org_id: string;
+          connector_id: string;
+          type: string;
+          window_from: string;
+          window_to: string;
+          status: "pending" | "running" | "done" | "failed";
+          attempts: number;
+          max_attempts: number;
+          run_after: string;
+          locked_at: string | null;
+          locked_by: string | null;
+          last_error: string | null;
+          result: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["sync_jobs"]["Row"], "id" | "created_at" | "updated_at" | "status" | "attempts" | "max_attempts" | "run_after" | "locked_at" | "locked_by" | "last_error" | "result"> & Partial<Pick<Database["public"]["Tables"]["sync_jobs"]["Row"], "status" | "attempts" | "max_attempts" | "run_after">>;
+        Update: Partial<Database["public"]["Tables"]["sync_jobs"]["Row"]>;
+      };
+    };
+    Functions: {
+      claim_sync_jobs: {
+        Args: { p_batch: number; p_worker: string };
+        Returns: Database["public"]["Tables"]["sync_jobs"]["Row"][];
+      };
     };
   };
 }
+
+export type SyncJobRow = Database["public"]["Tables"]["sync_jobs"]["Row"];
 
 // ─── Drive connector table types ─────────────────────────────────────────────
 

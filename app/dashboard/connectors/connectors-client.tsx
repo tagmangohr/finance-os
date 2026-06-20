@@ -237,31 +237,30 @@ const CSV_COLUMN_OPTIONS = [
 
 // ─── Sync date-range presets ──────────────────────────────────────────────────
 
-// Client sends 30-day windows; the server sub-chunks internally into 7-day
-// Razorpay calls, so each Vercel function is fast (~3 s) regardless of data volume.
+// Backfill presets. `windows` ≈ how many 14-day background jobs the range becomes
+// (JOB_WINDOW_DAYS in lib/connectors/jobs.ts) — shown so the user knows the size.
 const SYNC_PRESETS = [
-  { label: "Last 30 days",  days: 30,   chunks: 1  },
-  { label: "Last 90 days",  days: 90,   chunks: 3  },
-  { label: "Last 6 months", days: 180,  chunks: 6  },
-  { label: "Last 1 year",   days: 365,  chunks: 13 },
-  { label: "Last 2 years",  days: 730,  chunks: 25 },
-  { label: "Last 3 years",  days: 1095, chunks: 37 },
+  { label: "Last 30 days",  days: 30,   windows: 3  },
+  { label: "Last 90 days",  days: 90,   windows: 7  },
+  { label: "Last 6 months", days: 180,  windows: 13 },
+  { label: "Last 1 year",   days: 365,  windows: 27 },
+  { label: "Last 2 years",  days: 730,  windows: 53 },
+  { label: "Last 3 years",  days: 1095, windows: 79 },
 ] as const;
 
-const CHUNK_DAYS = 30;
+// API connectors with a dedicated sync route. Membership here means:
+//  • "Sync latest" → incremental endpoint, and
+//  • date-range backfill → durable background queue (not in-request chunking).
+const SYNC_ENDPOINTS: Partial<Record<Connector["type"], string>> = {
+  razorpay: "/api/connectors/razorpay",
+  stripe:   "/api/connectors/stripe",
+  cashfree: "/api/connectors/cashfree",
+  payu:     "/api/connectors/payu",
+  paytm:    "/api/connectors/paytm",
+  easebuzz: "/api/connectors/easebuzz",
+};
 
-/** Split [from, to] into N-day client chunks. */
-function splitDateRange(from: Date, to: Date, chunkDays = CHUNK_DAYS): Array<{ from: Date; to: Date }> {
-  const chunks: Array<{ from: Date; to: Date }> = [];
-  let cursor = new Date(from);
-  const chunkMs = chunkDays * 24 * 60 * 60 * 1000;
-  while (cursor < to) {
-    const end = new Date(Math.min(cursor.getTime() + chunkMs, to.getTime()));
-    chunks.push({ from: new Date(cursor), to: end });
-    cursor = new Date(end.getTime() + 1); // +1 ms to avoid overlap
-  }
-  return chunks;
-}
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -516,143 +515,54 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
   };
 
-  // ── Per-connector sync (chunked) ──────────────────────────────────────────
+  // ── Date-range backfill ───────────────────────────────────────────────────
+  // For API connectors this enqueues bounded background jobs (Pillar 2) and polls
+  // progress — timeout-proof regardless of range size or volume. Other connectors
+  // fall back to the one-shot /api/sync route.
   const handleSync = async (connector: Connector, fromDate: Date, toDate: Date) => {
-    const endpoints: Partial<Record<Connector["type"], string>> = {
-      razorpay: "/api/connectors/razorpay",
-      stripe:   "/api/connectors/stripe",
-      cashfree: "/api/connectors/cashfree",
-      payu:     "/api/connectors/payu",
-      paytm:    "/api/connectors/paytm",
-      easebuzz: "/api/connectors/easebuzz",
-    };
-    const endpoint = endpoints[connector.type];
-
     setSyncingId(connector.id);
 
     try {
-      let totalSynced = 0;
-      let totalUpdated = 0;
-      const chunkErrors: string[] = [];
-
-      if (endpoint) {
-        // ── Chunked parallel sync ─────────────────────────────────────────
-        // 30-day client chunks × 10 concurrent = 1 year in 2 batches (~6 s).
-        // The server sub-chunks internally into 7-day Razorpay windows, so each
-        // Vercel function stays fast (~3 s) regardless of transaction volume.
-        //
-        // Stripe is the exception: it paginates the FULL window in one function
-        // (no server sub-chunking), and high-volume accounts page deeply, so we
-        // use smaller windows and lower concurrency to keep every function well
-        // under the 60 s budget and well within Stripe's read rate limit.
-        const isStripe = connector.type === "stripe";
-        const CONCURRENCY = isStripe ? 5 : 10;
-        const chunks = splitDateRange(fromDate, toDate, isStripe ? 15 : CHUNK_DAYS);
-        setSyncProgress({ connectorId: connector.id, current: 0, total: chunks.length });
-        let completed = 0;
-
-        const fetchChunk = async (chunk: { from: Date; to: Date }) => {
-          try {
-            const res = await fetch(endpoint, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                connector_id: connector.id,
-                org_id: orgId,
-                from_date: chunk.from.toISOString(),
-                to_date:   chunk.to.toISOString(),
-                // HMAC token generated server-side at page load; lets the API
-                // route skip Supabase cookie auth entirely (saves ~600 ms per call)
-                sync_token: syncTokens[connector.id],
-              }),
-            });
-            if (!res.ok) {
-              const errBody = await res.json().catch(() => ({})) as { error?: string };
-              const errMsg = errBody.error ?? `HTTP ${res.status}`;
-              console.error(`[sync] chunk ${chunk.from.toISOString().slice(0,10)}→${chunk.to.toISOString().slice(0,10)} failed: ${errMsg}`);
-              return { synced: 0, updated: 0, errors: [errMsg] };
-            }
-            const data = await res.json() as { synced?: number; updated?: number; warnings?: string[] };
-            return {
-              synced:  data.synced  ?? 0,
-              updated: data.updated ?? 0,
-              errors:  data.warnings?.map((w) => `warn: ${w}`) ?? [],
-            };
-          } catch (e) {
-            const errMsg = e instanceof Error ? e.message.slice(0, 120) : "Network error";
-            console.error(`[sync] chunk ${chunk.from.toISOString().slice(0,10)}→${chunk.to.toISOString().slice(0,10)} threw: ${errMsg}`);
-            return { synced: 0, updated: 0, errors: [errMsg] };
-          }
-        };
-
-        // Process in batches of CONCURRENCY; update progress after each batch
-        for (let i = 0; i < chunks.length; i += CONCURRENCY) {
-          const batch = chunks.slice(i, i + CONCURRENCY);
-          const results = await Promise.all(batch.map(fetchChunk));
-          completed += batch.length;
-          setSyncProgress({ connectorId: connector.id, current: Math.min(completed, chunks.length), total: chunks.length });
-          for (const r of results) {
-            totalSynced  += r.synced;
-            totalUpdated += r.updated;
-            chunkErrors.push(...r.errors);
-          }
-        }
-      } else {
-        // ── Fallback for connectors without a dedicated route ────────────
-        const res = await fetch("/api/sync", {
+      if (connector.type in SYNC_ENDPOINTS) {
+        const res = await fetch("/api/connectors/backfill", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ org_id: orgId }),
+          body: JSON.stringify({
+            connector_id: connector.id,
+            org_id: orgId,
+            from_date: fromDate.toISOString(),
+            to_date:   toDate.toISOString(),
+          }),
         });
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
         }
-        const data = await res.json();
-        totalSynced = data.total_inserted ?? 0;
-        totalUpdated = data.total_updated ?? 0;
-      }
-
-      setActiveConnectors((prev) =>
-        prev.map((c) =>
-          c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c
-        )
-      );
-
-      const hardErrors = chunkErrors.filter((e) => !e.startsWith("warn:"));
-      const softWarns  = chunkErrors.filter((e) => e.startsWith("warn:"));
-      // Counts must reflect DISTINCT problems, not sub-window fan-out. A single
-      // date range is split into many 7-day windows server-side, so one broken
-      // endpoint produces one warning per window. Dedupe by reason so "13 windows
-      // failed the same way" reads as one issue, not "13 transactions skipped".
-      const hardReasons = Array.from(new Set(hardErrors.map((e) => e.trim())));
-      if (hardErrors.length > 0 && totalSynced === 0 && totalUpdated === 0) {
-        // Nothing got through — show the first real error prominently
-        toast.error(`Sync failed: ${hardReasons[0]}`);
-      } else if (hardErrors.length > 0) {
-        toast.warning(
-          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${hardReasons.length} error${hardReasons.length > 1 ? "s" : ""}: ${hardReasons[0]}`
-        );
-      } else if (softWarns.length > 0) {
-        // Surface the ACTUAL reason (e.g. "Invalid API Key…") instead of
-        // "see console". Warnings look like "warn: charges: <error>" — strip
-        // the prefix and dedupe so repeated identical errors show once.
-        const reasons = Array.from(
-          new Set(softWarns.map((w) => w.replace(/^warn:\s*/, "").trim()))
-        );
-        const reason = reasons[0] + (reasons.length > 1 ? ` (+${reasons.length - 1} more)` : "");
-        if (totalSynced === 0 && totalUpdated === 0) {
-          // Every call was skipped and nothing imported — this is effectively a failure.
-          toast.error(`Couldn't sync — ${reason}`);
-        } else {
-          toast.warning(
-            `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${reasons.length} warning${reasons.length > 1 ? "s" : ""} — ${reason}`
-          );
+        const { enqueued } = await res.json() as { enqueued: number };
+        if (!enqueued) {
+          toast.success("Already up to date");
+          return;
         }
-        console.warn("[sync warnings]", softWarns);
-      } else {
-        toast.success(`Synced ${totalSynced} new, refreshed ${totalUpdated}`);
+        toast.message(`Backfill queued — ${enqueued} window${enqueued > 1 ? "s" : ""}, processing in the background…`);
+        await pollBackfill(connector.id);
+        return;
       }
+
+      // ── Fallback for connectors without a dedicated route ────────────
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org_id: orgId }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+      }
+      const data = await res.json();
+      setActiveConnectors((prev) =>
+        prev.map((c) => (c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c))
+      );
+      toast.success(`Synced ${data.total_inserted ?? 0} new, refreshed ${data.total_updated ?? 0}`);
     } catch (err) {
       toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
@@ -661,21 +571,39 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
   };
 
+  // Poll the backfill queue until it drains, surfacing live progress.
+  const pollBackfill = async (connectorId: string) => {
+    const POLL_MS = 2500;
+    const MAX_POLLS = 480; // ~20 min ceiling; jobs keep running server-side regardless
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await sleep(POLL_MS);
+      const res = await fetch(`/api/connectors/jobs?connector_id=${connectorId}&org_id=${orgId}`);
+      if (!res.ok) continue;
+      const j = await res.json() as {
+        done: number; failed: number; total: number; remaining: number; active: boolean;
+      };
+      setSyncProgress({ connectorId, current: j.done + j.failed, total: j.total });
+      if (!j.active) {
+        setActiveConnectors((prev) =>
+          prev.map((c) => (c.id === connectorId ? { ...c, last_synced_at: new Date().toISOString() } : c))
+        );
+        if (j.failed > 0) {
+          toast.warning(`Backfill finished — ${j.done} window${j.done !== 1 ? "s" : ""} synced, ${j.failed} failed`);
+        } else {
+          toast.success(`Backfill complete — ${j.done} window${j.done !== 1 ? "s" : ""} synced`);
+        }
+        return;
+      }
+    }
+    toast.message("Backfill still running in the background — check back shortly");
+  };
+
   // ── Incremental "sync latest" ─────────────────────────────────────────────
   // Server picks the window from the connector's checkpoint and advances it.
   // We loop bounded steps until caught up — each step is small and timeout-proof,
   // so this stays fast no matter how far behind (or how many connectors) we have.
-  const ENDPOINTS: Partial<Record<Connector["type"], string>> = {
-    razorpay: "/api/connectors/razorpay",
-    stripe:   "/api/connectors/stripe",
-    cashfree: "/api/connectors/cashfree",
-    payu:     "/api/connectors/payu",
-    paytm:    "/api/connectors/paytm",
-    easebuzz: "/api/connectors/easebuzz",
-  };
-
   const handleIncrementalSync = async (connector: Connector) => {
-    const endpoint = ENDPOINTS[connector.type];
+    const endpoint = SYNC_ENDPOINTS[connector.type];
     if (!endpoint) return;
 
     setSyncingId(connector.id);
@@ -1335,7 +1263,7 @@ function SyncDropdown({ isSyncing, progress, onSync, onSyncLatest, onCustom }: S
             >
               <span>{preset.label}</span>
               <span className="text-[10px] text-muted-foreground/70 ml-6 tabular-nums">
-                {preset.chunks} req{preset.chunks > 1 ? "s" : ""}
+~{preset.windows} window{preset.windows > 1 ? "s" : ""}
               </span>
             </DropdownMenu.Item>
           ))}
