@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/dedup";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { BASE_CURRENCY } from "@/lib/utils";
+import { enrichRowsWithFx } from "@/lib/fx/rates";
 import type { Database } from "@/lib/supabase/types";
 import type { createServiceClient } from "@/lib/supabase/server";
 
@@ -363,6 +364,10 @@ export async function syncConnectorTransactions({
 
   if (transactions.length > 0) {
     const rows = toInsertRows(connector.org_id, connector.id, transactions);
+    // Convert foreign-currency rows to the base currency (INR). The settling
+    // gateway can't always provide it (e.g. a USD Stripe account never sees INR),
+    // so we convert via ECB rates at each transaction's date.
+    await enrichRowsWithFx(rows);
     const externalIds = rows
       .map((row) => row.external_id)
       .filter(Boolean) as string[];

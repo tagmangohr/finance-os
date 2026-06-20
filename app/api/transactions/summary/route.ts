@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { baseAmt } from "@/lib/utils";
 
 /**
  * GET /api/transactions/summary
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // Fetch only the columns we need for aggregation — no pagination limit
   let query = auth.supabase
     .from("transactions")
-    .select("source, type, amount, category, metadata")
+    .select("source, type, amount, amount_base, category, metadata")
     .eq("org_id", auth.org.id)
     .in("status", POSTED_TRANSACTION_STATUSES);
 
@@ -55,20 +56,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let totalPayments = 0;
 
   for (const row of data ?? []) {
+    // Sum the base-currency (INR) value, never raw amount — otherwise USD/EUR
+    // figures get added to rupees. baseAmt falls back to amount for INR rows.
+    const amt = baseAmt(row);
     const key = row.source as string;
     if (!groups[key]) groups[key] = { count: 0, amount: 0 };
     groups[key].count++;
-    groups[key].amount += row.amount ?? 0;
+    groups[key].amount += amt;
 
     if (row.type === "credit") {
-      totalCredits += row.amount ?? 0;
+      totalCredits += amt;
       // Exclude settlement rows — they are bank transfers of already-counted
       // payments, not incremental revenue.
       if (row.category !== "settlement") {
-        totalPayments += row.amount ?? 0;
+        totalPayments += amt;
       }
     } else {
-      totalDebits += row.amount ?? 0;
+      totalDebits += amt;
     }
 
     // Extract fees from metadata (inclusive of GST)
