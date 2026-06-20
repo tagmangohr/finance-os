@@ -6,6 +6,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/** The organisation's base/reporting currency. All cross-currency aggregation
+ *  is normalised to this. */
+export const BASE_CURRENCY = "INR";
+
+/**
+ * Base-currency (INR) amount for a transaction row. Uses the stored
+ * `amount_base` (the converted figure — for Stripe, the real settled INR amount)
+ * and falls back to the raw `amount` for rows already in the base currency or
+ * not yet re-synced. Every aggregation must sum THIS, never raw `amount`, or it
+ * will add USD/EUR figures to rupees.
+ */
+export function baseAmt(row: { amount_base?: number | string | null; amount: number | string }): number {
+  return Number(row.amount_base ?? row.amount);
+}
+
 // Format currency — always display in local format
 export function formatCurrency(
   amount: number,

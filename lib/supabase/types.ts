@@ -47,6 +47,9 @@ export interface Database {
           type: "credit" | "debit";
           amount: number;
           currency: string;
+          amount_base: number | null;
+          base_currency: string | null;
+          fx_rate: number | null;
           category: string | null;
           category_confidence: number | null;
           counterparty_id: string | null;
@@ -58,7 +61,9 @@ export interface Database {
           metadata: Json;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at">;
+        // New multi-currency columns are optional on insert (nullable, with sane
+        // defaults filled by the sync layer) so existing inserters don't break.
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       entities: {

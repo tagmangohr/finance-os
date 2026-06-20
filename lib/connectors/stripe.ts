@@ -38,11 +38,12 @@ export class StripeConnector {
           lte: Math.floor(toDate.getTime() / 1000),
         },
         limit: 100,
-        // NOTE: deliberately NOT expanding data.customer. Expansion forces Stripe
-        // to fetch the full customer object per charge, multiplying per-page
-        // latency and pushing high-volume accounts past the function timeout.
-        // normalizeStripeCharge falls back to billing_details (always inline) for
-        // the counterparty, so we get the name without the expansion cost.
+        // Expand the balance transaction to get the settled INR amount + exchange
+        // rate for foreign-currency charges (the authoritative base-currency
+        // figure). NOT expanding data.customer — that one forces a full customer
+        // fetch per charge and blows the timeout; billing_details (inline) covers
+        // the counterparty name instead.
+        expand: ["data.balance_transaction"],
       };
       if (startingAfter) params.starting_after = startingAfter;
 

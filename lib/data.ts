@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { baseAmt } from "@/lib/utils";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
@@ -123,7 +124,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .limit(5),
     supabase
       .from("transactions")
-      .select("transaction_date, amount")
+      .select("transaction_date, amount, amount_base")
       .eq("org_id", orgId)
       .eq("type", "credit")
       .not("category", "eq", "settlement")   // exclude settlement transfers
@@ -132,7 +133,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .order("transaction_date", { ascending: true }),
     supabase
       .from("transactions")
-      .select("transaction_date, type, amount, category")
+      .select("transaction_date, type, amount, amount_base, category")
       .eq("org_id", orgId)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .in("status", POSTED_TRANSACTION_STATUSES)
@@ -162,8 +163,8 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     if (tx.type === "credit" && (tx as { category?: string }).category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += tx.amount;
-    else existing.outflow += tx.amount;
+    if (tx.type === "credit") existing.inflow += baseAmt(tx);
+    else existing.outflow += baseAmt(tx);
     txByDate.set(date, existing);
   }
 
@@ -179,7 +180,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
   const revenueMonthMap = new Map<string, number>();
   for (const tx of revenueResult.data ?? []) {
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
-    revenueMonthMap.set(m, (revenueMonthMap.get(m) ?? 0) + tx.amount);
+    revenueMonthMap.set(m, (revenueMonthMap.get(m) ?? 0) + baseAmt(tx));
   }
   const revenueByMonth = Array.from(revenueMonthMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
@@ -220,7 +221,7 @@ export async function getRevenueDetails(orgId: string) {
   const [revenueResult, customersResult, revenueMetrics] = await Promise.all([
     supabase
       .from("transactions")
-      .select("transaction_date, amount, counterparty_name")
+      .select("transaction_date, amount, amount_base, currency, counterparty_name")
       .eq("org_id", orgId)
       .eq("type", "credit")
       .not("category", "eq", "settlement")   // exclude settlement transfers
@@ -238,15 +239,29 @@ export async function getRevenueDetails(orgId: string) {
     calculateRevenue(orgId, supabase),
   ]);
 
-  // Aggregate by month for the chart
+  // Aggregate by month for the chart (in base currency).
   const monthMap = new Map<string, number>();
   for (const tx of revenueResult.data ?? []) {
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
-    monthMap.set(m, (monthMap.get(m) ?? 0) + tx.amount);
+    monthMap.set(m, (monthMap.get(m) ?? 0) + baseAmt(tx));
   }
   const revenueByMonth = Array.from(monthMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, amount]) => ({ month, amount }));
+
+  // Per-currency breakdown so the original mix stays visible (e.g. "$Y from USD").
+  // `original` is the sum in the source currency; `inr` is the base-currency value.
+  const curMap = new Map<string, { original: number; inr: number }>();
+  for (const tx of revenueResult.data ?? []) {
+    const cur = (tx as { currency?: string }).currency ?? "INR";
+    const e = curMap.get(cur) ?? { original: 0, inr: 0 };
+    e.original += Number(tx.amount);
+    e.inr += baseAmt(tx);
+    curMap.set(cur, e);
+  }
+  const currencyBreakdown = Array.from(curMap.entries())
+    .map(([currency, v]) => ({ currency, original: v.original, inr: v.inr }))
+    .sort((a, b) => b.inr - a.inr);
 
   // Build MRR trend from transaction revenue — no snapshot dependency.
   // MoM change is computed between consecutive months in the dataset.
@@ -261,6 +276,7 @@ export async function getRevenueDetails(orgId: string) {
 
   return {
     revenueByMonth,
+    currencyBreakdown,
     customers:  customersResult.data ?? [],
     mrrTrend,
     mrr:        revenueMetrics.mrr,
@@ -277,7 +293,7 @@ export async function getCashFlowDetails(orgId: string) {
   const [txResult, runwayMetrics, categoryResult] = await Promise.all([
     supabase
       .from("transactions")
-      .select("transaction_date, type, amount, category, counterparty_name")
+      .select("transaction_date, type, amount, amount_base, category, counterparty_name")
       .eq("org_id", orgId)
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
@@ -304,8 +320,8 @@ export async function getCashFlowDetails(orgId: string) {
     if (tx.type === "credit" && tx.category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += tx.amount;
-    else existing.outflow += tx.amount;
+    if (tx.type === "credit") existing.inflow += baseAmt(tx);
+    else existing.outflow += baseAmt(tx);
     txByDate.set(date, existing);
   }
 
@@ -329,8 +345,8 @@ export async function getCashFlowDetails(orgId: string) {
     if (tx.type === "credit" && tx.category === "settlement") continue;
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
     const existing = monthMap.get(m) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += tx.amount;
-    else existing.outflow += tx.amount;
+    if (tx.type === "credit") existing.inflow += baseAmt(tx);
+    else existing.outflow += baseAmt(tx);
     monthMap.set(m, existing);
   }
   const monthlyData = Array.from(monthMap.entries())

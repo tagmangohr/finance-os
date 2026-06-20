@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { baseAmt } from '@/lib/utils';
 import type { BurnRateResult } from './types';
 
 export async function calculateBurnRate(
@@ -22,7 +23,7 @@ export async function calculateBurnRate(
   const [currentResult, previousResult] = await Promise.all([
     supabase
       .from('transactions')
-      .select('amount, category')
+      .select('amount, amount_base, category')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -30,7 +31,7 @@ export async function calculateBurnRate(
       .lte('transaction_date', fmt(currentMonthEnd)),
     supabase
       .from('transactions')
-      .select('amount, category')
+      .select('amount, amount_base, category')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -41,8 +42,8 @@ export async function calculateBurnRate(
   const currentTxns = currentResult.data ?? [];
   const previousTxns = previousResult.data ?? [];
 
-  const currentMonth = currentTxns.reduce((sum, t) => sum + Number(t.amount), 0);
-  const previousMonth = previousTxns.reduce((sum, t) => sum + Number(t.amount), 0);
+  const currentMonth = currentTxns.reduce((sum, t) => sum + baseAmt(t), 0);
+  const previousMonth = previousTxns.reduce((sum, t) => sum + baseAmt(t), 0);
 
   // Change percentage
   const changePct =
@@ -54,7 +55,7 @@ export async function calculateBurnRate(
   const categoryMap = new Map<string, number>();
   for (const t of currentTxns) {
     const cat = t.category ?? 'Uncategorized';
-    categoryMap.set(cat, (categoryMap.get(cat) ?? 0) + Number(t.amount));
+    categoryMap.set(cat, (categoryMap.get(cat) ?? 0) + baseAmt(t));
   }
 
   const topCategories = Array.from(categoryMap.entries())

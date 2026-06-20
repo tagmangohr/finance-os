@@ -9,6 +9,7 @@ import {
   type ExistingTransactionByExternalId,
 } from "@/lib/db/dedup";
 import type { NormalizedTransaction } from "@/lib/normalizer";
+import { BASE_CURRENCY } from "@/lib/utils";
 import type { Database } from "@/lib/supabase/types";
 import type { createServiceClient } from "@/lib/supabase/server";
 
@@ -257,13 +258,23 @@ function toInsertRows(
   connectorId: string,
   transactions: NormalizedTransaction[]
 ): TransactionInsert[] {
-  return transactions.map((tx) => ({
+  return transactions.map((tx) => {
+    // Base-currency (INR) equivalent. The normalizer sets it when it can
+    // (e.g. Stripe's settled balance-transaction figure); otherwise rows already
+    // in the base currency are 1:1, and foreign rows we can't convert stay null
+    // (aggregation falls back to amount, surfacing them rather than mis-summing).
+    const amountBase =
+      tx.amount_base ?? (tx.currency === BASE_CURRENCY ? tx.amount : null);
+    return {
     org_id: orgId,
     connector_id: connectorId,
     external_id: tx.external_id,
     type: tx.type,
     amount: tx.amount,
     currency: tx.currency,
+    amount_base: amountBase,
+    base_currency: tx.base_currency ?? (amountBase !== null ? BASE_CURRENCY : null),
+    fx_rate: tx.fx_rate ?? (tx.currency === BASE_CURRENCY ? 1 : null),
     category: tx.category,
     category_confidence: null,
     counterparty_id: null,
@@ -273,7 +284,8 @@ function toInsertRows(
     status: tx.status,
     transaction_date: tx.transaction_date,
     metadata: tx.metadata as import("@/lib/supabase/types").Json,
-  }));
+    };
+  });
 }
 
 function toRefreshFields(row: TransactionInsert): TransactionUpdate {
@@ -281,6 +293,9 @@ function toRefreshFields(row: TransactionInsert): TransactionUpdate {
     type: row.type,
     amount: row.amount,
     currency: row.currency,
+    amount_base: row.amount_base,
+    base_currency: row.base_currency,
+    fx_rate: row.fx_rate,
     category: row.category,
     counterparty_name: row.counterparty_name,
     description: row.description,
@@ -303,6 +318,10 @@ function hasTransactionChanged(
     existing.type !== next.type ||
     Number(existing.amount) !== Number(next.amount) ||
     existing.currency !== next.currency ||
+    // null→value transition backfills amount_base on re-sync of foreign rows
+    (existing.amount_base == null) !== (next.amount_base == null) ||
+    (existing.amount_base != null && next.amount_base != null &&
+      Number(existing.amount_base) !== Number(next.amount_base)) ||
     existing.category !== next.category ||
     existing.counterparty_name !== next.counterparty_name ||
     existing.description !== next.description ||

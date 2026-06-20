@@ -31,6 +31,7 @@ export type ExistingTransactionByExternalId = {
   type: string;
   amount: number | string;
   currency: string;
+  amount_base: number | string | null;
   category: string | null;
   counterparty_name: string | null;
   description: string | null;
@@ -84,7 +85,7 @@ export async function getExistingTransactionsByExternalId(
     const { data, error } = await supabase
       .from("transactions")
       .select(
-        `id, external_id, type, amount, currency, category, counterparty_name,
+        `id, external_id, type, amount, currency, amount_base, category, counterparty_name,
          description, source, status, transaction_date, metadata`
       )
       .eq("org_id", orgId)

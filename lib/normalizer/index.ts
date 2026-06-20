@@ -1,4 +1,5 @@
 import { parse, isValid } from "date-fns";
+import { BASE_CURRENCY } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,6 +15,12 @@ export type NormalizedTransaction = {
   status: "pending" | "completed" | "failed" | "refunded";
   transaction_date: string; // YYYY-MM-DD
   metadata: Record<string, unknown>;
+  // Base-currency (INR) equivalent. Set when the connector can provide it
+  // (e.g. Stripe's settled balance-transaction amount). When omitted, the sync
+  // layer fills it in: amount for INR rows, null for un-converted foreign rows.
+  amount_base?: number | null;
+  base_currency?: string | null;
+  fx_rate?: number | null;
 };
 
 export type RazorpayPayment = {
@@ -126,6 +133,18 @@ export type StripeCharge = {
   failure_code: string | null;
   failure_message: string | null;
   paid: boolean;
+  // Expanded balance transaction — Stripe's settled figure in the ACCOUNT's
+  // settlement currency (INR for an Indian account), with the exchange rate it
+  // used. This is the authoritative INR-equivalent for a foreign-currency charge.
+  balance_transaction?:
+    | string
+    | {
+        id: string;
+        amount: number;        // in settlement-currency smallest unit
+        currency: string;      // settlement currency (e.g. "inr")
+        exchange_rate: number | null;
+      }
+    | null;
 };
 
 export type StripePayout = {
@@ -415,22 +434,48 @@ export function normalizeStripeCharge(
   // Stripe amounts are in smallest unit — divide by 100 for most currencies
   // (JPY and other zero-decimal currencies are already in full units, but we
   //  treat them uniformly here and normalise only when we know the currency)
-  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(
-    charge.currency.toUpperCase()
-  );
+  const currency = charge.currency.toUpperCase();
+  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(currency);
   const amount = isZeroDecimal ? charge.amount : charge.amount / 100;
+
+  // Base-currency (INR) equivalent.
+  //  • Already in base currency  → 1:1.
+  //  • Foreign currency          → use the charge's balance transaction, which
+  //    holds the amount Stripe actually settled in the account's currency
+  //    (INR for an Indian account) plus the exact exchange rate. This matches
+  //    the money that hit the bank — no external FX guess.
+  //  • No usable balance txn     → leave null; aggregation falls back to amount.
+  let amount_base: number | null = null;
+  let base_currency: string | null = null;
+  let fx_rate: number | null = null;
+  if (currency === BASE_CURRENCY) {
+    amount_base = amount;
+    base_currency = BASE_CURRENCY;
+    fx_rate = 1;
+  } else if (charge.balance_transaction && typeof charge.balance_transaction === "object") {
+    const bt = charge.balance_transaction;
+    const btCurrency = bt.currency.toUpperCase();
+    if (btCurrency === BASE_CURRENCY) {
+      amount_base = ZERO_DECIMAL_CURRENCIES.has(btCurrency) ? bt.amount : bt.amount / 100;
+      base_currency = BASE_CURRENCY;
+      fx_rate = bt.exchange_rate ?? null;
+    }
+  }
 
   return {
     external_id: charge.id,
     type: "credit",
     amount,
-    currency: charge.currency.toUpperCase(),
+    currency,
     category: null,
     counterparty_name: counterparty,
     description: charge.description ?? null,
     source: "stripe",
     status,
     transaction_date: unixToDateString(charge.created),
+    amount_base,
+    base_currency,
+    fx_rate,
     metadata: {
       failure_code: charge.failure_code,
       failure_message: charge.failure_message,

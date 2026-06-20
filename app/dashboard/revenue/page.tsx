@@ -28,6 +28,11 @@ const SAMPLE = {
     { name: "Umbrella Co", total_revenue: 980000 },
     { name: "Soylent", total_revenue: 640000 },
   ] as CustomerLite[],
+  currencyBreakdown: [
+    { currency: "INR", original: 4200000, inr: 4200000 },
+    { currency: "USD", original: 42000, inr: 3520000 },
+    { currency: "EUR", original: 9000, inr: 820000 },
+  ],
 };
 
 export default async function RevenuePage() {
@@ -44,6 +49,7 @@ export default async function RevenuePage() {
     customers: (real.customers as unknown as CustomerLite[]).map((c) => ({
       name: c.name, total_revenue: c.total_revenue ?? 0,
     })),
+    currencyBreakdown: real.currencyBreakdown,
   };
 
   const mrrSpark = v.revenueByMonth.slice(-8).map((r) => r.amount);
@@ -65,6 +71,23 @@ export default async function RevenuePage() {
         <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} subtitle="year over year"
           icon={<Percent className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
       </div>
+
+      {v.currencyBreakdown.length > 1 && (
+        <div className="rounded-xl border border-border bg-card px-4 py-3 animate-enter flex flex-wrap items-center gap-x-6 gap-y-2">
+          <span className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-muted-foreground/70">
+            Collections by currency
+          </span>
+          {v.currencyBreakdown.map((c) => (
+            <div key={c.currency} className="flex items-baseline gap-1.5 text-[12px]">
+              <span className="font-semibold text-foreground/80">{c.currency}</span>
+              <span className="num text-foreground/70">{formatCurrency(c.original, c.currency, false)}</span>
+              {c.currency !== "INR" && (
+                <span className="num text-[11px] text-muted-foreground/70">≈ {formatCurrency(c.inr, "INR", true)}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
         <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">

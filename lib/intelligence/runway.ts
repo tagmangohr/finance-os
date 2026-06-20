@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { baseAmt } from '@/lib/utils';
 import type { RunwayResult } from './types';
 
 export async function calculateRunway(
@@ -21,7 +22,7 @@ export async function calculateRunway(
       .maybeSingle(),
     supabase
       .from('transactions')
-      .select('amount, transaction_date')
+      .select('amount, amount_base, transaction_date')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -46,7 +47,7 @@ export async function calculateRunway(
     // Settlements are excluded from credits — they double-count payments.
     const creditsResult = await supabase
       .from('transactions')
-      .select('amount')
+      .select('amount, amount_base')
       .eq('org_id', orgId)
       .eq('type', 'credit')
       .not('category', 'eq', 'settlement')
@@ -54,11 +55,11 @@ export async function calculateRunway(
       .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0]);
 
     const totalCredits = (creditsResult.data ?? []).reduce(
-      (sum, t) => sum + Number(t.amount),
+      (sum, t) => sum + baseAmt(t),
       0
     );
     const totalDebits = (debitsResult.data ?? []).reduce(
-      (sum, t) => sum + Number(t.amount),
+      (sum, t) => sum + baseAmt(t),
       0
     );
     cashBalance = Math.max(0, totalCredits - totalDebits);
@@ -66,7 +67,7 @@ export async function calculateRunway(
 
   // Compute average monthly burn from last 90 days of debits
   const debits = debitsResult.data ?? [];
-  const totalDebits90d = debits.reduce((sum, t) => sum + Number(t.amount), 0);
+  const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
   // 90 days ≈ 3 months
   const avgMonthlyBurn = totalDebits90d / 3;
 

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { baseAmt } from '@/lib/utils';
 import type { RevenueResult } from './types';
 
 export async function calculateRevenue(
@@ -14,7 +15,7 @@ export async function calculateRevenue(
 
   const { data: transactions } = await supabase
     .from('transactions')
-    .select('amount, transaction_date')
+    .select('amount, amount_base, transaction_date')
     .eq('org_id', orgId)
     .eq('type', 'credit')
     .not('category', 'eq', 'settlement')   // exclude settlement transfers — already counted as payments
@@ -29,7 +30,7 @@ export async function calculateRevenue(
   for (const t of txns) {
     const d = new Date(t.transaction_date);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    monthMap.set(key, (monthMap.get(key) ?? 0) + Number(t.amount));
+    monthMap.set(key, (monthMap.get(key) ?? 0) + baseAmt(t));
   }
 
   // Build sorted month array (last 13 months)
