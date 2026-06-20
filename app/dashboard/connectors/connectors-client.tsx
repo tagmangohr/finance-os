@@ -112,7 +112,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     fields: [
       { key: "key_id",         label: "Key ID",                   placeholder: "rzp_live_..." },
       { key: "key_secret",     label: "Key Secret",               isPassword: true, placeholder: "••••••••••••••••" },
-      { key: "account_number", label: "Account Number (Razorpay X)", placeholder: "4564563087654", isOptional: true },
+      { key: "account_number", label: "RazorpayX Account No.", placeholder: "RazorpayX only — leave blank if unused", isOptional: true },
       { key: "email",          label: "Account Email",            placeholder: "you@company.com", isOptional: true },
       { key: "mid",            label: "Merchant ID (MID)",        placeholder: "MID12345", isOptional: true },
     ],
@@ -615,12 +615,17 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
       const hardErrors = chunkErrors.filter((e) => !e.startsWith("warn:"));
       const softWarns  = chunkErrors.filter((e) => e.startsWith("warn:"));
+      // Counts must reflect DISTINCT problems, not sub-window fan-out. A single
+      // date range is split into many 7-day windows server-side, so one broken
+      // endpoint produces one warning per window. Dedupe by reason so "13 windows
+      // failed the same way" reads as one issue, not "13 transactions skipped".
+      const hardReasons = Array.from(new Set(hardErrors.map((e) => e.trim())));
       if (hardErrors.length > 0 && totalSynced === 0 && totalUpdated === 0) {
         // Nothing got through — show the first real error prominently
-        toast.error(`Sync failed: ${hardErrors[0]}`);
+        toast.error(`Sync failed: ${hardReasons[0]}`);
       } else if (hardErrors.length > 0) {
         toast.warning(
-          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${hardErrors.length} error${hardErrors.length > 1 ? "s" : ""}: ${hardErrors[0]}`
+          `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${hardReasons.length} error${hardReasons.length > 1 ? "s" : ""}: ${hardReasons[0]}`
         );
       } else if (softWarns.length > 0) {
         // Surface the ACTUAL reason (e.g. "Invalid API Key…") instead of
@@ -635,7 +640,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           toast.error(`Couldn't sync — ${reason}`);
         } else {
           toast.warning(
-            `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${softWarns.length} skipped — ${reason}`
+            `Synced ${totalSynced} new, refreshed ${totalUpdated} · ${reasons.length} warning${reasons.length > 1 ? "s" : ""} — ${reason}`
           );
         }
         console.warn("[sync warnings]", softWarns);

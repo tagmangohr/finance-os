@@ -53,9 +53,11 @@ async function fetchRazorpay(
 
   const razorpay = new RazorpayConnector(keyId, keySecret);
 
-  // fetchPayouts returns [] when no accountNumber is provided (Razorpay X only).
-  // All five are wrapped in allSettled so individual 4xx errors become warnings,
-  // not hard failures — payments/refunds/settlements succeed regardless.
+  // fetchPayouts is Razorpay X-only and OPTIONAL: it returns [] when no account
+  // number is set AND swallows its own 4xx (invalid/non-X account) so a bad
+  // optional field never adds a warning or distorts counts. The remaining four
+  // are wrapped in allSettled so a genuine outage on one becomes a single
+  // warning, not a hard failure — payments/refunds/settlements succeed regardless.
   const settled = await Promise.allSettled([
     razorpay.fetchPayments(fromDate, toDate),
     razorpay.fetchPayouts(fromDate, toDate, accountNumber),

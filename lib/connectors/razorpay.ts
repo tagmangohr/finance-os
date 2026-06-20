@@ -15,6 +15,22 @@ import {
 const RAZORPAY_BASE = "https://api.razorpay.com/v1";
 const PAGE_SIZE = 100;
 
+/**
+ * Thrown by the internal fetch helper so callers can branch on the HTTP status
+ * — e.g. treat a 4xx on the OPTIONAL payouts endpoint as "feature unavailable"
+ * rather than a hard sync failure.
+ */
+export class RazorpayApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly path: string,
+    readonly body: string
+  ) {
+    super(`Razorpay API error ${status} for ${path}: ${body}`);
+    this.name = "RazorpayApiError";
+  }
+}
+
 export class RazorpayConnector {
   private authHeader: string;
 
@@ -50,9 +66,7 @@ export class RazorpayConnector {
 
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(
-        `Razorpay API error ${res.status} for ${path}: ${body}`
-      );
+      throw new RazorpayApiError(res.status, path, body);
     }
 
     return res.json() as Promise<T>;
@@ -91,44 +105,65 @@ export class RazorpayConnector {
   }
 
   // ─── Payouts ──────────────────────────────────────────────────────────────
-  // NOTE: Razorpay Payouts API is part of Razorpay X (their banking product).
-  // It REQUIRES an account_number param; without it the API returns 400.
-  // Pass accountNumber from the connector config if the merchant uses Razorpay X;
-  // otherwise this method returns an empty array silently (no API call made).
+  // Payouts is an OPTIONAL, Razorpay X-only feature (Razorpay's banking product).
+  // The /payouts API requires an account_number param, and that number must be a
+  // valid Razorpay X virtual account number. Because it is optional, it must NEVER
+  // break or distort the core payments sync:
+  //   • No account number       → don't touch the API at all (return []).
+  //   • Account number set but   → the API 4xx's (not a Razorpay X account, wrong
+  //     Razorpay X not enabled /   number, or no permission). Swallow it and return
+  //     invalid / unpermissioned   [] so the sync still succeeds with honest counts.
+  // Genuine transient/server errors (5xx, timeout) still propagate so a real
+  // outage is surfaced and can be retried.
 
   async fetchPayouts(
     fromDate: Date,
     toDate: Date,
     accountNumber?: string
   ): Promise<NormalizedTransaction[]> {
-    // Payouts API requires account_number — only available to Razorpay X merchants
-    if (!accountNumber) return [];
+    // Optional field absent → never hit the server.
+    if (!accountNumber || !accountNumber.trim()) return [];
 
     const results: NormalizedTransaction[] = [];
     let cursor: string | undefined;
 
-    while (true) {
-      const params: Record<string, string | number> = {
-        account_number: accountNumber,
-        from: Math.floor(fromDate.getTime() / 1000),
-        to:   Math.floor(toDate.getTime() / 1000),
-        count: PAGE_SIZE,
-      };
-      if (cursor) params.cursor = cursor;
+    try {
+      while (true) {
+        const params: Record<string, string | number> = {
+          account_number: accountNumber.trim(),
+          from: Math.floor(fromDate.getTime() / 1000),
+          to:   Math.floor(toDate.getTime() / 1000),
+          count: PAGE_SIZE,
+        };
+        if (cursor) params.cursor = cursor;
 
-      const data = await this.get<{
-        items: RazorpayPayout[];
-        count: number;
-        cursor?: string;
-      }>("/payouts", params);
+        const data = await this.get<{
+          items: RazorpayPayout[];
+          count: number;
+          cursor?: string;
+        }>("/payouts", params);
 
-      const items: RazorpayPayout[] = data.items ?? [];
-      for (const payout of items) {
-        results.push(normalizeRazorpayPayout(payout));
+        const items: RazorpayPayout[] = data.items ?? [];
+        for (const payout of items) {
+          results.push(normalizeRazorpayPayout(payout));
+        }
+
+        if (items.length < PAGE_SIZE || !data.cursor) break;
+        cursor = data.cursor;
       }
-
-      if (items.length < PAGE_SIZE || !data.cursor) break;
-      cursor = data.cursor;
+    } catch (err) {
+      // A 4xx means payouts simply aren't available for this account (no Razorpay X,
+      // wrong/invalid account number, or missing permission). It's an optional
+      // feature, so skip it silently — return whatever we paged in so far rather
+      // than failing the whole sync or emitting a misleading warning.
+      if (
+        err instanceof RazorpayApiError &&
+        err.status >= 400 &&
+        err.status < 500
+      ) {
+        return results;
+      }
+      throw err;
     }
 
     return results;
