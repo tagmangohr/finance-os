@@ -28,6 +28,9 @@ interface TxRow {
   type: "credit" | "debit";
   amount: number;
   currency: string;
+  amount_base: number | null;
+  base_currency: string | null;
+  fx_rate: number | null;
   status: string;
   counterparty_name: string | null;
   description: string | null;
@@ -195,7 +198,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     const data: ApiResponse = await res.json();
 
     const headers = [
-      "Date","Source","Connector","Type","Amount","Currency","Status",
+      "Date","Source","Connector","Type","Amount","Currency",
+      "Amount (INR)","FX Rate","Status",
       "Counterparty","Description","External ID","Category",
       "Fees","Tax","Order ID","Payment ID","UTR","Phase",
     ];
@@ -208,6 +212,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         r.type,
         r.amount,
         r.currency,
+        r.amount_base ?? "",
+        r.fx_rate ?? "",
         r.status,
         r.counterparty_name ?? "",
         (r.description ?? "").replace(/,/g, ";"),
@@ -435,6 +441,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                 const metaKeys = Object.entries(meta).filter(
                   ([, v]) => v !== null && v !== undefined && v !== ""
                 );
+                const hasFx = row.currency !== "INR" && row.amount_base != null;
+                const expandable = metaKeys.length > 0 || hasFx;
 
                 return (
                   <React.Fragment key={row.id}>
@@ -487,7 +495,15 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                           row.type === "credit" ? "text-success/80" : "text-destructive/80"
                         )}
                       >
-                        {fmtAmount(row.amount, row.currency, row.type)}
+                        <div className="flex flex-col leading-tight">
+                          <span>{fmtAmount(row.amount, row.currency, row.type)}</span>
+                          {row.currency !== "INR" && row.amount_base != null && (
+                            <span className="text-[10px] font-normal text-muted-foreground/70 tabular-nums">
+                              ≈ ₹{new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(row.amount_base)}
+                              {row.fx_rate != null && ` · @${Number(row.fx_rate).toFixed(2)}`}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Status */}
@@ -519,12 +535,12 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
 
                       {/* Metadata expand */}
                       <td className="px-3 py-2.5">
-                        {metaKeys.length > 0 && (
+                        {expandable && (
                           <button
                             onClick={() => toggleExpand(row.id)}
                             className="flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-primary transition-colors"
                           >
-                            {metaKeys.length} fields
+                            {hasFx ? "FX" : ""}{hasFx && metaKeys.length > 0 ? " + " : ""}{metaKeys.length > 0 ? `${metaKeys.length} fields` : ""}
                             {isExpanded ? (
                               <ChevronUp className="h-3 w-3" />
                             ) : (
@@ -539,6 +555,19 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                     {isExpanded && (
                       <tr className="border-b border-border bg-accent/40">
                         <td colSpan={11} className="px-4 pb-3 pt-2">
+                          {hasFx && (
+                            <div className="mb-2 pb-2 border-b border-border/60 flex flex-wrap gap-x-6 gap-y-1 text-[11px]">
+                              <span className="text-[10px] font-mono uppercase text-primary/70">FX → INR</span>
+                              <span className="text-muted-foreground">
+                                {fmtAmount(row.amount, row.currency, row.type)} × {Number(row.fx_rate).toFixed(4)}
+                                {" = "}
+                                <span className="text-foreground/80 font-medium">
+                                  ₹{new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(row.amount_base!)}
+                                </span>
+                              </span>
+                              <span className="text-muted-foreground/60">rate: ECB reference, {String(row.transaction_date).slice(0, 10)}</span>
+                            </div>
+                          )}
                           <div className="flex flex-wrap gap-x-6 gap-y-1.5">
                             {metaKeys.map(([k, v]) => (
                               <div key={k} className="flex items-center gap-2 min-w-[160px]">
