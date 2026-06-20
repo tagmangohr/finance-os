@@ -7,17 +7,78 @@ import {
   SyncConfigError,
   syncConnectorTransactions,
 } from "@/lib/connectors/sync";
+import { advanceCheckpoint, computeIncrementalStep } from "@/lib/connectors/checkpoint";
+import type { Database } from "@/lib/supabase/types";
+
+type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
+type SupabaseLike = Awaited<ReturnType<typeof createServiceClient>>;
 
 type SyncBody = {
   connector_id?: string;
   org_id?: string;
   from_date?: string;
   to_date?: string;
+  /** When "incremental", the SERVER picks the window from the connector's
+   *  checkpoint (synced_through) and advances it on success — explicit
+   *  from/to are ignored. Each call processes one bounded step and returns
+   *  has_more so the caller can loop until caught up. Anything else (or
+   *  explicit dates) is treated as a backfill over the given range and does
+   *  NOT touch the checkpoint. */
+  mode?: "incremental";
   /** HMAC token generated server-side at page load. When present, full
    *  Supabase cookie auth is skipped — the token is verified locally with
    *  zero network calls, cutting ~600 ms of auth overhead per chunk. */
   sync_token?: string;
 };
+
+/**
+ * Run one sync window and shape the response. In incremental mode the window
+ * comes from the checkpoint and is advanced on success; otherwise it's the
+ * caller-supplied backfill range (checkpoint untouched).
+ */
+async function runSync(
+  supabase: SupabaseLike,
+  connector: ConnectorRow,
+  body: SyncBody,
+  range: { fromDate: Date; toDate: Date }
+): Promise<NextResponse> {
+  const incremental = body.mode === "incremental";
+  const step = incremental
+    ? computeIncrementalStep(connector.synced_through)
+    : null;
+  const fromDate = step ? step.fromDate : range.fromDate;
+  const toDate = step ? step.toDate : range.toDate;
+
+  try {
+    const result = await syncConnectorTransactions({
+      supabase,
+      connector,
+      fromDate,
+      toDate,
+    });
+
+    if (incremental) {
+      await advanceCheckpoint(supabase, connector.id, toDate);
+    }
+
+    return NextResponse.json({
+      synced:   result.inserted,
+      fetched:  result.fetched,
+      skipped:  result.skipped,
+      updated:  result.updated,
+      from:     fromDate.toISOString(),
+      to:       toDate.toISOString(),
+      ...(incremental ? { has_more: step!.hasMore, synced_through: toDate.toISOString() } : {}),
+      ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+    });
+  } catch (err) {
+    const status = err instanceof SyncConfigError ? 422 : 500;
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to sync connector" },
+      { status }
+    );
+  }
+}
 
 export async function handleConnectorSyncRequest(
   req: NextRequest,
@@ -59,30 +120,7 @@ export async function handleConnectorSyncRequest(
       return NextResponse.json({ error: "Connector not found" }, { status: 404 });
     }
 
-    try {
-      const result = await syncConnectorTransactions({
-        supabase,
-        connector,
-        fromDate: range.fromDate,
-        toDate: range.toDate,
-      });
-
-      return NextResponse.json({
-        synced:   result.inserted,
-        fetched:  result.fetched,
-        skipped:  result.skipped,
-        updated:  result.updated,
-        from:     range.fromDate.toISOString(),
-        to:       range.toDate.toISOString(),
-        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
-      });
-    } catch (err) {
-      const status = err instanceof SyncConfigError ? 422 : 500;
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : "Failed to sync connector" },
-        { status }
-      );
-    }
+    return runSync(supabase, connector, body, range);
   }
 
   // ── Slow path: full Supabase cookie auth (fallback) ───────────────────────
@@ -99,28 +137,5 @@ export async function handleConnectorSyncRequest(
     return NextResponse.json({ error: "Connector not found" }, { status: 404 });
   }
 
-  try {
-    const result = await syncConnectorTransactions({
-      supabase: auth.supabase,
-      connector,
-      fromDate: range.fromDate,
-      toDate: range.toDate,
-    });
-
-    return NextResponse.json({
-      synced:   result.inserted,
-      fetched:  result.fetched,
-      skipped:  result.skipped,
-      updated:  result.updated,
-      from:     range.fromDate.toISOString(),
-      to:       range.toDate.toISOString(),
-      ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
-    });
-  } catch (err) {
-    const status = err instanceof SyncConfigError ? 422 : 500;
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to sync connector" },
-      { status }
-    );
-  }
+  return runSync(auth.supabase, connector, body, range);
 }

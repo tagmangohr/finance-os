@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncConnectorTransactions } from "@/lib/connectors/sync";
+import { advanceCheckpoint, computeIncrementalStep } from "@/lib/connectors/checkpoint";
 import type { Database } from "@/lib/supabase/types";
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
@@ -12,15 +13,15 @@ const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "ease
  * /api/cron/sync-half (runs at :30).  Together they achieve a
  * 30-minute effective sync cadence within Vercel Pro's hourly-per-job limit.
  *
- * Syncs the last 90 days on every run so late-arriving transactions,
- * status updates (e.g. captured → refunded), and any missed windows are
- * always reconciled. Upserts are idempotent on external_id so re-fetching
- * already-stored rows is safe and cheap.
- *
- * 90-day window (vs 30) ensures the monthly table always shows the last
- * 3 complete months and eliminates gaps when the sync cadence changes.
+ * INCREMENTAL: each connector is advanced by ONE bounded step from its
+ * checkpoint (synced_through) — typically just the last few minutes/hours plus a
+ * short trailing overlap. Steady-state work is therefore tiny and constant per
+ * connector, so this single function scales to dozens of connectors without
+ * approaching the Vercel timeout. A connector that has fallen behind catches up
+ * over successive runs (one bounded step each). Dedup on external_id keeps the
+ * overlap free, and the checkpoint only moves forward → no gaps, no full
+ * re-backfill. Deep history is loaded out-of-band via explicit backfill.
  */
-const LOOKBACK_DAYS = 90;
 
 export async function runConnectorSync(req: NextRequest): Promise<NextResponse> {
   const authHeader = req.headers.get("authorization");
@@ -48,13 +49,23 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
     return NextResponse.json({ message: "No active connectors", synced: 0 });
   }
 
-  const toDate = new Date();
-  const fromDate = new Date(toDate.getTime() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const now = new Date();
 
   const results = await Promise.allSettled(
-    connectors.map((connector: ConnectorRow) =>
-      syncConnectorTransactions({ supabase, connector, fromDate, toDate })
-    )
+    connectors.map(async (connector: ConnectorRow) => {
+      // One bounded step from this connector's checkpoint. Small in steady state;
+      // a behind connector advances by MAX_STEP_DAYS and catches up next run.
+      const step = computeIncrementalStep(connector.synced_through, now);
+      const result = await syncConnectorTransactions({
+        supabase,
+        connector,
+        fromDate: step.fromDate,
+        toDate:   step.toDate,
+      });
+      // Advance the checkpoint only after the window succeeded.
+      await advanceCheckpoint(supabase, connector.id, step.toDate);
+      return { ...result, hasMore: step.hasMore };
+    })
   );
 
   const summary = results.map((result, index) => {
@@ -68,6 +79,7 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
       inserted:  result.status === "fulfilled" ? result.value.inserted : 0,
       updated:   result.status === "fulfilled" ? result.value.updated  : 0,
       skipped:   result.status === "fulfilled" ? result.value.skipped  : 0,
+      catchingUp: result.status === "fulfilled" ? result.value.hasMore : false,
       warnings:  result.status === "fulfilled" ? result.value.warnings : undefined,
       error:     result.status === "rejected"  ? String(result.reason) : undefined,
     };

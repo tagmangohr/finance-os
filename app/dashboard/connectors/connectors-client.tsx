@@ -661,6 +661,78 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
   };
 
+  // ── Incremental "sync latest" ─────────────────────────────────────────────
+  // Server picks the window from the connector's checkpoint and advances it.
+  // We loop bounded steps until caught up — each step is small and timeout-proof,
+  // so this stays fast no matter how far behind (or how many connectors) we have.
+  const ENDPOINTS: Partial<Record<Connector["type"], string>> = {
+    razorpay: "/api/connectors/razorpay",
+    stripe:   "/api/connectors/stripe",
+    cashfree: "/api/connectors/cashfree",
+    payu:     "/api/connectors/payu",
+    paytm:    "/api/connectors/paytm",
+    easebuzz: "/api/connectors/easebuzz",
+  };
+
+  const handleIncrementalSync = async (connector: Connector) => {
+    const endpoint = ENDPOINTS[connector.type];
+    if (!endpoint) return;
+
+    setSyncingId(connector.id);
+    try {
+      let totalSynced = 0;
+      let totalUpdated = 0;
+      let hasMore = true;
+      let step = 0;
+      const MAX_STEPS = 40; // safety cap; each step is bounded server-side
+      const warnSet = new Set<string>();
+
+      while (hasMore && step < MAX_STEPS) {
+        step++;
+        setSyncProgress({ connectorId: connector.id, current: step, total: step });
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            connector_id: connector.id,
+            org_id: orgId,
+            mode: "incremental",
+            sync_token: syncTokens[connector.id],
+          }),
+        });
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({})) as { error?: string };
+          throw new Error(errBody.error ?? `HTTP ${res.status}`);
+        }
+        const data = await res.json() as {
+          synced?: number; updated?: number; has_more?: boolean; warnings?: string[];
+        };
+        totalSynced += data.synced ?? 0;
+        totalUpdated += data.updated ?? 0;
+        (data.warnings ?? []).forEach((w) => warnSet.add(w));
+        hasMore = !!data.has_more;
+      }
+
+      setActiveConnectors((prev) =>
+        prev.map((c) =>
+          c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c
+        )
+      );
+
+      if (warnSet.size > 0) {
+        const reason = Array.from(warnSet)[0];
+        toast.warning(`Synced ${totalSynced} new, refreshed ${totalUpdated} · ${warnSet.size} warning${warnSet.size > 1 ? "s" : ""} — ${reason}`);
+      } else {
+        toast.success(`Up to date — ${totalSynced} new, ${totalUpdated} refreshed`);
+      }
+    } catch (err) {
+      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setSyncingId(null);
+      setSyncProgress(null);
+    }
+  };
+
   // ── Disconnect ─────────────────────────────────────────────────────────────
   const handleDisconnect = async (connectorId: string) => {
     setConfirmRemove(null);
@@ -758,6 +830,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                           isSyncing={syncingId === inst.id}
                           progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
                           onSync={(from, to) => handleSync(inst, from, to)}
+                          onSyncLatest={() => handleIncrementalSync(inst)}
                           onCustom={() => {
                             setCustomFrom(defaultFrom);
                             setCustomTo(todayStr);
@@ -1195,10 +1268,11 @@ interface SyncDropdownProps {
   isSyncing: boolean;
   progress: { connectorId: string; current: number; total: number } | null;
   onSync: (from: Date, to: Date) => void;
+  onSyncLatest: () => void;
   onCustom: () => void;
 }
 
-function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownProps) {
+function SyncDropdown({ isSyncing, progress, onSync, onSyncLatest, onCustom }: SyncDropdownProps) {
   const showProgress = isSyncing && progress && progress.total > 1;
 
   return (
@@ -1232,10 +1306,19 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
           align="end"
           sideOffset={6}
         >
+          {/* Primary action — incremental, server-driven, always fast */}
+          <DropdownMenu.Item
+            className="flex items-center gap-2 px-3 py-2.5 text-[12px] font-medium text-foreground hover:bg-accent cursor-pointer outline-none transition-colors"
+            onSelect={onSyncLatest}
+          >
+            <RefreshCw className="h-3.5 w-3.5 text-primary/80" />
+            <span>Sync latest changes</span>
+          </DropdownMenu.Item>
+
           {/* Header */}
-          <div className="px-3 py-2 border-b border-border">
+          <div className="px-3 py-2 border-y border-border">
             <p className="text-[9.5px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
-              Sync date range
+              Backfill date range
             </p>
           </div>
 
@@ -1269,8 +1352,8 @@ function SyncDropdown({ isSyncing, progress, onSync, onCustom }: SyncDropdownPro
           {/* Footer note */}
           <div className="px-3 py-2 border-t border-border">
             <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
-              Each request covers 30 days.
-              <br />Duplicates are skipped automatically.
+              &ldquo;Sync latest&rdquo; fetches only new activity since the last sync.
+              <br />Use backfill to load older history. Duplicates are skipped.
             </p>
           </div>
         </DropdownMenu.Content>

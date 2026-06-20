@@ -32,6 +32,7 @@ export interface Database {
           status: "active" | "inactive" | "error";
           config: Json;
           last_synced_at: string | null;
+          synced_through: string | null;
           created_at: string;
         };
         Insert: Omit<Database["public"]["Tables"]["connectors"]["Row"], "id" | "created_at">;

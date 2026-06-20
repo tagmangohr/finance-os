@@ -61,6 +61,10 @@ export async function POST(request: Request) {
         name: name.trim(),
         config: config ?? {},
         status: status ?? "active",
+        // A new connector is "caught up to now": incremental syncs keep the
+        // forward edge fresh from here, while older history is loaded on demand
+        // via an explicit, parallel-chunked backfill (the Sync date-range menu).
+        synced_through: new Date().toISOString(),
       })
       .select()
       .single();
