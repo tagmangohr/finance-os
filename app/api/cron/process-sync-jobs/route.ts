@@ -40,7 +40,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
       console.log(
         `[cron/process-sync-jobs] worker=${worker} processed=${summary.processed} ` +
-        `done=${summary.done} failed=${summary.failed} requeued=${summary.requeued}`
+        `done=${summary.done} failed=${summary.failed} progressed=${summary.progressed}`
       );
     } catch (err) {
       console.error(`[cron/process-sync-jobs] worker=${worker} drain failed:`, err);

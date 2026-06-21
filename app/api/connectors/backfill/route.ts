@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { parseSyncDateRange } from "@/lib/api/validation";
-import { enqueueBackfill } from "@/lib/connectors/jobs";
+import { enqueueBackfill, enqueueIncremental } from "@/lib/connectors/jobs";
 
 export const maxDuration = 30;
 
@@ -19,7 +19,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { connector_id: connectorId, org_id: orgId, from_date, to_date } = body;
+  const { connector_id: connectorId, org_id: orgId, from_date, to_date, incremental } = body as
+    typeof body & { incremental?: boolean };
   if (!connectorId || !orgId) {
     return NextResponse.json({ error: "connector_id and org_id are required" }, { status: 400 });
   }
@@ -31,12 +32,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (isAuthFailure(auth)) return auth.error;
 
   try {
-    const enqueued = await enqueueBackfill(
-      auth.supabase,
-      auth.connector,
-      range.fromDate,
-      range.toDate
-    );
+    // incremental=true → "catch up to now" (one resumable job, advances the
+    // checkpoint). Otherwise an explicit date-range backfill.
+    const enqueued = incremental
+      ? (await enqueueIncremental(auth.supabase, auth.connector)).enqueued ? 1 : 0
+      : await enqueueBackfill(auth.supabase, auth.connector, range.fromDate, range.toDate);
 
     // Kick the worker after the response so processing starts promptly.
     const cronSecret = process.env.CRON_SECRET;

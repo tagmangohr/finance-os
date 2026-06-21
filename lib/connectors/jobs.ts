@@ -1,6 +1,8 @@
 import type { createServiceClient } from "@/lib/supabase/server";
 import type { ConnectorSyncResult } from "@/lib/connectors/sync";
-import { syncConnectorTransactions, SyncConfigError } from "@/lib/connectors/sync";
+import { syncConnectorTransactions, persistTransactions, SyncConfigError } from "@/lib/connectors/sync";
+import { StripeConnector } from "@/lib/connectors/stripe";
+import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
 
 type SupabaseLike = Awaited<ReturnType<typeof createServiceClient>>;
@@ -8,24 +10,38 @@ type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Each job covers at most this many days — keeps every unit well under the
- *  function budget so a single job can never time out. */
+/** Legacy date-window size for connectors NOT on the resumable engine (low
+ *  volume — they finish a whole window in one pass). */
 export const JOB_WINDOW_DAYS = 14;
-/** How many jobs a single worker invocation claims per batch. Kept small so a few
- *  heavy paginations don't compete for the function budget or trip provider rate
- *  limits; the worker loops batches until its time budget. */
+/** Resumable connectors are split into windows this size so several run in
+ *  parallel; each window is then paginated in bounded cursor chunks, so the
+ *  window size only affects parallelism, never whether a call fits the budget. */
+export const RESUMABLE_WINDOW_DAYS = 30;
+/** Jobs claimed per worker batch. */
 export const CLAIM_BATCH = 3;
-/** Stop claiming new batches once the worker has used this much of its budget. */
-export const WORKER_BUDGET_MS = 50_000;
-/** A job reclaimed this many times is being killed mid-run every pass (window too
- *  large to finish in the function budget). Fail it instead of looping forever —
- *  its rows are recovered by incremental sync + the FX backfill cron. */
+/** Per-chunk fetch budget — a resumable job paginates for at most this long, then
+ *  saves its cursor and continues next pass. Well under the 60s function limit. */
+export const CHUNK_FETCH_MS = 18_000;
+/** Stop CLAIMING new work once this much of the invocation is used, so an
+ *  in-flight chunk still finishes within the 60s function limit. */
+export const WORKER_BUDGET_MS = 25_000;
+/** Consecutive reclaims-without-progress before a job is failed (progress resets
+ *  the counter, so this only catches genuinely stuck jobs, never long backfills). */
 export const MAX_RECLAIMS = 8;
 
+/** Connectors whose streams are paginated resumably (cursor-checkpointed). */
+const CURSOR_STREAMS: Record<string, string[]> = {
+  stripe: ["charges", "payouts"],
+};
+
+export function isResumable(type: string): boolean {
+  return type in CURSOR_STREAMS;
+}
+
 /**
- * Split [from, to] into bounded windows and enqueue one job per window.
- * Returns the number of jobs created. Safe to call repeatedly — duplicate
- * windows just re-sync the same data, which dedup makes a no-op.
+ * Enqueue a date-range backfill. Resumable connectors get one job per
+ * RESUMABLE_WINDOW_DAYS window (parallelism) — each job then paginates its window
+ * in bounded chunks. Legacy connectors get one job per JOB_WINDOW_DAYS window.
  */
 export async function enqueueBackfill(
   supabase: SupabaseLike,
@@ -33,10 +49,10 @@ export async function enqueueBackfill(
   fromDate: Date,
   toDate: Date
 ): Promise<number> {
+  const stepMs = (isResumable(connector.type) ? RESUMABLE_WINDOW_DAYS : JOB_WINDOW_DAYS) * DAY_MS;
   const rows: Database["public"]["Tables"]["sync_jobs"]["Insert"][] = [];
   let cursor = fromDate.getTime();
   const end = toDate.getTime();
-  const stepMs = JOB_WINDOW_DAYS * DAY_MS;
 
   while (cursor < end) {
     const windowEnd = Math.min(cursor + stepMs, end);
@@ -51,10 +67,50 @@ export async function enqueueBackfill(
   }
 
   if (rows.length === 0) return 0;
-
   const { error } = await supabase.from("sync_jobs").insert(rows);
   if (error) throw new Error(`Failed to enqueue backfill: ${error.message}`);
   return rows.length;
+}
+
+/**
+ * Enqueue an incremental "catch up to now" job for a resumable connector. Paginates
+ * [synced_through - overlap, now] (bounded chunks) and advances the checkpoint when
+ * done. Skips if an incremental job is already queued/running for the connector.
+ */
+export async function enqueueIncremental(
+  supabase: SupabaseLike,
+  connector: Pick<ConnectorRow, "id" | "org_id" | "type">
+): Promise<{ enqueued: boolean }> {
+  const { count } = await supabase
+    .from("sync_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("connector_id", connector.id)
+    .eq("advance_checkpoint", true)
+    .in("status", ["pending", "running"]);
+  if ((count ?? 0) > 0) return { enqueued: false }; // already catching up
+
+  const { data: row } = await supabase
+    .from("connectors")
+    .select("synced_through")
+    .eq("id", connector.id)
+    .maybeSingle();
+  const syncedThrough = (row as { synced_through?: string | null } | null)?.synced_through ?? null;
+
+  const now = Date.now();
+  const floor = syncedThrough
+    ? new Date(syncedThrough).getTime() - OVERLAP_DAYS * DAY_MS
+    : now - INITIAL_BACKFILL_DAYS * DAY_MS;
+
+  const { error } = await supabase.from("sync_jobs").insert({
+    org_id: connector.org_id,
+    connector_id: connector.id,
+    type: connector.type,
+    window_from: new Date(Math.min(floor, now)).toISOString(),
+    window_to: new Date(now).toISOString(),
+    advance_checkpoint: true,
+  });
+  if (error) throw new Error(`Failed to enqueue incremental: ${error.message}`);
+  return { enqueued: true };
 }
 
 /** Claim up to CLAIM_BATCH eligible jobs atomically (FOR UPDATE SKIP LOCKED). */
@@ -68,7 +124,6 @@ async function claimBatch(supabase: SupabaseLike, worker: string): Promise<SyncJ
 }
 
 function backoffRunAfter(attempts: number): string {
-  // Exponential-ish: 1m, 2m, 4m, 8m … capped at 30m.
   const minutes = Math.min(2 ** (attempts - 1), 30);
   return new Date(Date.now() + minutes * 60_000).toISOString();
 }
@@ -98,8 +153,6 @@ async function finishJob(
       .eq("id", job.id);
     return;
   }
-
-  // Retry until max_attempts, then give up. attempts was already incremented at claim.
   const exhausted = outcome.permanent || job.attempts >= job.max_attempts;
   await supabase
     .from("sync_jobs")
@@ -114,23 +167,103 @@ async function finishJob(
     .eq("id", job.id);
 }
 
+type Outcome = "progress" | "done" | "failed";
+
+/**
+ * Process ONE bounded chunk of a resumable (cursor-paginated) job. Fetches up to
+ * CHUNK_FETCH_MS worth of one stream from the saved cursor, persists it, then
+ * either continues (same stream, new cursor), advances to the next stream, or
+ * finishes — saving progress to the row each time. Progress resets `attempts` so
+ * a long backfill is never mistaken for a stuck job.
+ */
+async function processResumableChunk(
+  supabase: SupabaseLike,
+  job: SyncJobRow,
+  connector: ConnectorRow
+): Promise<Outcome> {
+  const streams = CURSOR_STREAMS[connector.type];
+  const stream = (job.stream ?? streams[0]) as "charges" | "payouts";
+
+  try {
+    const cfg = (connector.config ?? {}) as Record<string, string>;
+    if (connector.type !== "stripe") throw new SyncConfigError(`No resumable engine for ${connector.type}`);
+    if (!cfg.secret_key) throw new SyncConfigError("Connector is missing secret_key in config");
+
+    const client = new StripeConnector(cfg.secret_key);
+    const { transactions, nextCursor, hasMore } = await client.fetchChunk(stream, {
+      gteSec: Math.floor(new Date(job.window_from).getTime() / 1000),
+      lteSec: Math.floor(new Date(job.window_to).getTime() / 1000),
+      startingAfter: job.cursor,
+      deadlineMs: Date.now() + CHUNK_FETCH_MS,
+    });
+
+    await persistTransactions(supabase, connector.org_id, connector.id, transactions);
+    const processed = (job.processed ?? 0) + transactions.length;
+    const base = { processed, attempts: 0, locked_at: null, locked_by: null, updated_at: new Date().toISOString() };
+
+    if (hasMore) {
+      // More of this stream remains — continue from the new cursor next pass.
+      await supabase.from("sync_jobs").update({ ...base, stream, cursor: nextCursor, status: "pending", run_after: new Date().toISOString() }).eq("id", job.id);
+      return "progress";
+    }
+
+    const idx = streams.indexOf(stream);
+    if (idx < streams.length - 1) {
+      // Stream done — move to the next stream from the start.
+      await supabase.from("sync_jobs").update({ ...base, stream: streams[idx + 1], cursor: null, status: "pending", run_after: new Date().toISOString() }).eq("id", job.id);
+      return "progress";
+    }
+
+    // All streams done.
+    await supabase.from("sync_jobs").update({ ...base, status: "done", cursor: null, result: { processed } }).eq("id", job.id);
+    await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connector.id);
+    if (job.advance_checkpoint) await advanceCheckpoint(supabase, connector.id, new Date(job.window_to));
+    return "done";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const permanent = err instanceof SyncConfigError;
+    await finishJob(supabase, job, { ok: false, error: message, permanent });
+    return job.attempts >= job.max_attempts || permanent ? "failed" : "progress";
+  }
+}
+
+/** Process one legacy (whole-window) job for a low-volume connector. */
+async function processLegacyJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
+  try {
+    const result = await syncConnectorTransactions({
+      supabase,
+      connector,
+      fromDate: new Date(job.window_from),
+      toDate: new Date(job.window_to),
+    });
+    await finishJob(supabase, job, { ok: true, result });
+    if (job.advance_checkpoint) await advanceCheckpoint(supabase, connector.id, new Date(job.window_to));
+    return "done";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const permanent = err instanceof SyncConfigError;
+    await finishJob(supabase, job, { ok: false, error: message, permanent });
+    return job.attempts >= job.max_attempts || permanent ? "failed" : "progress";
+  }
+}
+
 /**
  * Drain the queue for up to WORKER_BUDGET_MS: claim a batch, process it, repeat
- * until empty or out of budget. Returns a small summary for logging.
+ * until empty or out of budget. Concurrent/overlapping invocations are safe
+ * (FOR UPDATE SKIP LOCKED).
  */
 export async function drainSyncJobs(
   supabase: SupabaseLike,
   worker: string,
   startedAt: number = Date.now()
-): Promise<{ processed: number; done: number; failed: number; requeued: number }> {
-  let processed = 0, done = 0, failed = 0, requeued = 0;
+): Promise<{ processed: number; done: number; failed: number; progressed: number }> {
+  let processed = 0, done = 0, failed = 0, progressed = 0;
 
-  // Retire jobs that keep getting killed mid-run (window too large to finish in
-  // the budget) so they stop being reclaimed forever. Their data is recovered by
-  // incremental sync + the FX backfill cron.
+  // Retire jobs killed mid-run every pass without making progress (genuinely
+  // stuck). Progress resets attempts, so legitimate long backfills are unaffected.
   await supabase
     .from("sync_jobs")
-    .update({ status: "failed", last_error: "exceeded retry ceiling (window too large)", locked_at: null, locked_by: null })
+    .update({ status: "failed", last_error: "exceeded retry ceiling", locked_at: null, locked_by: null })
     .eq("status", "running")
     .gte("attempts", MAX_RECLAIMS)
     .lt("locked_at", new Date(Date.now() - 5 * 60_000).toISOString());
@@ -139,51 +272,28 @@ export async function drainSyncJobs(
     const batch = await claimBatch(supabase, worker);
     if (batch.length === 0) break;
 
-    // Load the connectors for this batch once.
     const connectorIds = Array.from(new Set(batch.map((j) => j.connector_id)));
-    const { data: connectors } = await supabase
-      .from("connectors")
-      .select("*")
-      .in("id", connectorIds);
+    const { data: connectors } = await supabase.from("connectors").select("*").in("id", connectorIds);
     const byId = new Map((connectors ?? []).map((c) => [c.id, c]));
 
     const outcomes = await Promise.all(
-      batch.map(async (job) => {
+      batch.map(async (job): Promise<Outcome> => {
         const connector = byId.get(job.connector_id);
         if (!connector) {
-          await finishJob(supabase, job, {
-            ok: false,
-            error: "Connector no longer exists",
-            permanent: true,
-          });
-          return "failed" as const;
+          await finishJob(supabase, job, { ok: false, error: "Connector no longer exists", permanent: true });
+          return "failed";
         }
-        try {
-          const result = await syncConnectorTransactions({
-            supabase,
-            connector,
-            fromDate: new Date(job.window_from),
-            toDate: new Date(job.window_to),
-          });
-          await finishJob(supabase, job, { ok: true, result });
-          return "done" as const;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "Unknown error";
-          // Config errors won't fix themselves — fail fast, don't waste retries.
-          const permanent = err instanceof SyncConfigError;
-          await finishJob(supabase, job, { ok: false, error: message, permanent });
-          return job.attempts >= job.max_attempts || permanent
-            ? ("failed" as const)
-            : ("requeued" as const);
-        }
+        return isResumable(connector.type)
+          ? processResumableChunk(supabase, job, connector)
+          : processLegacyJob(supabase, job, connector);
       })
     );
 
     processed += outcomes.length;
-    done     += outcomes.filter((o) => o === "done").length;
-    failed   += outcomes.filter((o) => o === "failed").length;
-    requeued += outcomes.filter((o) => o === "requeued").length;
+    done += outcomes.filter((o) => o === "done").length;
+    failed += outcomes.filter((o) => o === "failed").length;
+    progressed += outcomes.filter((o) => o === "progress").length;
   }
 
-  return { processed, done, failed, requeued };
+  return { processed, done, failed, progressed };
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncConnectorTransactions } from "@/lib/connectors/sync";
+import { enqueueIncremental, isResumable } from "@/lib/connectors/jobs";
 import { advanceCheckpoint, computeIncrementalStep } from "@/lib/connectors/checkpoint";
 import type { Database } from "@/lib/supabase/types";
 
@@ -53,8 +54,14 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
 
   const results = await Promise.allSettled(
     connectors.map(async (connector: ConnectorRow) => {
-      // One bounded step from this connector's checkpoint. Small in steady state;
-      // a behind connector advances by MAX_STEP_DAYS and catches up next run.
+      // High-volume connectors run on the resumable queue — enqueue a bounded
+      // "catch up to now" job (the per-minute worker drains it in cursor chunks)
+      // rather than syncing inline here, which could exceed the function budget.
+      if (isResumable(connector.type)) {
+        await enqueueIncremental(supabase, connector);
+        return { inserted: 0, updated: 0, skipped: 0, fetched: 0, warnings: [] as string[], hasMore: false };
+      }
+      // Low-volume connectors: one bounded incremental step inline.
       const step = computeIncrementalStep(connector.synced_through, now);
       const result = await syncConnectorTransactions({
         supabase,
@@ -62,7 +69,6 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
         fromDate: step.fromDate,
         toDate:   step.toDate,
       });
-      // Advance the checkpoint only after the window succeeded.
       await advanceCheckpoint(supabase, connector.id, step.toDate);
       return { ...result, hasMore: step.hasMore };
     })

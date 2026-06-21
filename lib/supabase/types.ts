@@ -158,10 +158,14 @@ export interface Database {
           locked_by: string | null;
           last_error: string | null;
           result: Json | null;
+          stream: string | null;
+          cursor: string | null;
+          processed: number;
+          advance_checkpoint: boolean;
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["sync_jobs"]["Row"], "id" | "created_at" | "updated_at" | "status" | "attempts" | "max_attempts" | "run_after" | "locked_at" | "locked_by" | "last_error" | "result"> & Partial<Pick<Database["public"]["Tables"]["sync_jobs"]["Row"], "status" | "attempts" | "max_attempts" | "run_after">>;
+        Insert: Omit<Database["public"]["Tables"]["sync_jobs"]["Row"], "id" | "created_at" | "updated_at" | "status" | "attempts" | "max_attempts" | "run_after" | "locked_at" | "locked_by" | "last_error" | "result" | "stream" | "cursor" | "processed" | "advance_checkpoint"> & Partial<Pick<Database["public"]["Tables"]["sync_jobs"]["Row"], "status" | "attempts" | "max_attempts" | "run_after" | "stream" | "cursor" | "processed" | "advance_checkpoint">>;
         Update: Partial<Database["public"]["Tables"]["sync_jobs"]["Row"]>;
       };
     };

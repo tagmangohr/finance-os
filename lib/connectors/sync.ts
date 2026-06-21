@@ -333,6 +333,82 @@ function hasTransactionChanged(
   );
 }
 
+/**
+ * Persist a batch of normalized transactions: FX-enrich → dedup by external_id →
+ * insert new + refresh changed. Idempotent (safe to re-run a batch — duplicates
+ * are skipped). Shared by the one-shot sync and the resumable cursor engine.
+ */
+export async function persistTransactions(
+  supabase: ServiceClient,
+  orgId: string,
+  connectorId: string,
+  transactions: NormalizedTransaction[]
+): Promise<{ inserted: number; updated: number; skipped: number }> {
+  const out = { inserted: 0, updated: 0, skipped: 0 };
+  if (transactions.length === 0) return out;
+
+  const rows = toInsertRows(orgId, connectorId, transactions);
+  // Convert foreign-currency rows to the base currency (INR) — the settling
+  // gateway can't always provide it (a USD Stripe account never sees INR), so we
+  // convert via ECB rates at each transaction's date.
+  await enrichRowsWithFx(rows);
+
+  const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
+  const existingByExternalId = externalIds.length
+    ? await getExistingTransactionsByExternalId(supabase, orgId, externalIds)
+    : new Map<string, ExistingTransactionByExternalId[]>();
+
+  const newRows = rows.filter((r) => !r.external_id || !existingByExternalId.has(r.external_id));
+  const existingRows = rows.filter((r) => r.external_id && existingByExternalId.has(r.external_id));
+
+  if (newRows.length > 0) {
+    const { error, count } = await supabase
+      .from("transactions")
+      .insert(newRows, { count: "exact" });
+    if (error) {
+      // 23505 = unique_violation: a concurrent sync inserted some rows first. The
+      // partial unique index can't be referenced by upsert, so plain insert +
+      // catching 23505 is correct — treat as skipped (data already present).
+      if (error.code === "23505") {
+        out.skipped += newRows.length;
+      } else {
+        throw new Error(`Insert failed: ${error.message}`);
+      }
+    } else {
+      out.inserted = count ?? newRows.length;
+    }
+  }
+
+  // Refresh changed existing rows in parallel.
+  const updateTasks: Array<Promise<void>> = [];
+  for (const row of existingRows) {
+    if (!row.external_id) continue;
+    const existingMatches = existingByExternalId.get(row.external_id) ?? [];
+    const refreshFields = toRefreshFields(row);
+    const changedMatches = existingMatches.filter((e) => hasTransactionChanged(e, refreshFields));
+    if (changedMatches.length === 0) {
+      out.skipped++;
+      continue;
+    }
+    out.updated++;
+    for (const existing of changedMatches) {
+      updateTasks.push(
+        (async () => {
+          const { error } = await supabase
+            .from("transactions")
+            .update(refreshFields)
+            .eq("id", existing.id)
+            .eq("org_id", orgId);
+          if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
+        })()
+      );
+    }
+  }
+  if (updateTasks.length > 0) await Promise.all(updateTasks);
+
+  return out;
+}
+
 export async function syncConnectorTransactions({
   supabase,
   connector,
@@ -346,114 +422,15 @@ export async function syncConnectorTransactions({
 }): Promise<ConnectorSyncResult> {
   console.log(`[sync] start connector=${connector.id} type=${connector.type} from=${fromDate.toISOString()} to=${toDate.toISOString()}`);
 
-  const { transactions, warnings } = await fetchConnectorTransactions(
-    connector,
-    fromDate,
-    toDate
-  );
-
+  const { transactions, warnings } = await fetchConnectorTransactions(connector, fromDate, toDate);
   console.log(`[sync] fetched=${transactions.length} warnings=${warnings.length}`, warnings.length ? warnings : "");
 
-  const result: ConnectorSyncResult = {
-    fetched: transactions.length,
-    inserted: 0,
-    updated: 0,
-    skipped: 0,
-    warnings,
-  };
-
-  if (transactions.length > 0) {
-    const rows = toInsertRows(connector.org_id, connector.id, transactions);
-    // Convert foreign-currency rows to the base currency (INR). The settling
-    // gateway can't always provide it (e.g. a USD Stripe account never sees INR),
-    // so we convert via ECB rates at each transaction's date.
-    await enrichRowsWithFx(rows);
-    const externalIds = rows
-      .map((row) => row.external_id)
-      .filter(Boolean) as string[];
-    const existingByExternalId = externalIds.length
-      ? await getExistingTransactionsByExternalId(
-          supabase,
-          connector.org_id,
-          externalIds
-        )
-      : new Map<string, ExistingTransactionByExternalId[]>();
-
-    const newRows = rows.filter(
-      (row) => !row.external_id || !existingByExternalId.has(row.external_id)
-    );
-    const existingRows = rows.filter(
-      (row) => row.external_id && existingByExternalId.has(row.external_id)
-    );
-
-    console.log(`[sync] new=${newRows.length} existing=${existingRows.length} skipped-dedup=${rows.length - newRows.length - existingRows.length}`);
-
-    if (newRows.length > 0) {
-      const { error, count } = await supabase
-        .from("transactions")
-        .insert(newRows, { count: "exact" });
-
-      if (error) {
-        // 23505 = unique_violation: a concurrent sync beat us to it for some rows.
-        // The unique index on (org_id, connector_id, external_id) is PARTIAL
-        // (WHERE external_id IS NOT NULL), so Supabase's upsert/onConflict cannot
-        // reference it — plain insert + catching 23505 is the correct pattern.
-        // Treat as skipped; the data is already in the DB from the other sync.
-        if (error.code === "23505") {
-          console.warn(`[sync] 23505 duplicate on insert — concurrent sync, treating as skipped`);
-          result.skipped += newRows.length;
-        } else {
-          console.error(`[sync] INSERT ERROR code=${error.code} message=${error.message} details=${error.details}`);
-          throw new Error(`Insert failed: ${error.message}`);
-        }
-      } else {
-        result.inserted = count ?? newRows.length;
-        console.log(`[sync] inserted=${result.inserted}`);
-      }
-    }
-
-    // Build all update tasks first, then run them in parallel.
-    // Sequential updates (the old approach) cost N × ~100 ms per changed row;
-    // parallel runs them all in ~100 ms regardless of N.
-    const updateTasks: Array<Promise<void>> = [];
-
-    for (const row of existingRows) {
-      if (!row.external_id) continue;
-
-      const existingMatches = existingByExternalId.get(row.external_id) ?? [];
-      const refreshFields = toRefreshFields(row);
-      const changedMatches = existingMatches.filter((existing) =>
-        hasTransactionChanged(existing, refreshFields)
-      );
-
-      if (changedMatches.length === 0) {
-        result.skipped++;
-        continue;
-      }
-
-      result.updated++;
-      for (const existing of changedMatches) {
-        const task = async (): Promise<void> => {
-          const { error } = await supabase
-            .from("transactions")
-            .update(refreshFields)
-            .eq("id", existing.id)
-            .eq("org_id", connector.org_id);
-          if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
-        };
-        updateTasks.push(task());
-      }
-    }
-
-    if (updateTasks.length > 0) {
-      await Promise.all(updateTasks);
-    }
-  }
+  const persisted = await persistTransactions(supabase, connector.org_id, connector.id, transactions);
 
   await supabase
     .from("connectors")
     .update({ last_synced_at: new Date().toISOString() })
     .eq("id", connector.id);
 
-  return result;
+  return { fetched: transactions.length, warnings, ...persisted };
 }

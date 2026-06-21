@@ -260,6 +260,10 @@ const SYNC_ENDPOINTS: Partial<Record<Connector["type"], string>> = {
   easebuzz: "/api/connectors/easebuzz",
 };
 
+// Connectors whose volume requires the resumable queue (cursor-chunked) for BOTH
+// backfill and "sync latest", rather than an inline request.
+const RESUMABLE_CONNECTORS = new Set<Connector["type"]>(["stripe"]);
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -605,6 +609,33 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const handleIncrementalSync = async (connector: Connector) => {
     const endpoint = SYNC_ENDPOINTS[connector.type];
     if (!endpoint) return;
+
+    // High-volume connectors catch up on the resumable queue (bounded cursor
+    // chunks) instead of an inline loop that could time out. Enqueue + poll.
+    if (RESUMABLE_CONNECTORS.has(connector.type)) {
+      setSyncingId(connector.id);
+      try {
+        const res = await fetch("/api/connectors/backfill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connector_id: connector.id, org_id: orgId, incremental: true }),
+        });
+        if (!res.ok) {
+          const b = await res.json().catch(() => null);
+          throw new Error((b as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+        }
+        const { enqueued } = await res.json() as { enqueued: number };
+        if (!enqueued) { toast.success("Already catching up — sync already in progress"); return; }
+        toast.message("Catching up to now — syncing in the background…");
+        await pollBackfill(connector.id);
+      } catch (err) {
+        toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      } finally {
+        setSyncingId(null);
+        setSyncProgress(null);
+      }
+      return;
+    }
 
     setSyncingId(connector.id);
     try {

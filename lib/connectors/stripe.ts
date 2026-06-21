@@ -93,6 +93,47 @@ export class StripeConnector {
     return results;
   }
 
+  // ─── Resumable chunked fetch ────────────────────────────────────────────────
+  // Fetches ONE time-bounded chunk of a stream from a cursor (starting_after).
+  // Returns the rows plus a resume cursor + hasMore, so the caller can persist
+  // and continue on the next invocation. This is what makes high-volume sync
+  // unbreakable: each call is bounded by the deadline, never the data size, and
+  // the cursor only moves forward so every record is fetched exactly once.
+
+  async fetchChunk(
+    stream: "charges" | "payouts",
+    opts: { gteSec: number; lteSec: number; startingAfter: string | null; deadlineMs: number }
+  ): Promise<{ transactions: NormalizedTransaction[]; nextCursor: string | null; hasMore: boolean }> {
+    const results: NormalizedTransaction[] = [];
+    const created = { gte: opts.gteSec, lte: opts.lteSec };
+    let startingAfter = opts.startingAfter ?? undefined;
+    let hasMore = true;
+
+    while (Date.now() < opts.deadlineMs) {
+      const params = { created, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) };
+      const page =
+        stream === "charges"
+          ? await this.stripe.charges.list(params as Stripe.ChargeListParams)
+          : await this.stripe.payouts.list(params as Stripe.PayoutListParams);
+
+      for (const item of page.data) {
+        results.push(
+          stream === "charges"
+            ? normalizeStripeCharge(item as unknown as StripeCharge)
+            : normalizeStripePayout(item as unknown as StripePayout)
+        );
+      }
+
+      if (!page.has_more || page.data.length === 0) {
+        hasMore = false;
+        break;
+      }
+      startingAfter = page.data[page.data.length - 1].id;
+    }
+
+    return { transactions: results, nextCursor: startingAfter ?? null, hasMore };
+  }
+
   // ─── Balance ──────────────────────────────────────────────────────────────
 
   async fetchBalance(): Promise<number> {
