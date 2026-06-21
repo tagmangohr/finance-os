@@ -222,6 +222,24 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     icon: <LucideIcon bg="#1A3A28" icon={<FileSpreadsheet className="h-[18px] w-[18px] text-foreground" />} />,
     isCSV: true,
   },
+  {
+    type: "google_sheets",
+    name: "Google Sheets",
+    description: "Live-sync a shared Google Sheet by link",
+    icon: <SiIcon slug="googlesheets" bg="#0F9D58" />,
+    fields: [
+      { key: "sheet_url", label: "Google Sheet link", placeholder: "https://docs.google.com/spreadsheets/d/…" },
+    ],
+  },
+  {
+    type: "excel",
+    name: "Excel (online)",
+    description: "Live-sync an Excel file by share link",
+    icon: <SiIcon slug="microsoftexcel" bg="#217346" />,
+    fields: [
+      { key: "file_url", label: "Excel file link", placeholder: "Public Google Drive / OneDrive / .xlsx link" },
+    ],
+  },
 ];
 
 const CSV_COLUMN_OPTIONS = [
@@ -263,6 +281,10 @@ const SYNC_ENDPOINTS: Partial<Record<Connector["type"], string>> = {
 // Connectors whose volume requires the resumable queue (cursor-chunked) for BOTH
 // backfill and "sync latest", rather than an inline request.
 const RESUMABLE_CONNECTORS = new Set<Connector["type"]>(["stripe"]);
+
+// Link connectors: live-sync a public URL (Google Sheet / online Excel) by
+// re-reading + mirroring it. One simple "Sync now" action (no date range).
+const LINK_CONNECTORS = new Set<Connector["type"]>(["google_sheets", "excel"]);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -509,6 +531,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         const connector = await res.json();
         setActiveConnectors((prev) => [...prev, connector]);
         toast.success(`${connectorName || openModal.name} connected`);
+        // Link connectors (Google Sheets / Excel): pull data immediately so the
+        // user sees it work, instead of waiting for the next cron.
+        if (LINK_CONNECTORS.has(connector.type)) {
+          handleCloseModal();
+          await handleLinkSync(connector);
+          return;
+        }
       }
 
       handleCloseModal();
@@ -606,6 +635,33 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // Server picks the window from the connector's checkpoint and advances it.
   // We loop bounded steps until caught up — each step is small and timeout-proof,
   // so this stays fast no matter how far behind (or how many connectors) we have.
+  // Live-sync a link connector (Google Sheets / online Excel): re-read the URL
+  // and mirror it. No date range — the whole sheet IS the dataset.
+  const handleLinkSync = async (connector: Connector) => {
+    setSyncingId(connector.id);
+    try {
+      const res = await fetch("/api/connectors/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connector_id: connector.id, org_id: orgId }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        throw new Error((b as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+      }
+      const data = await res.json() as { synced?: number; fetched?: number; warning?: string };
+      setActiveConnectors((prev) =>
+        prev.map((c) => (c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c))
+      );
+      if (data.warning) toast.warning(data.warning);
+      else toast.success(`Synced ${data.synced ?? 0} row${data.synced === 1 ? "" : "s"} from the link`);
+    } catch (err) {
+      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
   const handleIncrementalSync = async (connector: Connector) => {
     const endpoint = SYNC_ENDPOINTS[connector.type];
     if (!endpoint) return;
@@ -784,18 +840,29 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all">
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
-                        <SyncDropdown
-                          connector={inst}
-                          isSyncing={syncingId === inst.id}
-                          progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
-                          onSync={(from, to) => handleSync(inst, from, to)}
-                          onSyncLatest={() => handleIncrementalSync(inst)}
-                          onCustom={() => {
-                            setCustomFrom(defaultFrom);
-                            setCustomTo(todayStr);
-                            setCustomSyncConnector(inst);
-                          }}
-                        />
+                        {LINK_CONNECTORS.has(inst.type) ? (
+                          <button
+                            onClick={() => handleLinkSync(inst)}
+                            disabled={syncingId === inst.id}
+                            title="Sync now — re-read the link"
+                            className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all disabled:opacity-60"
+                          >
+                            <RefreshCw className={cn("h-3.5 w-3.5", syncingId === inst.id && "animate-spin")} />
+                          </button>
+                        ) : (
+                          <SyncDropdown
+                            connector={inst}
+                            isSyncing={syncingId === inst.id}
+                            progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
+                            onSync={(from, to) => handleSync(inst, from, to)}
+                            onSyncLatest={() => handleIncrementalSync(inst)}
+                            onCustom={() => {
+                              setCustomFrom(defaultFrom);
+                              setCustomTo(todayStr);
+                              setCustomSyncConnector(inst);
+                            }}
+                          />
+                        )}
                         <button onClick={() => setConfirmRemove(inst)} disabled={disconnectingId === inst.id}
                           title="Remove"
                           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-red-500/[0.08] transition-all disabled:opacity-40">

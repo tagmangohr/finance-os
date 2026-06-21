@@ -409,6 +409,47 @@ export async function persistTransactions(
   return out;
 }
 
+/**
+ * Mirror a source's full current contents into transactions (used by link
+ * connectors — Google Sheets / online Excel). The spreadsheet IS the source of
+ * truth, and its rows have no stable external_id, so each sync REPLACES this
+ * connector's rows: delete then insert the freshly-parsed set. This reflects
+ * edits and deletions and can never create duplicates.
+ *
+ * Safety: if `transactions` is empty (e.g. a transient bad fetch returned no
+ * rows) we do NOT delete — never wipe existing data on a failed read.
+ */
+export async function replaceConnectorTransactions(
+  supabase: ServiceClient,
+  orgId: string,
+  connectorId: string,
+  transactions: NormalizedTransaction[]
+): Promise<{ inserted: number }> {
+  if (transactions.length === 0) return { inserted: 0 };
+
+  const rows = toInsertRows(orgId, connectorId, transactions);
+  await enrichRowsWithFx(rows); // INR equivalent for any foreign-currency rows
+
+  const { error: delErr } = await supabase
+    .from("transactions")
+    .delete()
+    .eq("org_id", orgId)
+    .eq("connector_id", connectorId);
+  if (delErr) throw new Error(`Replace delete failed: ${delErr.message}`);
+
+  const { error, count } = await supabase
+    .from("transactions")
+    .insert(rows, { count: "exact" });
+  if (error) throw new Error(`Replace insert failed: ${error.message}`);
+
+  await supabase
+    .from("connectors")
+    .update({ last_synced_at: new Date().toISOString() })
+    .eq("id", connectorId);
+
+  return { inserted: count ?? rows.length };
+}
+
 export async function syncConnectorTransactions({
   supabase,
   connector,

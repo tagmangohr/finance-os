@@ -14,6 +14,8 @@ export const CONNECTOR_TYPES = [
   "easebuzz",
   "google_drive",
   "onedrive",
+  "google_sheets",
+  "excel",
 ] as const;
 
 export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;
@@ -84,6 +86,20 @@ export function validateConnectorConfig(
     case "paytm":
       if (!get("merchant_id") || !get("merchant_key")) return "Paytm needs a Merchant ID and Merchant Key.";
       return null;
+    case "google_sheets": {
+      const url = get("sheet_url");
+      if (!url) return "Paste your Google Sheet link.";
+      if (!/^https:\/\/docs\.google\.com\/spreadsheets\/d\//.test(url)) {
+        return "That doesn't look like a Google Sheet link. Copy it from the browser address bar — it starts with https://docs.google.com/spreadsheets/d/. The sheet must be shared as 'Anyone with the link can view'.";
+      }
+      return null;
+    }
+    case "excel": {
+      const url = get("file_url");
+      if (!url) return "Paste a public link to your Excel file.";
+      if (!/^https:\/\//.test(url)) return "The Excel link must be a public https URL (Google Drive, OneDrive, or a direct .xlsx link).";
+      return null;
+    }
     default:
       // csv, bank_statement, accounting tools, drive connectors: no key check here.
       return null;

@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { syncConnectorTransactions } from "@/lib/connectors/sync";
 import { enqueueIncremental, isResumable } from "@/lib/connectors/jobs";
+import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { advanceCheckpoint, computeIncrementalStep } from "@/lib/connectors/checkpoint";
 import type { Database } from "@/lib/supabase/types";
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
-const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz"];
+const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "google_sheets", "excel"];
 
 /**
  * Core logic shared by /api/cron/sync (runs at :00) and
@@ -60,6 +61,12 @@ export async function runConnectorSync(req: NextRequest): Promise<NextResponse> 
       if (isResumable(connector.type)) {
         await enqueueIncremental(supabase, connector);
         return { inserted: 0, updated: 0, skipped: 0, fetched: 0, warnings: [] as string[], hasMore: false };
+      }
+      // Link connectors (Google Sheets / online Excel): re-read the public link
+      // and mirror it. Small + fast, so run inline.
+      if (isLinkConnector(connector.type)) {
+        const r = await syncLinkConnector(supabase, connector);
+        return { inserted: r.inserted, updated: 0, skipped: 0, fetched: r.fetched, warnings: [] as string[], hasMore: false };
       }
       // Low-volume connectors: one bounded incremental step inline.
       const step = computeIncrementalStep(connector.synced_through, now);
