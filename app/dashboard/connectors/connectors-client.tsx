@@ -289,6 +289,14 @@ const LINK_CONNECTORS = new Set<Connector["type"]>(["google_sheets", "excel"]);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// A fetch that fails because the user navigated away (request aborted / tab
+// switched) is NOT a sync failure — the backfill runs server-side regardless.
+// Don't surface these as errors.
+function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true;
+  return e instanceof Error && /abort|Failed to fetch|NetworkError|Load failed/i.test(e.message);
+}
+
 /** A 2px line on a card's bottom edge. Determinate fills to `percent`; otherwise
  *  an indeterminate sweep while a quick sync runs. Renders nothing when idle. */
 function SyncProgressBar({ determinate, percent, indeterminate }: {
@@ -364,6 +372,12 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
   // Reset to center whenever a different modal opens
   React.useEffect(() => { setDialogPos(null); }, [openModal]);
+
+  // Tracks whether this page is still mounted, so a backfill poll that's still
+  // running when the user navigates away stops quietly instead of firing a stale
+  // toast. (The sync itself runs server-side and is unaffected.)
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => () => { mountedRef.current = false; }, []);
 
   // Poll org-wide backfill progress so each connector card shows a live filling
   // bar — persistently (survives reload, reflects cron-driven backfills). Polls
@@ -646,24 +660,33 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       );
       toast.success(`Synced ${data.total_inserted ?? 0} new, refreshed ${data.total_updated ?? 0}`);
     } catch (err) {
-      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
       setSyncProgress(null);
     }
   };
 
-  // Poll the backfill queue until it drains, surfacing live progress.
+  // Poll the backfill queue until it drains, surfacing live progress. Resilient by
+  // design: a single failed/aborted poll (e.g. navigating away) is never treated
+  // as a sync failure — the jobs run server-side regardless. Stops silently if the
+  // page unmounts; the persistent bars + top-bar indicator keep showing progress.
   const pollBackfill = async (connectorId: string) => {
     const POLL_MS = 2500;
     const MAX_POLLS = 480; // ~20 min ceiling; jobs keep running server-side regardless
     for (let i = 0; i < MAX_POLLS; i++) {
       await sleep(POLL_MS);
-      const res = await fetch(`/api/connectors/jobs?connector_id=${connectorId}&org_id=${orgId}`);
-      if (!res.ok) continue;
-      const j = await res.json() as {
-        done: number; failed: number; total: number; remaining: number; active: boolean;
-      };
+      if (!mountedRef.current) return; // navigated away — bars keep tracking it
+      let j: { done: number; failed: number; total: number; remaining: number; active: boolean } | null = null;
+      try {
+        const res = await fetch(`/api/connectors/jobs?connector_id=${connectorId}&org_id=${orgId}`);
+        if (!res.ok) continue;
+        j = await res.json();
+      } catch {
+        continue; // transient/aborted poll — retry; the backfill is still running
+      }
+      if (!j) continue;
+      if (!mountedRef.current) return;
       setSyncProgress({ connectorId, current: j.done + j.failed, total: j.total });
       if (!j.active) {
         setActiveConnectors((prev) =>
@@ -677,7 +700,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         return;
       }
     }
-    toast.message("Backfill still running in the background — check back shortly");
   };
 
   // ── Incremental "sync latest" ─────────────────────────────────────────────
@@ -705,7 +727,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       if (data.warning) toast.warning(data.warning);
       else toast.success(`Synced ${data.synced ?? 0} row${data.synced === 1 ? "" : "s"} from the link`);
     } catch (err) {
-      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
     }
@@ -734,7 +756,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         toast.message("Catching up to now — syncing in the background…");
         await pollBackfill(connector.id);
       } catch (err) {
-        toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+        if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
       } finally {
         setSyncingId(null);
         setSyncProgress(null);
@@ -790,7 +812,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         toast.success(`Up to date — ${totalSynced} new, ${totalUpdated} refreshed`);
       }
     } catch (err) {
-      toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
       setSyncProgress(null);
