@@ -115,7 +115,13 @@ export class StripeConnector {
       const params = { created, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) };
       const page =
         stream === "charges"
-          ? await this.stripe.charges.list(params as Stripe.ChargeListParams)
+          ? await this.stripe.charges.list({
+              ...params,
+              // Needed for the processing fee (balance_transaction.fee). Safe under
+              // the resumable engine: heavier pages just mean fewer per time-boxed
+              // chunk, never a timeout.
+              expand: ["data.balance_transaction"],
+            } as Stripe.ChargeListParams)
           : stream === "payouts"
           ? await this.stripe.payouts.list(params as Stripe.PayoutListParams)
           : await this.stripe.disputes.list(params as Stripe.DisputeListParams);

@@ -33,7 +33,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const buildQuery = () => {
     let q = auth.supabase
       .from("transactions")
-      .select("source, type, amount, amount_base, category, metadata")
+      .select("source, type, amount, amount_base, currency, fx_rate, category, metadata")
       .eq("org_id", auth.org.id)
       .in("status", POSTED_TRANSACTION_STATUSES);
     if (connectorId) q = q.eq("connector_id", connectorId);
@@ -80,8 +80,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       }
       if (!transfer) {
         const meta = (row.metadata as Record<string, unknown>) ?? {};
-        const fee = Number(meta.fee ?? meta.fees ?? 0);
-        if (!isNaN(fee)) totalFees += fee;
+        let fee = Number(meta.fee ?? meta.fees ?? 0);
+        if (!isNaN(fee) && fee) {
+          // Fees are stored in the row's own currency (Razorpay = INR, Stripe = USD).
+          // Convert non-INR fees to INR with the row's rate, like amount_base.
+          if ((row.currency as string) !== "INR") fee *= Number(row.fx_rate ?? 1);
+          totalFees += fee;
+        }
       }
     }
 

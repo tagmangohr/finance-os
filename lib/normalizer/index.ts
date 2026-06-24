@@ -143,6 +143,8 @@ export type StripeCharge = {
         amount: number;        // in settlement-currency smallest unit
         currency: string;      // settlement currency (e.g. "inr")
         exchange_rate: number | null;
+        fee: number;           // Stripe processing fee, settlement-currency smallest unit
+        net: number;           // amount − fee, settlement-currency smallest unit
       }
     | null;
 };
@@ -460,18 +462,25 @@ export function normalizeStripeCharge(
   let amount_base: number | null = null;
   let base_currency: string | null = null;
   let fx_rate: number | null = null;
+  // Stripe processing fee (from the balance transaction). It is in the account's
+  // settlement currency — which equals the charge currency for a single-currency
+  // account — so it's stored in the charge currency's full units; the summary
+  // converts it to INR with the row's fx_rate (like the amount).
+  let fee: number | null = null;
+  const bt = charge.balance_transaction && typeof charge.balance_transaction === "object"
+    ? charge.balance_transaction
+    : null;
   if (currency === BASE_CURRENCY) {
     amount_base = amount;
     base_currency = BASE_CURRENCY;
     fx_rate = 1;
-  } else if (charge.balance_transaction && typeof charge.balance_transaction === "object") {
-    const bt = charge.balance_transaction;
-    const btCurrency = bt.currency.toUpperCase();
-    if (btCurrency === BASE_CURRENCY) {
-      amount_base = ZERO_DECIMAL_CURRENCIES.has(btCurrency) ? bt.amount : bt.amount / 100;
-      base_currency = BASE_CURRENCY;
-      fx_rate = bt.exchange_rate ?? null;
-    }
+  } else if (bt && bt.currency.toUpperCase() === BASE_CURRENCY) {
+    amount_base = ZERO_DECIMAL_CURRENCIES.has(bt.currency.toUpperCase()) ? bt.amount : bt.amount / 100;
+    base_currency = BASE_CURRENCY;
+    fx_rate = bt.exchange_rate ?? null;
+  }
+  if (bt && typeof bt.fee === "number") {
+    fee = ZERO_DECIMAL_CURRENCIES.has(bt.currency.toUpperCase()) ? bt.fee : bt.fee / 100;
   }
 
   return {
@@ -494,6 +503,7 @@ export function normalizeStripeCharge(
       amount_refunded: isZeroDecimal
         ? charge.amount_refunded
         : charge.amount_refunded / 100,
+      fee, // processing fee in charge currency; converted to INR at aggregation
       stripe_metadata: charge.metadata,
     },
   };
