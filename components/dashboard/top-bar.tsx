@@ -6,6 +6,7 @@ import { RefreshCw, Bell, Search } from "lucide-react";
 import { SyncModal } from "@/components/dashboard/sync-modal";
 import { CommandPalette, useCommandPalette } from "@/components/dashboard/command-palette";
 import { ThemeToggle } from "@/components/dashboard/theme-toggle";
+import { cn } from "@/lib/utils";
 
 const PAGE_META: Record<string, { label: string }> = {
   "/dashboard":              { label: "War Room" },
@@ -25,8 +26,29 @@ interface TopBarProps {
 export function TopBar({ orgId, orgName }: TopBarProps) {
   const pathname = usePathname();
   const [syncOpen, setSyncOpen] = useState(false);
+  const [syncActive, setSyncActive] = useState(false);
   const [clock, setClock] = useState("");
   const { open: cmdOpen, setOpen: setCmdOpen, close: closeCmd } = useCommandPalette();
+
+  // Global sync indicator: poll org-wide job progress so the top bar spins on any
+  // page while a background sync runs (non-blocking — the dashboard stays usable).
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const tick = async () => {
+      let active = false;
+      try {
+        const res = await fetch(`/api/connectors/jobs?org_id=${orgId}`);
+        if (res.ok) {
+          const data = await res.json() as { connectors?: Record<string, { active: boolean }> };
+          active = Object.values(data.connectors ?? {}).some((p) => p.active);
+        }
+      } catch { /* keep last state */ }
+      if (!cancelled) { setSyncActive(active); timer = setTimeout(tick, active ? 3000 : 10000); }
+    };
+    tick();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [orgId]);
 
   const page = PAGE_META[pathname] ?? { label: "Finance OS" };
 
@@ -82,10 +104,14 @@ export function TopBar({ orgId, orgName }: TopBarProps) {
 
           <button
             onClick={() => setSyncOpen(true)}
-            aria-label="Sync"
-            className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            aria-label={syncActive ? "Syncing…" : "Sync"}
+            title={syncActive ? "Syncing in the background…" : "Sync data"}
+            className="relative w-[30px] h-[30px] rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={cn("w-3.5 h-3.5", syncActive && "animate-spin text-primary")} />
+            {syncActive && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+            )}
           </button>
 
           <button aria-label="Notifications" className="w-[30px] h-[30px] rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
