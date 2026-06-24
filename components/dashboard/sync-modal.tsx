@@ -62,7 +62,7 @@ export function SyncModal({ open, onOpenChange, orgId }: SyncModalProps) {
       const n = data.connectors ?? 0;
       toast.success(
         n > 0
-          ? `Sync started for ${n} source${n > 1 ? "s" : ""} — running in the background. Watch progress on Connectors.`
+          ? `Syncing ${n} source${n > 1 ? "s" : ""} in the background — you can keep working. Progress shows on Connectors.`
           : "No connected sources to sync yet."
       );
       onOpenChange(false);

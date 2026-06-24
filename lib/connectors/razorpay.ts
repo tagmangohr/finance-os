@@ -265,6 +265,46 @@ export class RazorpayConnector {
     return results;
   }
 
+  // ─── Resumable chunked fetch ────────────────────────────────────────────────
+  // One time-bounded, row-capped chunk of a stream from a saved offset (Razorpay
+  // paginates by `skip`, so the "cursor" is the numeric offset). Mirrors
+  // StripeConnector.fetchChunk so the resumable queue engine can drive both: each
+  // call is bounded by a deadline AND maxRows, never by the window's total size, so
+  // it always fits the function budget and resumes exactly where it left off.
+  // Payouts (RazorpayX, cursor-paginated + account_number-gated) is intentionally
+  // not a resumable stream here — it's optional and absent for standard accounts.
+  async fetchChunk(
+    stream: "payments" | "refunds" | "settlements" | "disputes",
+    opts: { gteSec: number; lteSec: number; startingAfter: string | null; deadlineMs: number; maxRows?: number }
+  ): Promise<{ transactions: NormalizedTransaction[]; nextCursor: string | null; hasMore: boolean }> {
+    const maxRows = opts.maxRows ?? 1000;
+    const results: NormalizedTransaction[] = [];
+    let skip = opts.startingAfter ? parseInt(opts.startingAfter, 10) || 0 : 0;
+    let hasMore = true;
+
+    while (Date.now() < opts.deadlineMs && results.length < maxRows) {
+      const data = await this.get<{ items?: unknown[] }>(`/${stream}`, {
+        from: opts.gteSec,
+        to: opts.lteSec,
+        count: PAGE_SIZE,
+        skip,
+      });
+      const items = data.items ?? [];
+      for (const it of items) {
+        switch (stream) {
+          case "payments":    results.push(normalizeRazorpayPayment(it as RazorpayPayment)); break;
+          case "refunds":     results.push(normalizeRazorpayRefund(it as RazorpayRefund)); break;
+          case "settlements": results.push(normalizeRazorpaySettlement(it as RazorpaySettlement)); break;
+          case "disputes":    results.push(normalizeRazorpayDispute(it as RazorpayDispute)); break;
+        }
+      }
+      skip += items.length;
+      if (items.length < PAGE_SIZE) { hasMore = false; break; }
+    }
+
+    return { transactions: results, nextCursor: hasMore ? String(skip) : null, hasMore };
+  }
+
   // ─── Balance ──────────────────────────────────────────────────────────────
 
   async fetchBalance(): Promise<number> {

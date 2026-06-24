@@ -115,7 +115,7 @@ export class StripeConnector {
     // many thousands of rows in one chunk and the persist would blow the 60s wall.
     // Stopping early keeps hasMore=true and a forward cursor, so the next pass
     // resumes seamlessly from here.
-    const maxRows = opts.maxRows ?? 1200;
+    const maxRows = opts.maxRows ?? 2000;
 
     while (Date.now() < opts.deadlineMs && results.length < maxRows) {
       const params = { created, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) };

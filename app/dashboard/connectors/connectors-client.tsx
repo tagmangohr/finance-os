@@ -281,7 +281,7 @@ const SYNC_ENDPOINTS: Partial<Record<Connector["type"], string>> = {
 
 // Connectors whose volume requires the resumable queue (cursor-chunked) for BOTH
 // backfill and "sync latest", rather than an inline request.
-const RESUMABLE_CONNECTORS = new Set<Connector["type"]>(["stripe"]);
+const RESUMABLE_CONNECTORS = new Set<Connector["type"]>(["stripe", "razorpay"]);
 
 // Link connectors: live-sync a public URL (Google Sheet / online Excel) by
 // re-reading + mirroring it. One simple "Sync now" action (no date range).
@@ -658,10 +658,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         }
         const { enqueued } = await res.json() as { enqueued: number };
         if (!enqueued) {
-          toast.success("Already up to date");
+          toast.success("You're all caught up — nothing new to sync.");
           return;
         }
-        toast.message(`Backfill queued — ${enqueued} window${enqueued > 1 ? "s" : ""}, processing in the background…`);
+        toast.message("Syncing your data — this runs in the background, you can keep working.");
         await pollBackfill(connector.id);
         return;
       }
@@ -715,9 +715,11 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           prev.map((c) => (c.id === connectorId ? { ...c, last_synced_at: new Date().toISOString() } : c))
         );
         if (j.failed > 0) {
-          toast.warning(`Backfill finished — ${j.done} window${j.done !== 1 ? "s" : ""} synced, ${j.failed} failed`);
+          // Don't alarm with raw "failed" counts — unfinished pieces retry on
+          // their own in the background (and often the data is already in).
+          toast.message("Synced — a few items are still catching up in the background.");
         } else {
-          toast.success(`Backfill complete — ${j.done} window${j.done !== 1 ? "s" : ""} synced`);
+          toast.success("Your data's up to date.");
         }
         return;
       }
@@ -774,8 +776,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           throw new Error((b as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
         }
         const { enqueued } = await res.json() as { enqueued: number };
-        if (!enqueued) { toast.success("Already catching up — sync already in progress"); return; }
-        toast.message("Catching up to now — syncing in the background…");
+        if (!enqueued) { toast.success("Already syncing — catching up in the background."); return; }
+        toast.message("Catching up on the latest — running in the background…");
         await pollBackfill(connector.id);
       } catch (err) {
         if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);

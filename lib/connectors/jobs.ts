@@ -2,6 +2,8 @@ import type { createServiceClient } from "@/lib/supabase/server";
 import type { ConnectorSyncResult } from "@/lib/connectors/sync";
 import { syncConnectorTransactions, persistTransactions, SyncConfigError } from "@/lib/connectors/sync";
 import { StripeConnector } from "@/lib/connectors/stripe";
+import { RazorpayConnector } from "@/lib/connectors/razorpay";
+import type { NormalizedTransaction } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
 
@@ -34,9 +36,12 @@ export const MAX_RECLAIMS = 8;
  *  but far below the SQL claim's 5-min window so backfills recover fast, not stall. */
 export const RECLAIM_AFTER_MS = 90_000;
 
-/** Connectors whose streams are paginated resumably (cursor-checkpointed). */
+/** Connectors whose streams are paginated resumably (cursor-checkpointed). Each
+ *  stream is fetched in time-boxed, row-capped chunks so any volume — months or
+ *  years — syncs safely without ever exceeding the function budget. */
 const CURSOR_STREAMS: Record<string, string[]> = {
   stripe: ["charges", "payouts", "disputes"],
+  razorpay: ["payments", "refunds", "settlements", "disputes"],
 };
 
 export function isResumable(type: string): boolean {
@@ -187,20 +192,33 @@ async function processResumableChunk(
   connector: ConnectorRow
 ): Promise<Outcome> {
   const streams = CURSOR_STREAMS[connector.type];
-  const stream = (job.stream ?? streams[0]) as "charges" | "payouts" | "disputes";
+  const stream = job.stream ?? streams[0];
 
   try {
     const cfg = (connector.config ?? {}) as Record<string, string>;
-    if (connector.type !== "stripe") throw new SyncConfigError(`No resumable engine for ${connector.type}`);
-    if (!cfg.secret_key) throw new SyncConfigError("Connector is missing secret_key in config");
-
-    const client = new StripeConnector(cfg.secret_key);
-    const { transactions, nextCursor, hasMore } = await client.fetchChunk(stream, {
+    const opts = {
       gteSec: Math.floor(new Date(job.window_from).getTime() / 1000),
       lteSec: Math.floor(new Date(job.window_to).getTime() / 1000),
       startingAfter: job.cursor,
       deadlineMs: Date.now() + CHUNK_FETCH_MS,
-    });
+    };
+
+    // Dispatch to the connector's resumable client. Both return the same shape
+    // ({ transactions, nextCursor, hasMore }) so the cursor/stream advancement
+    // below is fully generic — new resumable gateways only add a branch here.
+    let chunk: { transactions: NormalizedTransaction[]; nextCursor: string | null; hasMore: boolean };
+    if (connector.type === "stripe") {
+      if (!cfg.secret_key) throw new SyncConfigError("Connector is missing secret_key in config");
+      chunk = await new StripeConnector(cfg.secret_key).fetchChunk(
+        stream as "charges" | "payouts" | "disputes", opts);
+    } else if (connector.type === "razorpay") {
+      if (!cfg.key_id || !cfg.key_secret) throw new SyncConfigError("Connector is missing Razorpay key_id/key_secret");
+      chunk = await new RazorpayConnector(cfg.key_id, cfg.key_secret).fetchChunk(
+        stream as "payments" | "refunds" | "settlements" | "disputes", opts);
+    } else {
+      throw new SyncConfigError(`No resumable engine for ${connector.type}`);
+    }
+    const { transactions, nextCursor, hasMore } = chunk;
 
     await persistTransactions(supabase, connector.org_id, connector.id, transactions);
     const processed = (job.processed ?? 0) + transactions.length;
