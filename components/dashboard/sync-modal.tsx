@@ -2,17 +2,11 @@
 
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { RefreshCw, X, ArrowRight, Database } from "lucide-react";
+import { RefreshCw, X, Database } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-const PRESETS = [
-  { label: "30 days", days: 30 },
-  { label: "90 days", days: 90 },
-  { label: "6 months", days: 180 },
-  { label: "1 year", days: 365 },
-];
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 function toDateInputValue(d: Date) {
   return d.toISOString().slice(0, 10);
@@ -37,16 +31,7 @@ export function SyncModal({ open, onOpenChange, orgId }: SyncModalProps) {
   const [fromDate, setFromDate] = React.useState(
     toDateInputValue(new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000))
   );
-  const [activePreset, setActivePreset] = React.useState<number>(30);
   const [submitting, setSubmitting] = React.useState(false);
-
-  function applyPreset(days: number) {
-    const to = new Date();
-    const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
-    setToDate(toDateInputValue(to));
-    setFromDate(toDateInputValue(from));
-    setActivePreset(days);
-  }
 
   async function handleSync() {
     const isoRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -117,49 +102,13 @@ export function SyncModal({ open, onOpenChange, orgId }: SyncModalProps) {
           <div className="px-6 py-5 space-y-5">
             <div>
               <p className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest mb-3">Date Range</p>
-
-              <div className="flex gap-1.5 mb-3">
-                {PRESETS.map((p) => (
-                  <button
-                    key={p.days}
-                    onClick={() => applyPreset(p.days)}
-                    className={cn(
-                      "flex-1 h-7 rounded-lg text-xs font-medium transition-all duration-150",
-                      activePreset === p.days
-                        ? "bg-primary/15 border border-primary/30 text-primary"
-                        : "bg-accent/40 border border-border text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <div className="flex-1">
-                  <label className="text-[10px] text-muted-foreground/70 block mb-1">From</label>
-                  <input
-                    type="date"
-                    value={fromDate}
-                    max={toDate}
-                    onChange={(e) => { setFromDate(e.target.value); setActivePreset(0); }}
-                    className="w-full h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 [color-scheme:dark]"
-                  />
-                </div>
-                <ArrowRight className="h-3.5 w-3.5 text-muted-foreground/70 flex-shrink-0 mt-4" />
-                <div className="flex-1">
-                  <label className="text-[10px] text-muted-foreground/70 block mb-1">To</label>
-                  <input
-                    type="date"
-                    value={toDate}
-                    min={fromDate}
-                    max={toDateInputValue(new Date())}
-                    onChange={(e) => { setToDate(e.target.value); setActivePreset(0); }}
-                    className="w-full h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 [color-scheme:dark]"
-                  />
-                </div>
-              </div>
-
+              <DateRangePicker
+                from={fromDate}
+                to={toDate}
+                max={toDateInputValue(new Date())}
+                onChange={(f, t) => { setFromDate(f); setToDate(t); }}
+                className="w-full justify-start"
+              />
               {daysDiff > 0 && (
                 <p className="text-[11px] text-muted-foreground/70 mt-2">
                   Pulling <span className="text-muted-foreground font-medium">{daysDiff} days</span> of data — runs in the background.

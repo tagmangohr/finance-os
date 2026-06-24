@@ -19,6 +19,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { cn, formatDate } from "@/lib/utils";
 import type { Connector } from "@/lib/supabase/types";
 
@@ -1201,43 +1202,18 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
             {/* Body */}
             <div className="px-5 py-4 space-y-4">
-              {/* Date inputs */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
-                    From
-                  </label>
-                  <input
-                    type="date"
-                    value={customFrom}
-                    max={customTo || todayStr}
-                    onChange={(e) => setCustomFrom(e.target.value)}
-                    className="w-full rounded-lg text-[12.5px] text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
-                    style={{
-                      background: "hsl(var(--accent))",
-                      border: "1px solid hsl(var(--border))",
-                      padding: "8px 10px",
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
-                    To
-                  </label>
-                  <input
-                    type="date"
-                    value={customTo}
-                    min={customFrom}
-                    max={todayStr}
-                    onChange={(e) => setCustomTo(e.target.value)}
-                    className="w-full rounded-lg text-[12.5px] text-muted-foreground focus:outline-none focus:border-primary/40 transition-colors [color-scheme:dark]"
-                    style={{
-                      background: "hsl(var(--accent))",
-                      border: "1px solid hsl(var(--border))",
-                      padding: "8px 10px",
-                    }}
-                  />
-                </div>
+              {/* Date range */}
+              <div>
+                <label className="text-[10px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70 block mb-1.5">
+                  Date range
+                </label>
+                <DateRangePicker
+                  from={customFrom}
+                  to={customTo}
+                  max={todayStr}
+                  onChange={(f, t) => { setCustomFrom(f); setCustomTo(t); }}
+                  className="w-full justify-start"
+                />
               </div>
 
               {/* Live estimate */}

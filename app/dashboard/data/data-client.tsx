@@ -12,6 +12,7 @@ import {
   ArrowUpDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -332,18 +333,11 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         />
 
         {/* Date range */}
-        <input
-          type="date"
-          value={from}
-          onChange={(e) => setFrom(e.target.value)}
-          className="h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 [color-scheme:dark]"
-        />
-        <span className="text-muted-foreground/70 text-xs">→</span>
-        <input
-          type="date"
-          value={to}
-          onChange={(e) => setTo(e.target.value)}
-          className="h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 [color-scheme:dark]"
+        <DateRangePicker
+          from={from}
+          to={to}
+          max={new Date().toISOString().slice(0, 10)}
+          onChange={(f, t) => { setFrom(f); setTo(t); }}
         />
 
         {/* Spacer + export */}
