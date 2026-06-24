@@ -104,14 +104,20 @@ export class StripeConnector {
 
   async fetchChunk(
     stream: "charges" | "payouts" | "disputes",
-    opts: { gteSec: number; lteSec: number; startingAfter: string | null; deadlineMs: number }
+    opts: { gteSec: number; lteSec: number; startingAfter: string | null; deadlineMs: number; maxRows?: number }
   ): Promise<{ transactions: NormalizedTransaction[]; nextCursor: string | null; hasMore: boolean }> {
     const results: NormalizedTransaction[] = [];
     const created = { gte: opts.gteSec, lte: opts.lteSec };
     let startingAfter = opts.startingAfter ?? undefined;
     let hasMore = true;
+    // Cap rows per chunk so the downstream persist (insert + bounded UPDATEs) always
+    // fits the worker's function budget — without this, a fast stream could fetch
+    // many thousands of rows in one chunk and the persist would blow the 60s wall.
+    // Stopping early keeps hasMore=true and a forward cursor, so the next pass
+    // resumes seamlessly from here.
+    const maxRows = opts.maxRows ?? 1200;
 
-    while (Date.now() < opts.deadlineMs) {
+    while (Date.now() < opts.deadlineMs && results.length < maxRows) {
       const params = { created, limit: 100, ...(startingAfter ? { starting_after: startingAfter } : {}) };
       const page =
         stream === "charges"

@@ -19,6 +19,26 @@ type TransactionInsert = Database["public"]["Tables"]["transactions"]["Insert"];
 type TransactionUpdate = Database["public"]["Tables"]["transactions"]["Update"];
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
+/** Max simultaneous row-refresh UPDATEs during persist. Bounded on purpose: a
+ *  re-sync over already-synced data (e.g. backfilling Stripe fees/disputes onto
+ *  historical charges) flags thousands of rows as "changed". Firing one UPDATE per
+ *  row at once saturates the PostgREST connection pool and pushes the worker past
+ *  its 60s function deadline mid-persist — which leaves the job orphaned in
+ *  `running` and the backfill stalled. A small pool keeps each persist bounded. */
+const UPDATE_CONCURRENCY = 12;
+
+/** Run async thunks with at most `limit` in flight at once (no extra deps). */
+async function runPooled(thunks: Array<() => Promise<void>>, limit: number): Promise<void> {
+  if (thunks.length === 0) return;
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, thunks.length) }, async () => {
+    while (next < thunks.length) {
+      await thunks[next++]();
+    }
+  });
+  await Promise.all(runners);
+}
+
 export type ConnectorSyncResult = {
   fetched: number;
   inserted: number;
@@ -379,8 +399,10 @@ export async function persistTransactions(
     }
   }
 
-  // Refresh changed existing rows in parallel.
-  const updateTasks: Array<Promise<void>> = [];
+  // Refresh changed existing rows through a BOUNDED pool (not an unbounded
+  // Promise.all — see UPDATE_CONCURRENCY). Build the work list first, then drain it
+  // at a safe concurrency so a large re-sync can't storm the connection pool.
+  const updateThunks: Array<() => Promise<void>> = [];
   for (const row of existingRows) {
     if (!row.external_id) continue;
     const existingMatches = existingByExternalId.get(row.external_id) ?? [];
@@ -392,19 +414,17 @@ export async function persistTransactions(
     }
     out.updated++;
     for (const existing of changedMatches) {
-      updateTasks.push(
-        (async () => {
-          const { error } = await supabase
-            .from("transactions")
-            .update(refreshFields)
-            .eq("id", existing.id)
-            .eq("org_id", orgId);
-          if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
-        })()
-      );
+      updateThunks.push(async () => {
+        const { error } = await supabase
+          .from("transactions")
+          .update(refreshFields)
+          .eq("id", existing.id)
+          .eq("org_id", orgId);
+        if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
+      });
     }
   }
-  if (updateTasks.length > 0) await Promise.all(updateTasks);
+  await runPooled(updateThunks, UPDATE_CONCURRENCY);
 
   return out;
 }
