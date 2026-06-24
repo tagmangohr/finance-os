@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
-import { cn, formatDate } from "@/lib/utils";
+import { cn, formatDate, fyStartISO } from "@/lib/utils";
 import type { Connector } from "@/lib/supabase/types";
 
 // ─── Connector definitions ────────────────────────────────────────────────────
@@ -358,8 +358,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
   // ── Custom date-range sync ─────────────────────────────────────────────────
+  // Default range starts at the financial-year start (1 Apr) so a sync reconciles
+  // the whole FY (refunds/disputes on older orders), not just the last 30 days.
   const todayStr = new Date().toISOString().split("T")[0];
-  const defaultFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const defaultFrom = fyStartISO();
   const [customSyncConnector, setCustomSyncConnector] = React.useState<Connector | null>(null);
   const [customFrom, setCustomFrom] = React.useState(defaultFrom);
   const [customTo,   setCustomTo]   = React.useState(todayStr);

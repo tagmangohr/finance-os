@@ -63,6 +63,22 @@ export function formatDateRelative(date: string | Date): string {
   return formatDistanceToNow(d, { addSuffix: true });
 }
 
+/**
+ * First day (YYYY-MM-DD) of the Indian financial year that `ref` falls in. The FY
+ * runs 1 Apr → 31 Mar, so Jan–Mar belong to the FY that began the previous April.
+ * Computed in IST so the boundary doesn't shift for late-night UTC. This is the
+ * default "sync from" date — re-scanning the whole FY reconciles refunds/disputes
+ * on older orders, not just recent activity.
+ */
+export function fyStartISO(ref: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit",
+  }).formatToParts(ref);
+  const year = Number(parts.find((p) => p.type === "year")!.value);
+  const month = Number(parts.find((p) => p.type === "month")!.value); // 1–12
+  return `${month >= 4 ? year : year - 1}-04-01`;
+}
+
 // Format percentage
 export function formatPercent(value: number, decimals: number = 1): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(decimals)}%`;

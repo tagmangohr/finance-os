@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { RefreshCw, X, Database } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, fyStartISO } from "@/lib/utils";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 function toDateInputValue(d: Date) {
@@ -28,9 +28,10 @@ interface SyncModalProps {
 export function SyncModal({ open, onOpenChange, orgId }: SyncModalProps) {
   const today = new Date();
   const [toDate, setToDate] = React.useState(toDateInputValue(today));
-  const [fromDate, setFromDate] = React.useState(
-    toDateInputValue(new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000))
-  );
+  // Default to the start of the current financial year (1 Apr) so a sync reconciles
+  // the whole FY — catching refunds/disputes/status changes on older orders, not
+  // just recent ones. The picker still allows any custom range.
+  const [fromDate, setFromDate] = React.useState(fyStartISO(today));
   const [submitting, setSubmitting] = React.useState(false);
 
   async function handleSync() {

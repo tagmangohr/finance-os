@@ -16,6 +16,14 @@ type RatesByDate = Map<string, number>; // YYYY-MM-DD -> (1 unit of currency in 
 // invocations are short-lived, so this is a within-request cache, not persistent.
 const memo = new Map<string, RatesByDate>();
 
+// The CONTIGUOUS date span already fetched into `memo` per currency. We fetch by
+// range (frankfurter returns every business day in [from,to]), so once a span is
+// fetched, nearestPrior over the memo yields the true nearest-prior rate for any
+// date inside it. Tracking the span — instead of asking "does the memo hold SOME
+// earlier rate?" — is what stops a date from anchoring to a stale rate that
+// predates it (the bug that made every date collapse to one early rate).
+const covered = new Map<string, { from: string; to: string }>();
+
 // Canonical host (the old api.frankfurter.app now 301-redirects here and needs
 // the /v1 prefix). Pinning it avoids depending on a redirect that could break.
 const FX_BASE = "https://api.frankfurter.dev/v1";
@@ -66,18 +74,25 @@ export async function getInrRates(currency: string, dates: string[]): Promise<Ma
   const uniq = Array.from(new Set(dates)).sort();
   if (uniq.length === 0) return new Map();
 
+  // We need every business day in [earliest − LOOKBACK_DAYS, latest] so each date
+  // can resolve to its TRUE nearest-prior rate (the −LOOKBACK guarantees a prior
+  // anchor exists even when the earliest date is a weekend/holiday like 1 May).
+  const needFrom = minusDays(uniq[0], LOOKBACK_DAYS);
+  const needTo = uniq[uniq.length - 1];
   const rates = memo.get(currency) ?? new Map<string, number>();
-  const missing = uniq.filter((d) => nearestPrior(rates, d) == null);
-  if (missing.length > 0) {
+  const cov = covered.get(currency);
+
+  // Fetch only when the needed span isn't already covered. Fetch the UNION of the
+  // covered span and the needed span so the memo stays one contiguous range — a
+  // single range request covers it, and re-fetching any overlap is harmless.
+  if (!cov || needFrom < cov.from || needTo > cov.to) {
+    const from = cov && cov.from < needFrom ? cov.from : needFrom;
+    const to = cov && cov.to > needTo ? cov.to : needTo;
     try {
-      // Extend the fetch back by LOOKBACK_DAYS so the earliest needed date always
-      // has a prior business-day rate in range — otherwise a date landing on a
-      // holiday at the window's start (e.g. 1 May) has no prior anchor and resolves
-      // inconsistently. With padding, every date deterministically maps to the last
-      // published rate on/before it, regardless of which run fetched it.
-      const fetched = await fetchRange(currency, minusDays(missing[0], LOOKBACK_DAYS), missing[missing.length - 1]);
+      const fetched = await fetchRange(currency, from, to);
       for (const [d, r] of fetched) rates.set(d, r);
       memo.set(currency, rates);
+      covered.set(currency, { from, to });
     } catch {
       // Leave amount_base null on failure — aggregation falls back to amount and a
       // later sync retries, rather than storing a wrong (un-converted) figure.
