@@ -68,6 +68,7 @@ const SOURCE_COLOURS: Record<string, string> = {
   razorpay_payout:     "bg-pink-500/15 text-pink-300 border-pink-500/20",
   stripe:              "bg-indigo-500/15 text-indigo-300 border-indigo-500/20",
   stripe_payout:       "bg-purple-500/15 text-purple-300 border-purple-500/20",
+  stripe_dispute:      "bg-red-500/15 text-destructive border-red-500/20",
   csv:                 "bg-accent/40 text-muted-foreground border-border",
 };
 
@@ -79,6 +80,7 @@ const SOURCE_LABELS: Record<string, string> = {
   razorpay_payout:     "RZP Payout",
   stripe:              "Stripe Charge",
   stripe_payout:       "Stripe Payout",
+  stripe_dispute:      "Stripe Dispute",
   csv:                 "CSV",
 };
 
@@ -313,6 +315,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
             { value: "razorpay_dispute",    label: "RZP Disputes" },
             { value: "stripe",              label: "Stripe Charges" },
             { value: "stripe_payout",       label: "Stripe Payouts" },
+            { value: "stripe_dispute",      label: "Stripe Disputes" },
             { value: "csv",                 label: "CSV" },
           ]}
         />
@@ -382,8 +385,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           />
           <SummaryCard
             label="Disputes"
-            count={summary.groups["razorpay_dispute"]?.count ?? 0}
-            amount={summary.groups["razorpay_dispute"]?.amount ?? 0}
+            count={(summary.groups["razorpay_dispute"]?.count ?? 0) + (summary.groups["stripe_dispute"]?.count ?? 0)}
+            amount={(summary.groups["razorpay_dispute"]?.amount ?? 0) + (summary.groups["stripe_dispute"]?.amount ?? 0)}
             colour="text-destructive"
           />
           <SummaryCard

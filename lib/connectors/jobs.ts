@@ -31,7 +31,7 @@ export const MAX_RECLAIMS = 8;
 
 /** Connectors whose streams are paginated resumably (cursor-checkpointed). */
 const CURSOR_STREAMS: Record<string, string[]> = {
-  stripe: ["charges", "payouts"],
+  stripe: ["charges", "payouts", "disputes"],
 };
 
 export function isResumable(type: string): boolean {
@@ -182,7 +182,7 @@ async function processResumableChunk(
   connector: ConnectorRow
 ): Promise<Outcome> {
   const streams = CURSOR_STREAMS[connector.type];
-  const stream = (job.stream ?? streams[0]) as "charges" | "payouts";
+  const stream = (job.stream ?? streams[0]) as "charges" | "payouts" | "disputes";
 
   try {
     const cfg = (connector.config ?? {}) as Record<string, string>;

@@ -159,6 +159,18 @@ export type StripePayout = {
   metadata: Record<string, string>;
 };
 
+export type StripeDispute = {
+  id: string;
+  object: "dispute";
+  amount: number;   // disputed amount, in the charge currency's smallest unit
+  currency: string;
+  status: string;   // warning_needs_response | needs_response | under_review | won | lost
+  reason: string | null;
+  created: number;
+  charge: string | null;
+  metadata: Record<string, string>;
+};
+
 export type CsvColumnMapping = {
   dateCol: string;
   amountCol: string;
@@ -522,6 +534,36 @@ export function normalizeStripePayout(
     metadata: {
       arrival_date: payout.arrival_date,
       stripe_metadata: payout.metadata,
+    },
+  };
+}
+
+export function normalizeStripeDispute(
+  dispute: StripeDispute
+): NormalizedTransaction {
+  // A dispute (chargeback) is money at risk/lost — a real reduction, so it's a
+  // debit (counts against Net Flow), category "dispute" (NOT a transfer).
+  const currency = dispute.currency.toUpperCase();
+  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(currency);
+  const amount = isZeroDecimal ? dispute.amount : dispute.amount / 100;
+  const status: NormalizedTransaction["status"] =
+    dispute.status === "won" ? "completed" : dispute.status === "lost" ? "completed" : "pending";
+
+  return {
+    external_id: dispute.id,
+    type: "debit",
+    amount,
+    currency,
+    category: "dispute",
+    counterparty_name: null,
+    description: dispute.reason ? `Dispute: ${dispute.reason}` : "Dispute",
+    source: "stripe_dispute",
+    status,
+    transaction_date: unixToDateString(dispute.created),
+    metadata: {
+      dispute_status: dispute.status,
+      charge: dispute.charge,
+      stripe_metadata: dispute.metadata,
     },
   };
 }

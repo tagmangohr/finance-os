@@ -179,6 +179,16 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
   }
 
   async function handleSync() {
+    // Guard: dates must be valid ISO (YYYY-MM-DD). Build the range as ISO strings
+    // directly — never `new Date(str).toISOString()`, which throws "string did not
+    // match the expected pattern" on an empty/locale-formatted value.
+    const isoRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (!isoRe.test(fromDate) || !isoRe.test(toDate)) {
+      setResponse({ results: [], total_fetched: 0, total_inserted: 0, total_updated: 0, total_skipped: 0, from: fromDate, to: toDate, error: "Pick a valid From and To date." });
+      setState("error");
+      return;
+    }
+
     setState("syncing");
     setResponse(null);
 
@@ -188,8 +198,8 @@ export function SyncModal({ open, onOpenChange, orgId, onSyncComplete }: SyncMod
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           org_id: orgId,
-          from_date: new Date(fromDate).toISOString(),
-          to_date: new Date(toDate + "T23:59:59").toISOString(),
+          from_date: `${fromDate}T00:00:00.000Z`,
+          to_date: `${toDate}T23:59:59.999Z`,
         }),
       });
 

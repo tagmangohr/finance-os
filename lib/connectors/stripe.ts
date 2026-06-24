@@ -3,8 +3,10 @@ import {
   NormalizedTransaction,
   StripeCharge,
   StripePayout,
+  StripeDispute,
   normalizeStripeCharge,
   normalizeStripePayout,
+  normalizeStripeDispute,
 } from "@/lib/normalizer";
 
 export class StripeConnector {
@@ -101,7 +103,7 @@ export class StripeConnector {
   // the cursor only moves forward so every record is fetched exactly once.
 
   async fetchChunk(
-    stream: "charges" | "payouts",
+    stream: "charges" | "payouts" | "disputes",
     opts: { gteSec: number; lteSec: number; startingAfter: string | null; deadlineMs: number }
   ): Promise<{ transactions: NormalizedTransaction[]; nextCursor: string | null; hasMore: boolean }> {
     const results: NormalizedTransaction[] = [];
@@ -114,13 +116,17 @@ export class StripeConnector {
       const page =
         stream === "charges"
           ? await this.stripe.charges.list(params as Stripe.ChargeListParams)
-          : await this.stripe.payouts.list(params as Stripe.PayoutListParams);
+          : stream === "payouts"
+          ? await this.stripe.payouts.list(params as Stripe.PayoutListParams)
+          : await this.stripe.disputes.list(params as Stripe.DisputeListParams);
 
       for (const item of page.data) {
         results.push(
           stream === "charges"
             ? normalizeStripeCharge(item as unknown as StripeCharge)
-            : normalizeStripePayout(item as unknown as StripePayout)
+            : stream === "payouts"
+            ? normalizeStripePayout(item as unknown as StripePayout)
+            : normalizeStripeDispute(item as unknown as StripeDispute)
         );
       }
 
