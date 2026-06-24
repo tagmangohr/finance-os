@@ -159,6 +159,8 @@
 @keyframes t-ticker { from { transform:translateX(0); } to { transform:translateX(-50%); } }
 @keyframes t-orb    { 0%,100% { transform:scale(1); } 50% { transform:scale(1.08); } }
 @keyframes t-typing { 0%,80%,100% { opacity:.3; transform:translateY(0); } 40% { opacity:1; transform:translateY(-3px); } }
+/* Indeterminate sync bar — a highlight that sweeps across the connector's edge */
+@keyframes sync-sweep { 0% { transform:translateX(-110%); } 100% { transform:translateX(260%); } }
 
 body::before {
   content: "";

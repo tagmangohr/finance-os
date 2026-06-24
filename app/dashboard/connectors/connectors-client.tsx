@@ -288,6 +288,26 @@ const LINK_CONNECTORS = new Set<Connector["type"]>(["google_sheets", "excel"]);
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** A 2px line on a card's bottom edge. Determinate fills to `percent`; otherwise
+ *  an indeterminate sweep while a quick sync runs. Renders nothing when idle. */
+function SyncProgressBar({ determinate, percent, indeterminate }: {
+  determinate: boolean; percent: number; indeterminate: boolean;
+}) {
+  if (!determinate && !indeterminate) return null;
+  return (
+    <div className="absolute inset-x-0 bottom-0 h-[2px] bg-primary/10" aria-hidden>
+      {determinate ? (
+        <div
+          className="h-full bg-primary transition-[width] duration-700 ease-out"
+          style={{ width: `${Math.max(4, Math.min(100, percent))}%` }}
+        />
+      ) : (
+        <div className="h-full w-2/5 rounded-full bg-primary/80 animate-[sync-sweep_1.1s_ease-in-out_infinite]" />
+      )}
+    </div>
+  );
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface ConnectorsClientProps {
@@ -315,8 +335,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
-  const [syncProgress, setSyncProgress] = React.useState<{ connectorId: string; current: number; total: number } | null>(null);
+  // Progress is rendered as a filling bar (jobsProgress + syncingId); this state is
+  // retained only so the existing sync handlers can keep writing without churn.
+  const [, setSyncProgress] = React.useState<{ connectorId: string; current: number; total: number } | null>(null);
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
+  // Per-connector backfill progress (from sync_jobs), polled org-wide so the bar
+  // is persistent — it shows ongoing backfills even after reload / cron-driven.
+  const [jobsProgress, setJobsProgress] = React.useState<Record<string, { active: boolean; percent: number; remaining: number }>>({});
   const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
   // ── Custom date-range sync ─────────────────────────────────────────────────
@@ -338,6 +363,29 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
   // Reset to center whenever a different modal opens
   React.useEffect(() => { setDialogPos(null); }, [openModal]);
+
+  // Poll org-wide backfill progress so each connector card shows a live filling
+  // bar — persistently (survives reload, reflects cron-driven backfills). Polls
+  // faster while something is active, slower when idle.
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const tick = async () => {
+      let anyActive = false;
+      try {
+        const res = await fetch(`/api/connectors/jobs?org_id=${orgId}`);
+        if (res.ok) {
+          const data = await res.json() as { connectors?: Record<string, { active: boolean; percent: number; remaining: number }> };
+          const map = data.connectors ?? {};
+          anyActive = Object.values(map).some((p) => p.active);
+          if (!cancelled) setJobsProgress(map);
+        }
+      } catch { /* transient — keep last known */ }
+      if (!cancelled) timer = setTimeout(tick, anyActive ? 2500 : 8000);
+    };
+    tick();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [orgId]);
 
   const handleDragStart = (e: React.MouseEvent<HTMLDivElement>) => {
     // Don't steal clicks on interactive children (buttons, inputs)
@@ -821,7 +869,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                 <div
                   key={inst.id}
                   className={cn(
-                    "rounded-xl border transition-all",
+                    "relative overflow-hidden rounded-xl border transition-all",
                     inst.status === "error"
                       ? "border-red-500/20 bg-red-500/[0.04]"
                       : isConfirming
@@ -853,7 +901,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                           <SyncDropdown
                             connector={inst}
                             isSyncing={syncingId === inst.id}
-                            progress={syncProgress?.connectorId === inst.id ? syncProgress : null}
                             onSync={(from, to) => handleSync(inst, from, to)}
                             onSyncLatest={() => handleIncrementalSync(inst)}
                             onCustom={() => {
@@ -887,6 +934,15 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       </div>
                     </div>
                   )}
+
+                  {/* Live sync progress — a filling line on the card's bottom edge.
+                      Determinate (fills to %) for queued backfills; indeterminate
+                      sweep for quick inline syncs (link / "sync latest"). */}
+                  <SyncProgressBar
+                    determinate={!!jobsProgress[inst.id]?.active}
+                    percent={jobsProgress[inst.id]?.percent ?? 0}
+                    indeterminate={!jobsProgress[inst.id]?.active && syncingId === inst.id}
+                  />
                 </div>
               );
             })}
@@ -1292,15 +1348,14 @@ function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>):
 interface SyncDropdownProps {
   connector: Connector;
   isSyncing: boolean;
-  progress: { connectorId: string; current: number; total: number } | null;
   onSync: (from: Date, to: Date) => void;
   onSyncLatest: () => void;
   onCustom: () => void;
 }
 
-function SyncDropdown({ isSyncing, progress, onSync, onSyncLatest, onCustom }: SyncDropdownProps) {
-  const showProgress = isSyncing && progress && progress.total > 1;
-
+function SyncDropdown({ isSyncing, onSync, onSyncLatest, onCustom }: SyncDropdownProps) {
+  // Progress is now shown as a filling bar on the card edge; the trigger just
+  // spins while a sync is in flight.
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
@@ -1309,15 +1364,7 @@ function SyncDropdown({ isSyncing, progress, onSync, onSyncLatest, onCustom }: S
           title={isSyncing ? "Syncing…" : "Sync — choose date range"}
           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all disabled:opacity-60"
         >
-          {showProgress ? (
-            <span className="text-[9px] font-bold text-primary/70 tabular-nums leading-none min-w-[28px] inline-block text-center">
-              {progress!.current}/{progress!.total}
-            </span>
-          ) : isSyncing ? (
-            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
+          <RefreshCw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} />
         </button>
       </DropdownMenu.Trigger>
 
