@@ -28,6 +28,11 @@ export const WORKER_BUDGET_MS = 25_000;
 /** Consecutive reclaims-without-progress before a job is failed (progress resets
  *  the counter, so this only catches genuinely stuck jobs, never long backfills). */
 export const MAX_RECLAIMS = 8;
+/** A 'running' job is held by a live worker for at most one function lifetime
+ *  (maxDuration 60s). Anything locked longer than this is orphaned — its worker
+ *  died/timed-out mid-chunk. Safely above 60s so we never steal from a live worker,
+ *  but far below the SQL claim's 5-min window so backfills recover fast, not stall. */
+export const RECLAIM_AFTER_MS = 90_000;
 
 /** Connectors whose streams are paginated resumably (cursor-checkpointed). */
 const CURSOR_STREAMS: Record<string, string[]> = {
@@ -259,14 +264,30 @@ export async function drainSyncJobs(
 ): Promise<{ processed: number; done: number; failed: number; progressed: number }> {
   let processed = 0, done = 0, failed = 0, progressed = 0;
 
-  // Retire jobs killed mid-run every pass without making progress (genuinely
-  // stuck). Progress resets attempts, so legitimate long backfills are unaffected.
+  // ── Orphan recovery (runs every pass, before claiming) ─────────────────────
+  // A 'running' job whose lock is older than one function lifetime was abandoned
+  // when its worker died/timed-out mid-chunk. Recover it here instead of letting
+  // it sit invisible until the SQL claim's slower 5-min stale-lock window — that
+  // gap is exactly what leaves a backfill "stuck at 95%".
+  const orphanCutoff = new Date(Date.now() - RECLAIM_AFTER_MS).toISOString();
+  // 1. Under the retry ceiling → requeue so it resumes from its saved cursor on the
+  //    very next claim. Resumable jobs lose at most the last chunk (re-upserts
+  //    idempotently); attempts is left intact so a job that keeps dying still climbs
+  //    toward the ceiling rather than retrying forever.
   await supabase
     .from("sync_jobs")
-    .update({ status: "failed", last_error: "exceeded retry ceiling", locked_at: null, locked_by: null })
+    .update({ status: "pending", run_after: new Date().toISOString(), locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
+    .eq("status", "running")
+    .lt("attempts", MAX_RECLAIMS)
+    .lt("locked_at", orphanCutoff);
+  // 2. At/over the ceiling → genuinely stuck (reclaimed MAX_RECLAIMS times without
+  //    ever progressing). Retire it so the queue drains and the bar can complete.
+  await supabase
+    .from("sync_jobs")
+    .update({ status: "failed", last_error: "exceeded retry ceiling", locked_at: null, locked_by: null, updated_at: new Date().toISOString() })
     .eq("status", "running")
     .gte("attempts", MAX_RECLAIMS)
-    .lt("locked_at", new Date(Date.now() - 5 * 60_000).toISOString());
+    .lt("locked_at", orphanCutoff);
 
   while (Date.now() - startedAt < WORKER_BUDGET_MS) {
     const batch = await claimBatch(supabase, worker);

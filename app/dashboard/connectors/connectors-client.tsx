@@ -351,6 +351,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // Per-connector backfill progress (from sync_jobs), polled org-wide so the bar
   // is persistent — it shows ongoing backfills even after reload / cron-driven.
   const [jobsProgress, setJobsProgress] = React.useState<Record<string, { active: boolean; percent: number; remaining: number }>>({});
+  // Connectors that just transitioned active→done — held briefly so the bar fills
+  // to 100% and fades, instead of silently vanishing at ~95% (which read as "stuck").
+  const [completedPulse, setCompletedPulse] = React.useState<Record<string, true>>({});
+  const prevActiveRef = React.useRef<Record<string, boolean>>({});
   const [confirmRemove, setConfirmRemove] = React.useState<Connector | null>(null);
 
   // ── Custom date-range sync ─────────────────────────────────────────────────
@@ -393,7 +397,23 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           const data = await res.json() as { connectors?: Record<string, { active: boolean; percent: number; remaining: number }> };
           const map = data.connectors ?? {};
           anyActive = Object.values(map).some((p) => p.active);
-          if (!cancelled) setJobsProgress(map);
+          if (!cancelled) {
+            setJobsProgress(map);
+            // Detect active→done per connector and pulse the bar to 100% briefly,
+            // so completion is visible rather than the bar just disappearing.
+            const prev = prevActiveRef.current;
+            const next: Record<string, boolean> = {};
+            for (const [id, p] of Object.entries(map)) next[id] = p.active;
+            for (const id of Object.keys(prev)) {
+              if (prev[id] && next[id] === false) {
+                setCompletedPulse((c) => ({ ...c, [id]: true }));
+                setTimeout(() => {
+                  if (mountedRef.current) setCompletedPulse((c) => { const n = { ...c }; delete n[id]; return n; });
+                }, 2000);
+              }
+            }
+            prevActiveRef.current = next;
+          }
         }
       } catch { /* transient — keep last known */ }
       if (!cancelled) timer = setTimeout(tick, anyActive ? 2500 : 8000);
@@ -962,9 +982,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       Determinate (fills to %) for queued backfills; indeterminate
                       sweep for quick inline syncs (link / "sync latest"). */}
                   <SyncProgressBar
-                    determinate={!!jobsProgress[inst.id]?.active}
-                    percent={jobsProgress[inst.id]?.percent ?? 0}
-                    indeterminate={!jobsProgress[inst.id]?.active && syncingId === inst.id}
+                    determinate={!!jobsProgress[inst.id]?.active || !!completedPulse[inst.id]}
+                    percent={completedPulse[inst.id] ? 100 : (jobsProgress[inst.id]?.percent ?? 0)}
+                    indeterminate={!jobsProgress[inst.id]?.active && !completedPulse[inst.id] && syncingId === inst.id}
                   />
                 </div>
               );
