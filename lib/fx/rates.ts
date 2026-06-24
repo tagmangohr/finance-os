@@ -16,7 +16,21 @@ type RatesByDate = Map<string, number>; // YYYY-MM-DD -> (1 unit of currency in 
 // invocations are short-lived, so this is a within-request cache, not persistent.
 const memo = new Map<string, RatesByDate>();
 
-const FX_BASE = "https://api.frankfurter.app";
+// Canonical host (the old api.frankfurter.app now 301-redirects here and needs
+// the /v1 prefix). Pinning it avoids depending on a redirect that could break.
+const FX_BASE = "https://api.frankfurter.dev/v1";
+
+// How many calendar days to extend a fetch BEFORE the earliest needed date, so a
+// date that falls on a market holiday/weekend always has a prior business-day rate
+// inside the fetched range. Covers any normal ECB closure cluster (Easter, etc.).
+const LOOKBACK_DAYS = 10;
+
+/** `isoDate` (YYYY-MM-DD) minus `days`, as YYYY-MM-DD (UTC). */
+function minusDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - days);
+  return d.toISOString().slice(0, 10);
+}
 
 /** Fetch a date range of `currency`→INR rates (business days only). */
 async function fetchRange(currency: string, minDate: string, maxDate: string): Promise<RatesByDate> {
@@ -32,18 +46,18 @@ async function fetchRange(currency: string, minDate: string, maxDate: string): P
   return map;
 }
 
-/** Rate for `date`, or the most recent prior business day (markets close on
- *  weekends/holidays; today's rate may not be published yet). */
+/** Rate for `date`, or the most recent PRIOR business day (markets close on
+ *  weekends/holidays; today's rate may not be published yet). Returns null if no
+ *  prior date is in `rates` — NEVER a future date. Anchoring a past transaction to
+ *  a future rate (the old `earliest` fallback) made the same calendar day resolve
+ *  to different rates depending on which range a sync run happened to fetch. */
 function nearestPrior(rates: RatesByDate, date: string): number | null {
   if (rates.has(date)) return rates.get(date)!;
   let best: string | null = null;
-  let earliest: string | null = null;
   for (const d of rates.keys()) {
     if (d <= date && (best === null || d > best)) best = d;
-    if (earliest === null || d < earliest) earliest = d;
   }
-  if (best) return rates.get(best)!;
-  return earliest ? rates.get(earliest)! : null; // target predates range → earliest known
+  return best ? rates.get(best)! : null;
 }
 
 /** Map of date → (currency→INR) rate for the requested dates. INR is 1:1. */
@@ -52,11 +66,16 @@ export async function getInrRates(currency: string, dates: string[]): Promise<Ma
   const uniq = Array.from(new Set(dates)).sort();
   if (uniq.length === 0) return new Map();
 
-  let rates = memo.get(currency) ?? new Map<string, number>();
+  const rates = memo.get(currency) ?? new Map<string, number>();
   const missing = uniq.filter((d) => nearestPrior(rates, d) == null);
   if (missing.length > 0) {
     try {
-      const fetched = await fetchRange(currency, missing[0], missing[missing.length - 1]);
+      // Extend the fetch back by LOOKBACK_DAYS so the earliest needed date always
+      // has a prior business-day rate in range — otherwise a date landing on a
+      // holiday at the window's start (e.g. 1 May) has no prior anchor and resolves
+      // inconsistently. With padding, every date deterministically maps to the last
+      // published rate on/before it, regardless of which run fetched it.
+      const fetched = await fetchRange(currency, minusDays(missing[0], LOOKBACK_DAYS), missing[missing.length - 1]);
       for (const [d, r] of fetched) rates.set(d, r);
       memo.set(currency, rates);
     } catch {
