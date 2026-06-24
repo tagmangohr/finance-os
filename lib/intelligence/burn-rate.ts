@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { POSTED_TRANSACTION_STATUSES, isTransferSource } from '@/lib/finance/transaction-status';
 import { baseAmt } from '@/lib/utils';
 import type { BurnRateResult } from './types';
 
@@ -23,7 +23,7 @@ export async function calculateBurnRate(
   const [currentResult, previousResult] = await Promise.all([
     supabase
       .from('transactions')
-      .select('amount, amount_base, category')
+      .select('amount, amount_base, category, source')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -31,7 +31,7 @@ export async function calculateBurnRate(
       .lte('transaction_date', fmt(currentMonthEnd)),
     supabase
       .from('transactions')
-      .select('amount, amount_base, category')
+      .select('amount, amount_base, category, source')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -39,8 +39,10 @@ export async function calculateBurnRate(
       .lte('transaction_date', fmt(prevMonthEnd)),
   ]);
 
-  const currentTxns = currentResult.data ?? [];
-  const previousTxns = previousResult.data ?? [];
+  // Exclude bank transfers (gateway payouts/settlements) — they aren't spend.
+  const notTransfer = (t: { source?: string | null }) => !isTransferSource(t.source);
+  const currentTxns = (currentResult.data ?? []).filter(notTransfer);
+  const previousTxns = (previousResult.data ?? []).filter(notTransfer);
 
   const currentMonth = currentTxns.reduce((sum, t) => sum + baseAmt(t), 0);
   const previousMonth = previousTxns.reduce((sum, t) => sum + baseAmt(t), 0);

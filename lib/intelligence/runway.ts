@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { POSTED_TRANSACTION_STATUSES, isTransferSource } from '@/lib/finance/transaction-status';
 import { baseAmt } from '@/lib/utils';
 import type { RunwayResult } from './types';
 
@@ -22,7 +22,7 @@ export async function calculateRunway(
       .maybeSingle(),
     supabase
       .from('transactions')
-      .select('amount, amount_base, transaction_date')
+      .select('amount, amount_base, transaction_date, source')
       .eq('org_id', orgId)
       .eq('type', 'debit')
       .in('status', POSTED_TRANSACTION_STATUSES)
@@ -58,15 +58,17 @@ export async function calculateRunway(
       (sum, t) => sum + baseAmt(t),
       0
     );
-    const totalDebits = (debitsResult.data ?? []).reduce(
-      (sum, t) => sum + baseAmt(t),
-      0
-    );
+    const totalDebits = (debitsResult.data ?? [])
+      .filter((t) => !isTransferSource((t as { source?: string }).source))
+      .reduce((sum, t) => sum + baseAmt(t), 0);
     cashBalance = Math.max(0, totalCredits - totalDebits);
   }
 
-  // Compute average monthly burn from last 90 days of debits
-  const debits = debitsResult.data ?? [];
+  // Compute average monthly burn from last 90 days of debits — excluding bank
+  // transfers (payouts/settlements move charge money to the bank, not spend).
+  const debits = (debitsResult.data ?? []).filter(
+    (t) => !isTransferSource((t as { source?: string }).source)
+  );
   const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
   // 90 days ≈ 3 months
   const avgMonthlyBurn = totalDebits90d / 3;

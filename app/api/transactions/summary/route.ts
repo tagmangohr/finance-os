@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
-import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { baseAmt } from "@/lib/utils";
 
 /**
@@ -50,15 +50,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let totalFees = 0;
   let totalCredits = 0;
   let totalDebits = 0;
-  // Net Flow = Payments − Refunds − Fees − Disputes (real-time earned, not lagging
-  // settlement transfers).  Settlements are excluded because they are not new money
-  // — they are Razorpay's delayed bank transfer of already-collected payments.
+  // Net Flow = Payments − Refunds − Disputes − Fees. It must EXCLUDE bank
+  // transfers (gateway payouts/settlements): those move already-counted charge
+  // money into the bank, so counting a Stripe payout (a debit) as money leaving
+  // tanks Net Flow. operationalDebits = real reductions only (refunds/disputes/
+  // expenses), never transfers.
   let totalPayments = 0;
+  let operationalDebits = 0;
 
   for (const row of data ?? []) {
     // Sum the base-currency (INR) value, never raw amount — otherwise USD/EUR
     // figures get added to rupees. baseAmt falls back to amount for INR rows.
     const amt = baseAmt(row);
+    const transfer = isTransferSource(row.source as string);
     const key = row.source as string;
     if (!groups[key]) groups[key] = { count: 0, amount: 0 };
     groups[key].count++;
@@ -66,19 +70,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     if (row.type === "credit") {
       totalCredits += amt;
-      // Exclude settlement rows — they are bank transfers of already-counted
-      // payments, not incremental revenue.
-      if (row.category !== "settlement") {
-        totalPayments += amt;
-      }
+      if (!transfer && row.category !== "settlement") totalPayments += amt;
     } else {
       totalDebits += amt;
+      if (!transfer) operationalDebits += amt;
     }
 
-    // Extract fees from metadata (inclusive of GST)
-    const meta = row.metadata as Record<string, unknown> ?? {};
-    const fee = Number(meta.fee ?? meta.fees ?? 0);
-    if (!isNaN(fee)) totalFees += fee;
+    // Fees (inclusive of GST) — transfers carry none, but guard anyway.
+    if (!transfer) {
+      const meta = (row.metadata as Record<string, unknown>) ?? {};
+      const fee = Number(meta.fee ?? meta.fees ?? 0);
+      if (!isNaN(fee)) totalFees += fee;
+    }
   }
 
   return NextResponse.json({
@@ -86,8 +89,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     totalCredits,
     totalDebits,
     totalFees,
-    // Payments − Refunds − Disputes − Fees
-    net: totalPayments - totalDebits - totalFees,
+    // Payments − operational debits (refunds/disputes) − fees. Transfers excluded.
+    net: totalPayments - operationalDebits - totalFees,
     total: (data ?? []).length,
   });
 }

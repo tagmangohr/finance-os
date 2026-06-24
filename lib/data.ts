@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { baseAmt } from "@/lib/utils";
 import { getActiveOrg } from "@/lib/org/active-org";
-import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { calculateBurnRate } from "@/lib/intelligence/burn-rate";
@@ -133,7 +133,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .order("transaction_date", { ascending: true }),
     supabase
       .from("transactions")
-      .select("transaction_date, type, amount, amount_base, category")
+      .select("transaction_date, type, amount, amount_base, category, source")
       .eq("org_id", orgId)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
       .in("status", POSTED_TRANSACTION_STATUSES)
@@ -160,6 +160,9 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
   // double-counting every payment once as a payment and again as a settlement.
   const txByDate = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactionsResult.data ?? []) {
+    // Skip bank transfers (gateway payouts/settlements) — moving already-counted
+    // money to the bank isn't cash flow in or out.
+    if (isTransferSource((tx as { source?: string }).source)) continue;
     if (tx.type === "credit" && (tx as { category?: string }).category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
@@ -293,7 +296,7 @@ export async function getCashFlowDetails(orgId: string) {
   const [txResult, runwayMetrics, categoryResult] = await Promise.all([
     supabase
       .from("transactions")
-      .select("transaction_date, type, amount, amount_base, category, counterparty_name")
+      .select("transaction_date, type, amount, amount_base, category, counterparty_name, source")
       .eq("org_id", orgId)
       .in("status", POSTED_TRANSACTION_STATUSES)
       .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
@@ -317,6 +320,7 @@ export async function getCashFlowDetails(orgId: string) {
   // delayed bank transfer of already-collected payments, not new money.
   const txByDate = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
+    if (isTransferSource((tx as { source?: string }).source)) continue;
     if (tx.type === "credit" && tx.category === "settlement") continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
@@ -342,6 +346,7 @@ export async function getCashFlowDetails(orgId: string) {
   // Monthly aggregation — same settlement exclusion rule.
   const monthMap = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
+    if (isTransferSource((tx as { source?: string }).source)) continue;
     if (tx.type === "credit" && tx.category === "settlement") continue;
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
     const existing = monthMap.get(m) ?? { inflow: 0, outflow: 0 };

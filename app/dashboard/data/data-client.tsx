@@ -413,6 +413,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Connector</th>
               <Th col="type" label="Type" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="amount" label="Amount" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
               <Th col="status" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Counterparty</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest min-w-[200px]">Description</th>
@@ -424,13 +426,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           <tbody>
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={13} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={13} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   No transactions found. Try adjusting the filters or run a sync first.
                 </td>
               </tr>
@@ -441,8 +443,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                 const metaKeys = Object.entries(meta).filter(
                   ([, v]) => v !== null && v !== undefined && v !== ""
                 );
-                const hasFx = row.currency !== "INR" && row.amount_base != null;
-                const expandable = metaKeys.length > 0 || hasFx;
+                const expandable = metaKeys.length > 0;
 
                 return (
                   <React.Fragment key={row.id}>
@@ -488,22 +489,28 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         </span>
                       </td>
 
-                      {/* Amount */}
+                      {/* Amount (original currency only — clean) */}
                       <td
                         className={cn(
                           "px-3 py-2.5 font-semibold whitespace-nowrap tabular-nums",
                           row.type === "credit" ? "text-success/80" : "text-destructive/80"
                         )}
                       >
-                        <div className="flex flex-col leading-tight">
-                          <span>{fmtAmount(row.amount, row.currency, row.type)}</span>
-                          {row.currency !== "INR" && row.amount_base != null && (
-                            <span className="text-[10px] font-normal text-muted-foreground/70 tabular-nums">
-                              ≈ ₹{new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(row.amount_base)}
-                              {row.fx_rate != null && ` · @${Number(row.fx_rate).toFixed(2)}`}
-                            </span>
-                          )}
-                        </div>
+                        {fmtAmount(row.amount, row.currency, row.type)}
+                      </td>
+
+                      {/* INR value (base currency) */}
+                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground">
+                        {row.amount_base != null
+                          ? `₹${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(row.amount_base)}`
+                          : "—"}
+                      </td>
+
+                      {/* FX rate (USD→INR etc.); 1:1 rows show — */}
+                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground/70">
+                        {row.currency !== "INR" && row.fx_rate != null
+                          ? Number(row.fx_rate).toFixed(2)
+                          : "—"}
                       </td>
 
                       {/* Status */}
@@ -540,7 +547,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                             onClick={() => toggleExpand(row.id)}
                             className="flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-primary transition-colors"
                           >
-                            {hasFx ? "FX" : ""}{hasFx && metaKeys.length > 0 ? " + " : ""}{metaKeys.length > 0 ? `${metaKeys.length} fields` : ""}
+                            {metaKeys.length} fields
                             {isExpanded ? (
                               <ChevronUp className="h-3 w-3" />
                             ) : (
@@ -554,20 +561,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                     {/* Expanded metadata row */}
                     {isExpanded && (
                       <tr className="border-b border-border bg-accent/40">
-                        <td colSpan={11} className="px-4 pb-3 pt-2">
-                          {hasFx && (
-                            <div className="mb-2 pb-2 border-b border-border/60 flex flex-wrap gap-x-6 gap-y-1 text-[11px]">
-                              <span className="text-[10px] font-mono uppercase text-primary/70">FX → INR</span>
-                              <span className="text-muted-foreground">
-                                {fmtAmount(row.amount, row.currency, row.type)} × {Number(row.fx_rate).toFixed(4)}
-                                {" = "}
-                                <span className="text-foreground/80 font-medium">
-                                  ₹{new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(row.amount_base!)}
-                                </span>
-                              </span>
-                              <span className="text-muted-foreground/60">rate: ECB reference, {String(row.transaction_date).slice(0, 10)}</span>
-                            </div>
-                          )}
+                        <td colSpan={13} className="px-4 pb-3 pt-2">
                           <div className="flex flex-wrap gap-x-6 gap-y-1.5">
                             {metaKeys.map(([k, v]) => (
                               <div key={k} className="flex items-center gap-2 min-w-[160px]">
