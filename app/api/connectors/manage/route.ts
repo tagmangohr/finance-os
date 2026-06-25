@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
+import { randomUUID } from "crypto";
 import {
   isAuthFailure,
   requireConnectorAccess,
@@ -10,6 +11,16 @@ import {
   isPlainObject,
   validateConnectorConfig,
 } from "@/lib/api/validation";
+import { createServiceClient } from "@/lib/supabase/server";
+import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
+import { isLinkConnector } from "@/lib/connectors/links";
+import { fyStartISO } from "@/lib/utils";
+
+export const maxDuration = 60;
+
+/** Gateway/file connectors that backfill from the FY start on first connect. Link
+ *  connectors (Sheets/Excel) auto-sync via their own path, so they're excluded. */
+const BACKFILL_ON_CREATE = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz"];
 
 // POST — create a new connector
 export async function POST(request: Request) {
@@ -70,6 +81,28 @@ export async function POST(request: Request) {
       .single();
 
     if (error) throw error;
+
+    // Kick off an initial full-FY backfill so a newly connected gateway starts
+    // populating immediately. Without this, its first sync would be the nightly
+    // cron (up to ~24h away), since there's no longer a 30-min incremental cron.
+    // Best-effort: never fail connector creation if the kickoff enqueue hiccups.
+    if (!isLinkConnector(type) && BACKFILL_ON_CREATE.includes(type)) {
+      try {
+        const svc = await createServiceClient();
+        const now = new Date();
+        const fyStart = new Date(`${fyStartISO(now)}T00:00:00+05:30`);
+        const windows = await enqueueBackfill(svc, data, fyStart, now);
+        if (windows > 0) {
+          const worker = randomUUID();
+          after(async () => {
+            try { await drainSyncJobs(await createServiceClient(), worker); }
+            catch (e) { console.error("[connectors/manage] initial drain failed:", e); }
+          });
+        }
+      } catch (e) {
+        console.error("[connectors/manage] initial backfill enqueue failed:", e);
+      }
+    }
 
     return NextResponse.json(data);
   } catch (err) {
