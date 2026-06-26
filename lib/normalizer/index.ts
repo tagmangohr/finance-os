@@ -600,42 +600,28 @@ const ZERO_DECIMAL_CURRENCIES = new Set([
 
 // ─── Cashfree raw types ───────────────────────────────────────────────────────
 
-export type CashfreeOrder = {
-  cf_order_id: number | string;
-  order_id: string;
-  order_amount: number;               // full INR units
-  order_currency: string;
-  order_status: string;               // ACTIVE | PAID | EXPIRED | CANCELLED
-  order_note: string | null;
-  customer_details: {
-    customer_name: string | null;
-    customer_email: string | null;
-    customer_phone: string | null;
+// Cashfree's only bulk feed is the Settlement Reconciliation report
+// (POST /pg/settlement/recon) — there is NO "list orders by date" API. Each row is
+// an event (payment / refund / dispute / chargeback / settlement bookkeeping).
+export type CashfreeReconEvent = {
+  event_details?: {
+    event_id?: string;
+    event_type?: string;   // PAYMENT | REFUND | DISPUTE | CHARGEBACK | *_REVERSAL | PRE_ARBITRATION | NORMAL_SETTLEMENT_CHARGE | NORMAL_SETTLEMENT_TAX | BALANCE_CARRY_OVER | OTHER_ADJUSTMENT
+    event_amount?: number;
+    event_currency?: string;
+    event_service_charge?: number;
+    event_service_tax?: number;
+    event_status?: string; // SUCCESS | FAILED | PENDING | CANCELLED
+    event_time?: string;   // ISO 8601 (e.g. 2026-05-27T12:44:06+05:30)
+    sale_type?: string;    // CREDIT | DEBIT
+    event_remarks?: string | null;
   } | null;
-  created_at: string;                 // ISO 8601
-};
-
-export type CashfreeSettlement = {
-  cf_settlement_id: number | string;
-  settlement_currency: string;
-  settlement_amount: number;          // full INR units
-  order_id: string;
-  order_amount: number;
-  service_charge: number;
-  service_tax: number;
-  order_settled_time: string;         // ISO 8601
-  transfer_utr: string | null;
-};
-
-export type CashfreeRefund = {
-  cf_refund_id: string;
-  order_id: string;
-  refund_amount: number;              // full INR units
-  refund_currency: string;
-  refund_status: string;              // SUCCESS | PENDING | CANCELLED | ONHOLD
-  refund_note: string | null;
-  created_at: string;                 // ISO 8601
-  cf_payment_id: number | string;
+  order_details?: { order_id?: string; order_amount?: number; order_currency?: string } | null;
+  customer_details?: { customer_name?: string | null; customer_email?: string | null; customer_phone?: string | null } | null;
+  payment_details?: { cf_payment_id?: string | number; payment_amount?: number; payment_service_charge?: number; payment_service_tax?: number; payment_time?: string } | null;
+  settlement_details?: { cf_settlement_id?: string | number; utr?: string | null; settlement_date?: string } | null;
+  refund_details?: { refund_id?: string; refund_processed_at?: string; refund_note?: string | null } | null;
+  dispute_details?: { dispute_category?: string; closed_in_favor_of?: string } | null;
 };
 
 // ─── PayU raw types ───────────────────────────────────────────────────────────
@@ -693,68 +679,83 @@ export type EasebuzzTransaction = {
 
 // ─── Cashfree normalizers ─────────────────────────────────────────────────────
 
-export function normalizeCashfreeOrder(order: CashfreeOrder): NormalizedTransaction {
+// Settlement-bookkeeping rows — NOT customer money movements. Skipped so we don't
+// double-count fees (per-payment fees are captured as metadata.fee below) or invent
+// transactions from internal carry-overs.
+const CASHFREE_SKIP_EVENTS = new Set([
+  "NORMAL_SETTLEMENT_CHARGE", "NORMAL_SETTLEMENT_TAX", "BALANCE_CARRY_OVER",
+]);
+
+/** Map one Settlement-Reconciliation event to a transaction (or null to skip). */
+export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTransaction | null {
+  const ev = e.event_details ?? {};
+  const type = (ev.event_type ?? "").toUpperCase();
+  if (!type || CASHFREE_SKIP_EVENTS.has(type)) return null;
+
+  // Direction from sale_type; PAYMENT is a credit by default.
+  const credit = ev.sale_type ? ev.sale_type.toUpperCase() === "CREDIT" : type === "PAYMENT";
+
+  // A PAYMENT's value is order_amount (recon leaves payment_amount = 0); every other
+  // event carries its own amount in event_amount.
+  const amount =
+    type === "PAYMENT"
+      ? Number(e.order_details?.order_amount ?? ev.event_amount ?? 0)
+      : Number(ev.event_amount ?? e.order_details?.order_amount ?? 0);
+
   let status: NormalizedTransaction["status"];
-  switch (order.order_status?.toUpperCase()) {
-    case "PAID":       status = "completed"; break;
-    case "EXPIRED":
-    case "CANCELLED":  status = "failed";    break;
-    default:           status = "pending";
+  switch ((ev.event_status ?? "").toUpperCase()) {
+    case "SUCCESS":   status = "completed"; break;
+    case "FAILED":
+    case "CANCELLED": status = "failed";    break;
+    default:          status = "pending";
   }
 
-  const cust = order.customer_details;
-  const counterparty = cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null;
+  // Stable per-event id so re-syncs dedup + update in place.
+  const pid = e.payment_details?.cf_payment_id;
+  const externalId =
+    type === "PAYMENT" && pid != null ? `cf_pay_${pid}`
+    : type === "REFUND" && e.refund_details?.refund_id ? `cf_refund_${e.refund_details.refund_id}`
+    : ev.event_id ? `cf_evt_${ev.event_id}`
+    : `cf_${type}_${e.order_details?.order_id ?? ""}_${ev.event_time ?? ""}`;
+
+  const isDispute = type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION";
+  const category =
+    type === "PAYMENT" ? "payment"
+    : type === "REFUND" ? "refund"
+    : isDispute ? "dispute"
+    : "adjustment";
+  const source =
+    type === "PAYMENT" ? "cashfree"
+    : type === "REFUND" ? "cashfree_refund"
+    : isDispute ? "cashfree_dispute"
+    : "cashfree_adjustment";
+
+  // Cashfree fee for this payment = service charge + tax (full INR units).
+  const fee =
+    Number(ev.event_service_charge ?? e.payment_details?.payment_service_charge ?? 0) +
+    Number(ev.event_service_tax ?? e.payment_details?.payment_service_tax ?? 0);
+
+  const cust = e.customer_details;
+  const when = ev.event_time ?? e.payment_details?.payment_time ?? e.settlement_details?.settlement_date ?? "";
 
   return {
-    external_id: `cf_order_${order.cf_order_id}`,
-    type: "credit",
-    amount: order.order_amount,
-    currency: (order.order_currency ?? "INR").toUpperCase(),
-    category: null,
-    counterparty_name: counterparty,
-    description: order.order_note ?? `Order ${order.order_id}`,
-    source: "cashfree",
+    external_id: externalId,
+    type: credit ? "credit" : "debit",
+    amount,
+    currency: (ev.event_currency ?? e.order_details?.order_currency ?? "INR").toUpperCase(),
+    category,
+    counterparty_name: cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null,
+    description: ev.event_remarks ?? (e.order_details?.order_id ? `${type} · order ${e.order_details.order_id}` : type),
+    source,
     status,
-    transaction_date: order.created_at.slice(0, 10),
-    metadata: { order_id: order.order_id, cf_order_id: order.cf_order_id },
-  };
-}
-
-export function normalizeCashfreeSettlement(s: CashfreeSettlement): NormalizedTransaction {
-  return {
-    external_id: `cf_settlement_${s.cf_settlement_id}`,
-    type: "credit",
-    amount: s.settlement_amount,
-    currency: (s.settlement_currency ?? "INR").toUpperCase(),
-    category: "settlement",
-    counterparty_name: "Cashfree",
-    description: `Settlement for order ${s.order_id}${s.transfer_utr ? ` · UTR ${s.transfer_utr}` : ""}`,
-    source: "cashfree_settlement",
-    status: "completed",
-    transaction_date: s.order_settled_time.slice(0, 10),
-    metadata: { order_id: s.order_id, order_amount: s.order_amount, service_charge: s.service_charge, service_tax: s.service_tax, utr: s.transfer_utr },
-  };
-}
-
-export function normalizeCashfreeRefund(r: CashfreeRefund): NormalizedTransaction {
-  let status: NormalizedTransaction["status"];
-  switch (r.refund_status?.toUpperCase()) {
-    case "SUCCESS":  status = "completed"; break;
-    case "CANCELLED": status = "failed";  break;
-    default:         status = "pending";
-  }
-  return {
-    external_id: `cf_refund_${r.cf_refund_id}`,
-    type: "debit",
-    amount: r.refund_amount,
-    currency: (r.refund_currency ?? "INR").toUpperCase(),
-    category: "refund",
-    counterparty_name: null,
-    description: r.refund_note ?? `Refund for order ${r.order_id}`,
-    source: "cashfree_refund",
-    status,
-    transaction_date: r.created_at.slice(0, 10),
-    metadata: { order_id: r.order_id, cf_payment_id: r.cf_payment_id },
+    transaction_date: when.slice(0, 10),
+    metadata: {
+      event_type: type,
+      order_id: e.order_details?.order_id ?? null,
+      cf_payment_id: pid ?? null,
+      utr: e.settlement_details?.utr ?? null,
+      ...(fee > 0 ? { fee } : {}),
+    },
   };
 }
 

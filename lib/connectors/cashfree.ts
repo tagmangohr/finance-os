@@ -1,16 +1,23 @@
 import {
   NormalizedTransaction,
-  CashfreeOrder,
-  CashfreeSettlement,
-  CashfreeRefund,
-  normalizeCashfreeOrder,
-  normalizeCashfreeSettlement,
-  normalizeCashfreeRefund,
+  CashfreeReconEvent,
+  normalizeCashfreeReconEvent,
 } from "@/lib/normalizer";
 
 const CASHFREE_BASE = "https://api.cashfree.com/pg";
-const PAGE_SIZE = 50;
+const PAGE_SIZE = 1000; // recon API max
+const API_VERSION = "2025-01-01";
 
+/**
+ * Cashfree Payment Gateway connector.
+ *
+ * IMPORTANT: the PG API has NO bulk "list orders/payments/settlements by date"
+ * endpoint (the old GET /pg/orders|/settlements|/refunds calls 404). The only bulk
+ * transaction feed is the Settlement Reconciliation report — POST /pg/settlement/recon
+ * — which returns every money-movement event (payment/refund/dispute/chargeback) plus
+ * settlement bookkeeping in a date range, cursor-paginated. Max 30 days per request
+ * (callers already sub-chunk to ≤7 days, so that cap is never hit).
+ */
 export class CashfreeConnector {
   private headers: Record<string, string>;
 
@@ -18,133 +25,39 @@ export class CashfreeConnector {
     this.headers = {
       "x-client-id": clientId,
       "x-client-secret": clientSecret,
-      "x-api-version": "2023-08-01",
+      "x-api-version": API_VERSION,
       "Content-Type": "application/json",
+      Accept: "application/json",
     };
   }
 
-  // ─── Internal GET helper ──────────────────────────────────────────────────
-
-  private async get<T>(
-    path: string,
-    params: Record<string, string | number>
-  ): Promise<T> {
-    const url = new URL(`${CASHFREE_BASE}${path}`);
-    for (const [k, v] of Object.entries(params)) {
-      url.searchParams.set(k, String(v));
-    }
-
-    const res = await fetch(url.toString(), {
-      headers: this.headers,
-      next: { revalidate: 0 },
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Cashfree API error ${res.status} for ${path}: ${body}`);
-    }
-
-    return res.json() as Promise<T>;
-  }
-
-  // ─── Orders (credits) ─────────────────────────────────────────────────────
-
-  async fetchOrders(
-    fromDate: Date,
-    toDate: Date
-  ): Promise<NormalizedTransaction[]> {
+  async fetchReconEvents(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
     const results: NormalizedTransaction[] = [];
-    let cursor: string | undefined;
+    let cursor: string | null = null;
 
-    while (true) {
-      const params: Record<string, string | number> = {
-        from_date: fromDate.toISOString().split("T")[0],
-        to_date: toDate.toISOString().split("T")[0],
-        count: PAGE_SIZE,
-      };
-      if (cursor) params.cursor = cursor;
+    do {
+      const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
+        method: "POST",
+        headers: this.headers,
+        next: { revalidate: 0 },
+        body: JSON.stringify({
+          pagination: { limit: PAGE_SIZE, cursor },
+          filters: { start_date: fromDate.toISOString(), end_date: toDate.toISOString() },
+        }),
+      });
 
-      const data = await this.get<{
-        orders?: CashfreeOrder[];
-        cursor?: string;
-      }>("/orders", params);
-
-      const items = data.orders ?? [];
-      for (const order of items) {
-        results.push(normalizeCashfreeOrder(order));
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Cashfree recon API error ${res.status}: ${body.slice(0, 200)}`);
       }
 
-      if (items.length < PAGE_SIZE || !data.cursor) break;
-      cursor = data.cursor;
-    }
-
-    return results;
-  }
-
-  // ─── Settlements (credits) ────────────────────────────────────────────────
-
-  async fetchSettlements(
-    fromDate: Date,
-    toDate: Date
-  ): Promise<NormalizedTransaction[]> {
-    const results: NormalizedTransaction[] = [];
-    let cursor: string | undefined;
-
-    while (true) {
-      const params: Record<string, string | number> = {
-        from_date: fromDate.toISOString().split("T")[0],
-        to_date: toDate.toISOString().split("T")[0],
-        count: PAGE_SIZE,
-      };
-      if (cursor) params.cursor = cursor;
-
-      const data = await this.get<{
-        settlements?: CashfreeSettlement[];
-        cursor?: string;
-      }>("/settlements", params);
-
-      const items = data.settlements ?? [];
-      for (const s of items) {
-        results.push(normalizeCashfreeSettlement(s));
+      const data = (await res.json()) as { data?: CashfreeReconEvent[]; cursor?: string | null };
+      for (const ev of data.data ?? []) {
+        const txn = normalizeCashfreeReconEvent(ev);
+        if (txn) results.push(txn);
       }
-
-      if (items.length < PAGE_SIZE || !data.cursor) break;
-      cursor = data.cursor;
-    }
-
-    return results;
-  }
-
-  // ─── Refunds (debits) ─────────────────────────────────────────────────────
-
-  async fetchRefunds(
-    fromDate: Date,
-    toDate: Date
-  ): Promise<NormalizedTransaction[]> {
-    const results: NormalizedTransaction[] = [];
-    let cursor: string | undefined;
-
-    while (true) {
-      const params: Record<string, string | number> = {
-        from_date: fromDate.toISOString().split("T")[0],
-        to_date: toDate.toISOString().split("T")[0],
-        count: PAGE_SIZE,
-      };
-      if (cursor) params.cursor = cursor;
-
-      const data = await this.get<{
-        refunds?: CashfreeRefund[];
-        cursor?: string;
-      }>("/refunds", params);
-
-      const items = data.refunds ?? [];
-      for (const r of items) {
-        results.push(normalizeCashfreeRefund(r));
-      }
-
-      if (items.length < PAGE_SIZE || !data.cursor) break;
-      cursor = data.cursor;
-    }
+      cursor = data.cursor ?? null;
+    } while (cursor);
 
     return results;
   }

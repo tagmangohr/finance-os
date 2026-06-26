@@ -126,13 +126,10 @@ async function fetchCashfree(
   }
 
   const cashfree = new CashfreeConnector(clientId, clientSecret);
-  const settled = await Promise.allSettled([
-    cashfree.fetchOrders(fromDate, toDate),
-    cashfree.fetchSettlements(fromDate, toDate),
-    cashfree.fetchRefunds(fromDate, toDate),
-  ]);
-
-  return collectSettled(["orders", "settlements", "refunds"], settled);
+  // Single source of truth: the Settlement Reconciliation feed (payments + refunds +
+  // disputes/chargebacks). The old per-stream order/settlement/refund endpoints don't
+  // exist in Cashfree's API.
+  return fetchSingleEndpoint("cashfree", () => cashfree.fetchReconEvents(fromDate, toDate));
 }
 
 async function fetchSingleEndpoint(
