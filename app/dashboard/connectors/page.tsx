@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { generateSyncToken } from "@/lib/api/sync-token";
+import { redactConnector } from "@/lib/connectors/secret-fields";
 import { ConnectorsClient } from "./connectors-client";
 import { DriveConnectors } from "./drive-client";
 
@@ -48,7 +49,7 @@ export default async function ConnectorsPage() {
   }
 
   return (
-    <ConnectorsClient orgId={org.id} connectors={connectors ?? []} syncTokens={syncTokens}>
+    <ConnectorsClient orgId={org.id} connectors={(connectors ?? []).map(redactConnector)} syncTokens={syncTokens}>
       <Suspense fallback={null}>
         <DriveConnectors
           orgId={org.id}

@@ -15,6 +15,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
 import { isLinkConnector } from "@/lib/connectors/links";
 import { fyStartISO } from "@/lib/utils";
+import { SECRET_CONFIG_KEYS, isMaskedSecret, redactConnector } from "@/lib/connectors/secret-fields";
 
 export const maxDuration = 60;
 
@@ -104,7 +105,8 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json(data);
+    // Never return raw secrets to the browser.
+    return NextResponse.json(redactConnector(data));
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to create connector" },
@@ -130,13 +132,28 @@ export async function PATCH(request: Request) {
       if (!isPlainObject(body.config)) {
         return NextResponse.json({ error: "config must be an object" }, { status: 400 });
       }
-      // Validate against the connector's own type (the merged config the client
-      // sends). Blocks saving an invalid key on edit, same as on create.
-      const configError = validateConnectorConfig(auth.connector.type, body.config);
+      // The browser only ever holds MASKED secrets, so we can't trust the config
+      // it sends for secret fields. Merge server-side onto the connector's CURRENT
+      // stored config: a secret that comes back missing/blank/masked means
+      // "unchanged" → keep the real stored value; a real new value replaces it.
+      const { data: existing } = await auth.supabase
+        .from("connectors").select("config").eq("id", id).maybeSingle();
+      const existingCfg = ((existing?.config ?? {}) as Record<string, unknown>);
+      const incoming = body.config as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...existingCfg, ...incoming };
+      for (const k of SECRET_CONFIG_KEYS) {
+        const inc = incoming[k];
+        if (inc === undefined || inc === "" || isMaskedSecret(inc)) {
+          if (k in existingCfg) merged[k] = existingCfg[k];
+          else delete merged[k];
+        }
+      }
+      // Validate the EFFECTIVE config (real secrets), not the masked client copy.
+      const configError = validateConnectorConfig(auth.connector.type, merged);
       if (configError) {
         return NextResponse.json({ error: configError }, { status: 400 });
       }
-      updates.config = body.config;
+      updates.config = merged;
     }
 
     if (body.status !== undefined) {
@@ -170,7 +187,7 @@ export async function PATCH(request: Request) {
 
     if (error) throw error;
 
-    return NextResponse.json(data);
+    return NextResponse.json(redactConnector(data));
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to update connector" },

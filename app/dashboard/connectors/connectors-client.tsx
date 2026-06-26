@@ -1344,8 +1344,8 @@ function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>):
       // key_id is non-secret (rzp_live_xxx / rzp_test_xxx) — safe to show masked
       return cfg.key_id ? maskKey(cfg.key_id) : null;
     case "stripe":
-      // Only the prefix reveals mode (live vs test); never show full key
-      return cfg.secret_key ? `${cfg.secret_key.slice(0, 11)}…` : null;
+      // Server sends only a masked secret (e.g. "rk_live_••••") — show it as-is.
+      return cfg.secret_key || null;
     case "zoho":
       return cfg.client_id ? maskKey(cfg.client_id) : null;
     case "quickbooks":
