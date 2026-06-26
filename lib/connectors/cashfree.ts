@@ -56,7 +56,7 @@ export class CashfreeConnector {
     toDate: Date,
     cursor: string | null
   ): Promise<{ data?: CashfreeReconEvent[]; cursor?: string | null }> {
-    const MAX_RETRIES = 5;
+    const MAX_RETRIES = 6;
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
         method: "POST",
@@ -73,7 +73,10 @@ export class CashfreeConnector {
       const transient =
         res.status === 429 || res.status >= 500 || body.includes("internal_processing_error");
       if (transient && attempt < MAX_RETRIES) {
-        const backoff = 600 * 2 ** attempt + Math.floor(Math.random() * 400); // 0.6s→9.6s + jitter
+        // Capped exponential backoff + jitter. Capped at 5s so even 6 retries stay
+        // well within the function budget, while the jitter de-synchronises the
+        // concurrent jobs hitting recon so they stop colliding.
+        const backoff = Math.min(600 * 2 ** attempt, 5000) + Math.floor(Math.random() * 600);
         await new Promise((r) => setTimeout(r, backoff));
         continue;
       }

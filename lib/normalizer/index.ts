@@ -679,18 +679,20 @@ export type EasebuzzTransaction = {
 
 // ─── Cashfree normalizers ─────────────────────────────────────────────────────
 
-// Settlement-bookkeeping rows — NOT customer money movements. Skipped so we don't
-// double-count fees (per-payment fees are captured as metadata.fee below) or invent
-// transactions from internal carry-overs.
-const CASHFREE_SKIP_EVENTS = new Set([
+// Settlement-level bookkeeping events (gateway fees/taxes, balance carry-over). We
+// STORE + SHOW them (full transparency) under a settlement source/category so they're
+// visible in Raw Data; the existing metric logic already treats *_settlement sources
+// like transfers, so they don't double-count the per-payment fee in Net Flow.
+const CASHFREE_SETTLEMENT_EVENTS = new Set([
   "NORMAL_SETTLEMENT_CHARGE", "NORMAL_SETTLEMENT_TAX", "BALANCE_CARRY_OVER",
 ]);
 
-/** Map one Settlement-Reconciliation event to a transaction (or null to skip). */
+/** Map one Settlement-Reconciliation event to a transaction. Returns null only for a
+ *  row with no event type at all — every real money/bookkeeping event is kept. */
 export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTransaction | null {
   const ev = e.event_details ?? {};
   const type = (ev.event_type ?? "").toUpperCase();
-  if (!type || CASHFREE_SKIP_EVENTS.has(type)) return null;
+  if (!type) return null;
 
   // Direction from sale_type; PAYMENT is a credit by default.
   const credit = ev.sale_type ? ev.sale_type.toUpperCase() === "CREDIT" : type === "PAYMENT";
@@ -719,15 +721,18 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
     : `cf_${type}_${e.order_details?.order_id ?? ""}_${ev.event_time ?? ""}`;
 
   const isDispute = type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION";
+  const isSettlement = CASHFREE_SETTLEMENT_EVENTS.has(type);
   const category =
     type === "PAYMENT" ? "payment"
     : type === "REFUND" ? "refund"
     : isDispute ? "dispute"
+    : isSettlement ? "settlement"
     : "adjustment";
   const source =
     type === "PAYMENT" ? "cashfree"
     : type === "REFUND" ? "cashfree_refund"
     : isDispute ? "cashfree_dispute"
+    : isSettlement ? "cashfree_settlement"  // ends in _settlement → existing metric logic excludes from Net Flow (no fee double-count)
     : "cashfree_adjustment";
 
   // Cashfree fee for this payment = service charge + tax (full INR units).
