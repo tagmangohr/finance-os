@@ -36,6 +36,28 @@ export class CashfreeConnector {
     let cursor: string | null = null;
 
     do {
+      const data = await this.reconPage(fromDate, toDate, cursor);
+      for (const ev of data.data ?? []) {
+        const txn = normalizeCashfreeReconEvent(ev);
+        if (txn) results.push(txn);
+      }
+      cursor = data.cursor ?? null;
+    } while (cursor);
+
+    return results;
+  }
+
+  /** One recon page, with backoff+jitter retry on transient failures. The recon
+   *  endpoint returns 400 "internal_processing_error" (and 429/5xx) under concurrent
+   *  load — these are transient, and the request is read-only/idempotent, so retrying
+   *  with jittered backoff lets simultaneous calls (parallel jobs) succeed. */
+  private async reconPage(
+    fromDate: Date,
+    toDate: Date,
+    cursor: string | null
+  ): Promise<{ data?: CashfreeReconEvent[]; cursor?: string | null }> {
+    const MAX_RETRIES = 5;
+    for (let attempt = 0; ; attempt++) {
       const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
         method: "POST",
         headers: this.headers,
@@ -45,20 +67,17 @@ export class CashfreeConnector {
           filters: { start_date: fromDate.toISOString(), end_date: toDate.toISOString() },
         }),
       });
+      if (res.ok) return res.json();
 
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`Cashfree recon API error ${res.status}: ${body.slice(0, 200)}`);
+      const body = await res.text();
+      const transient =
+        res.status === 429 || res.status >= 500 || body.includes("internal_processing_error");
+      if (transient && attempt < MAX_RETRIES) {
+        const backoff = 600 * 2 ** attempt + Math.floor(Math.random() * 400); // 0.6s→9.6s + jitter
+        await new Promise((r) => setTimeout(r, backoff));
+        continue;
       }
-
-      const data = (await res.json()) as { data?: CashfreeReconEvent[]; cursor?: string | null };
-      for (const ev of data.data ?? []) {
-        const txn = normalizeCashfreeReconEvent(ev);
-        if (txn) results.push(txn);
-      }
-      cursor = data.cursor ?? null;
-    } while (cursor);
-
-    return results;
+      throw new Error(`Cashfree recon API error ${res.status}: ${body.slice(0, 200)}`);
+    }
   }
 }

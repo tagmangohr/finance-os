@@ -210,7 +210,11 @@ async function fetchConnectorTransactions(
       // concurrency/chunk size, not by removing sub-chunking.
       return fetchWithSubChunks(connector, fromDate, toDate, fetchStripe);
     case "cashfree":
-      return fetchWithSubChunks(connector, fromDate, toDate, fetchCashfree);
+      // Cashfree's recon report rejects CONCURRENT requests (400
+      // internal_processing_error) and already paginates a full window via cursor,
+      // so call it directly — one sequential, internally-retried call — NOT through
+      // the parallel sub-chunker (which fired several recon calls at once).
+      return fetchCashfree(connector, fromDate, toDate);
     case "payu": {
       const { key, salt } = config;
       if (!key || !salt) {
