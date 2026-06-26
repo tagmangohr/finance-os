@@ -180,10 +180,14 @@ export class StripeConnector {
       "charge.succeeded", "charge.failed", "charge.captured", "charge.updated",
       "charge.refunded", "charge.pending", "charge.expired",
     ]);
+    // Filter at the API (types[]) so we only page through events we act on. Without
+    // this we'd page the account's ENTIRE event stream (failed payment_intents,
+    // invoices, checkout sessions…) — thousands/day — and blow the listing budget.
+    const TYPES = [...CHARGE, ...DISPUTE, ...PAYOUT]; // 17 types (Stripe caps types[] at 20)
 
-    // 1. Read the FULL event list since the checkpoint. If we can't finish listing
-    //    within the deadline we report complete=false — the caller then punts to a
-    //    full backfill rather than advancing the checkpoint past unread (older)
+    // 1. Read the FULL relevant-event list since the checkpoint. If we can't finish
+    //    listing within the deadline we report complete=false — the caller then punts
+    //    to a full backfill rather than advancing the checkpoint past unread (older)
     //    events, which would leave a gap (events list newest-first).
     const events: Stripe.Event[] = [];
     let startingAfter: string | undefined;
@@ -193,6 +197,7 @@ export class StripeConnector {
       const page = await this.stripe.events.list({
         created: { gte: opts.sinceSec },
         limit: 100,
+        types: TYPES,
         ...(startingAfter ? { starting_after: startingAfter } : {}),
       });
       events.push(...page.data);
