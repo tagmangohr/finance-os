@@ -152,6 +152,77 @@ export class StripeConnector {
     return { transactions: results, nextCursor: startingAfter ?? null, hasMore };
   }
 
+  // ─── Events delta ───────────────────────────────────────────────────────────
+  // Pull everything that CHANGED since a checkpoint via /v1/events (new charges,
+  // status changes, refunds, disputes, payouts) — instead of re-scanning the whole
+  // window. Tiny + flat-cost regardless of how much historical data exists. Events
+  // are processed oldest→newest and bounded by a deadline, returning the created
+  // time of the last fully-processed event so the caller can resume exactly there.
+
+  async fetchEventsSince(
+    opts: { sinceSec: number; deadlineMs: number }
+  ): Promise<{ transactions: NormalizedTransaction[]; processedThrough: number | null; complete: boolean }> {
+    // charge.* events embed the full charge object (status, refunded, amount), so a
+    // refund/status change is captured WITHOUT a per-charge API call — critical on a
+    // high-volume account (hundreds of changed charges/day). The only field not in
+    // the event is the processing `fee` (it lives on the balance transaction); that's
+    // reconciled by the periodic/on-demand full backfill, which expands it.
+    const DISPUTE = new Set([
+      "charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed",
+      "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated",
+    ]);
+    const PAYOUT = new Set([
+      "payout.created", "payout.updated", "payout.paid", "payout.failed", "payout.canceled",
+    ]);
+    // Includes charge.refunded → the charge object carries refunded=true +
+    // amount_refunded, so refunds land as a status/metadata change on the charge.
+    const CHARGE = new Set([
+      "charge.succeeded", "charge.failed", "charge.captured", "charge.updated",
+      "charge.refunded", "charge.pending", "charge.expired",
+    ]);
+
+    // 1. Read the FULL event list since the checkpoint. If we can't finish listing
+    //    within the deadline we report complete=false — the caller then punts to a
+    //    full backfill rather than advancing the checkpoint past unread (older)
+    //    events, which would leave a gap (events list newest-first).
+    const events: Stripe.Event[] = [];
+    let startingAfter: string | undefined;
+    let complete = false;
+    while (true) {
+      if (Date.now() >= opts.deadlineMs) { complete = false; break; }
+      const page = await this.stripe.events.list({
+        created: { gte: opts.sinceSec },
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+      events.push(...page.data);
+      if (!page.has_more || page.data.length === 0) { complete = true; break; }
+      startingAfter = page.data[page.data.length - 1].id;
+    }
+    if (!complete) return { transactions: [], processedThrough: null, complete: false };
+
+    // 2. Oldest→newest, deduped by external_id (newest state wins) so a charge with
+    //    several events this window produces one upsert with its latest state.
+    events.reverse();
+    const byId = new Map<string, NormalizedTransaction>();
+    let processedThrough: number | null = null;
+    for (const ev of events) {
+      const obj = ev.data.object as unknown as Record<string, unknown>;
+      try {
+        let txn: NormalizedTransaction | null = null;
+        if (DISPUTE.has(ev.type)) txn = normalizeStripeDispute(obj as unknown as StripeDispute);
+        else if (PAYOUT.has(ev.type)) txn = normalizeStripePayout(obj as unknown as StripePayout);
+        else if (CHARGE.has(ev.type)) txn = normalizeStripeCharge(obj as unknown as StripeCharge);
+        if (txn?.external_id) byId.set(txn.external_id, txn);
+      } catch {
+        // A single malformed object must not abort the whole delta.
+      }
+      processedThrough = ev.created;
+    }
+
+    return { transactions: [...byId.values()], processedThrough, complete: true };
+  }
+
   // ─── Balance ──────────────────────────────────────────────────────────────
 
   async fetchBalance(): Promise<number> {

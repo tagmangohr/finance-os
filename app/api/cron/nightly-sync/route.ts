@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
+import { syncStripeEventsDelta } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { fyStartISO } from "@/lib/utils";
 import type { Database } from "@/lib/supabase/types";
@@ -51,13 +52,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // IST-correct). enqueueBackfill slices [fyStart, now] into resumable windows.
   const fyStart = new Date(`${fyStartISO(now)}T00:00:00+05:30`);
 
-  let enqueued = 0, links = 0, skipped = 0;
+  // Leave headroom under the 60s function budget for the inline Stripe events delta.
+  const eventsDeadline = Date.now() + 40_000;
+
+  let enqueued = 0, links = 0, skipped = 0, eventsDelta = 0;
   const outcomes = await Promise.allSettled(
     (connectors as ConnectorRow[]).map(async (c) => {
       if (isLinkConnector(c.type)) {
         await syncLinkConnector(supabase, c);
         links++;
         return;
+      }
+      // Stripe: pull only what changed since the checkpoint via the events feed
+      // (seconds, flat-cost) instead of re-scanning the whole FY. Falls back to the
+      // full backfill below only when a delta can't run safely (no checkpoint yet,
+      // or checkpoint older than Stripe's 30-day events window).
+      if (c.type === "stripe") {
+        try {
+          const res = await syncStripeEventsDelta(supabase, c, eventsDeadline);
+          if (!res.needsBackfill) { eventsDelta++; return; }
+        } catch (e) {
+          console.error(`[cron/nightly-sync] stripe events delta failed (${c.id}), falling back to backfill:`, e);
+        }
       }
       // Skip if a backfill (advance_checkpoint = false) is already draining for
       // this connector — from last night or a manual sync — so nightly runs never
@@ -88,8 +104,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   });
 
   return NextResponse.json({
-    message: "Nightly FY reconcile started",
+    message: "Nightly reconcile started",
     fy_start: fyStartISO(now),
+    stripe_events_delta: eventsDelta,
     connectors_enqueued: enqueued,
     links_synced: links,
     skipped_already_running: skipped,
