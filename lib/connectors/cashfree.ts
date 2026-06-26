@@ -33,17 +33,25 @@ export class CashfreeConnector {
 
   async fetchReconEvents(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
     const results: NormalizedTransaction[] = [];
-    let cursor: string | null = null;
-
-    do {
-      const data = await this.reconPage(fromDate, toDate, cursor);
-      for (const ev of data.data ?? []) {
-        const txn = normalizeCashfreeReconEvent(ev);
-        if (txn) results.push(txn);
-      }
-      cursor = data.cursor ?? null;
-    } while (cursor);
-
+    // recon caps each request at 30 days, so walk the range in ≤28-day sub-windows.
+    // CRITICAL: do this SEQUENTIALLY in a single chain — Cashfree's recon cursor
+    // returns short/incomplete results when the same merchant paginates recon
+    // concurrently (verified: sequential = complete, parallel = ~half). This is why
+    // Cashfree is enqueued as ONE whole-range job, never parallel windowed jobs.
+    const SUB_MS = 28 * 24 * 60 * 60 * 1000;
+    for (let cur = fromDate.getTime(); cur < toDate.getTime(); cur += SUB_MS) {
+      const subFrom = new Date(cur);
+      const subTo = new Date(Math.min(cur + SUB_MS, toDate.getTime()));
+      let cursor: string | null = null;
+      do {
+        const data = await this.reconPage(subFrom, subTo, cursor);
+        for (const ev of data.data ?? []) {
+          const txn = normalizeCashfreeReconEvent(ev);
+          if (txn) results.push(txn);
+        }
+        cursor = data.cursor ?? null;
+      } while (cursor);
+    }
     return results;
   }
 

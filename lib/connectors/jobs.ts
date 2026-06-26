@@ -53,6 +53,10 @@ export function isResumable(type: string): boolean {
  * Enqueue a date-range backfill. Resumable connectors get one job per
  * RESUMABLE_WINDOW_DAYS window (parallelism) — each job then paginates its window
  * in bounded chunks. Legacy connectors get one job per JOB_WINDOW_DAYS window.
+ *
+ * EXCEPTION — Cashfree: enqueued as a SINGLE whole-range job. Its recon report
+ * returns short/incomplete results when paginated concurrently, so it must run as
+ * one sequential cursor chain (the connector walks ≤28-day sub-windows internally).
  */
 export async function enqueueBackfill(
   supabase: SupabaseLike,
@@ -60,7 +64,12 @@ export async function enqueueBackfill(
   fromDate: Date,
   toDate: Date
 ): Promise<number> {
-  const stepMs = (isResumable(connector.type) ? RESUMABLE_WINDOW_DAYS : JOB_WINDOW_DAYS) * DAY_MS;
+  // One job covering the entire range (no parallel windows) for concurrency-
+  // sensitive connectors.
+  const stepMs =
+    connector.type === "cashfree"
+      ? toDate.getTime() - fromDate.getTime() + 1
+      : (isResumable(connector.type) ? RESUMABLE_WINDOW_DAYS : JOB_WINDOW_DAYS) * DAY_MS;
   const rows: Database["public"]["Tables"]["sync_jobs"]["Insert"][] = [];
   let cursor = fromDate.getTime();
   const end = toDate.getTime();
