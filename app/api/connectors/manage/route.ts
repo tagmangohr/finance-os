@@ -16,6 +16,7 @@ import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
 import { isLinkConnector } from "@/lib/connectors/links";
 import { fyStartISO } from "@/lib/utils";
 import { SECRET_CONFIG_KEYS, isMaskedSecret, redactConnector } from "@/lib/connectors/secret-fields";
+import { encryptConfigSecrets, decryptConfigSecrets } from "@/lib/crypto/secrets";
 
 export const maxDuration = 60;
 
@@ -71,7 +72,9 @@ export async function POST(request: Request) {
         org_id: auth.org.id,
         type,
         name: name.trim(),
-        config: config ?? {},
+        // Validation already ran on the plaintext config above; encrypt secret
+        // fields before they touch the database.
+        config: encryptConfigSecrets((config ?? {}) as Record<string, unknown>),
         status: status ?? "active",
         // A new connector is "caught up to now": incremental syncs keep the
         // forward edge fresh from here, while older history is loaded on demand
@@ -138,7 +141,8 @@ export async function PATCH(request: Request) {
       // "unchanged" → keep the real stored value; a real new value replaces it.
       const { data: existing } = await auth.supabase
         .from("connectors").select("config").eq("id", id).maybeSingle();
-      const existingCfg = ((existing?.config ?? {}) as Record<string, unknown>);
+      // Decrypt so the merge + validation work on real plaintext secrets.
+      const existingCfg = decryptConfigSecrets((existing?.config ?? {}) as Record<string, unknown>);
       const incoming = body.config as Record<string, unknown>;
       const merged: Record<string, unknown> = { ...existingCfg, ...incoming };
       for (const k of SECRET_CONFIG_KEYS) {
@@ -153,7 +157,8 @@ export async function PATCH(request: Request) {
       if (configError) {
         return NextResponse.json({ error: configError }, { status: 400 });
       }
-      updates.config = merged;
+      // Re-encrypt secret fields before storing.
+      updates.config = encryptConfigSecrets(merged);
     }
 
     if (body.status !== undefined) {

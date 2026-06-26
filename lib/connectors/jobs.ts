@@ -3,6 +3,7 @@ import type { ConnectorSyncResult } from "@/lib/connectors/sync";
 import { syncConnectorTransactions, persistTransactions, SyncConfigError } from "@/lib/connectors/sync";
 import { StripeConnector } from "@/lib/connectors/stripe";
 import { RazorpayConnector } from "@/lib/connectors/razorpay";
+import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
@@ -195,7 +196,7 @@ async function processResumableChunk(
   const stream = job.stream ?? streams[0];
 
   try {
-    const cfg = (connector.config ?? {}) as Record<string, string>;
+    const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
     const opts = {
       gteSec: Math.floor(new Date(job.window_from).getTime() / 1000),
       lteSec: Math.floor(new Date(job.window_to).getTime() / 1000),

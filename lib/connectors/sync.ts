@@ -11,6 +11,7 @@ import {
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { BASE_CURRENCY } from "@/lib/utils";
 import { enrichRowsWithFx } from "@/lib/fx/rates";
+import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import type { Database } from "@/lib/supabase/types";
 import type { createServiceClient } from "@/lib/supabase/server";
 
@@ -55,7 +56,10 @@ export class SyncConfigError extends Error {
 }
 
 function getConfig(connector: ConnectorRow): Record<string, string> {
-  return connector.config as Record<string, string>;
+  // Decrypt secret fields at the point of use — this is the single boundary
+  // through which every gateway client (Razorpay/Stripe/Cashfree/PayU/…) reads
+  // its credentials, so decrypting here covers them all.
+  return decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
 }
 
 function warning(label: string, reason: unknown): string {

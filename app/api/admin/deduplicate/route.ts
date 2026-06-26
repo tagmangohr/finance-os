@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 
 /**
  * POST /api/admin/deduplicate
@@ -113,7 +114,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const connToDelete: string[] = [];
 
   for (const c of connectors ?? []) {
-    const cfg = c.config as Record<string, string> ?? {};
+    // Decrypt first — an encrypted secret uses a random IV, so the same key would
+    // fingerprint differently every time and dedup would never match.
+    const cfg = decryptConfigSecrets((c.config ?? {}) as Record<string, string>);
     // Fingerprint = type + first credential value (key_id, secret_key, or client_id)
     const credValue =
       cfg.key_id ?? cfg.secret_key ?? cfg.client_id ?? cfg.host ?? "";
