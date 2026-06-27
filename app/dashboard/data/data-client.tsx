@@ -19,20 +19,28 @@ import { categorizeSource, sourceLabel, type SourceBucket } from "@/lib/finance/
 
 // Inline value + one-click copy. Shows the full value (no truncation) with a copy
 // icon that reveals on hover and flips to a tick for ~1.2s after copying.
-function CopyValue({ value, className }: { value: string; className?: string }) {
+function CopyValue({
+  value,
+  copyValue,
+  className,
+}: {
+  value: string;
+  copyValue?: string; // what lands on the clipboard, if different from the displayed value
+  className?: string;
+}) {
   const [copied, setCopied] = React.useState(false);
   const copy = React.useCallback(
     async (e: React.MouseEvent) => {
       e.stopPropagation();
       try {
-        await navigator.clipboard.writeText(value);
+        await navigator.clipboard.writeText(copyValue ?? value);
         setCopied(true);
         setTimeout(() => setCopied(false), 1200);
       } catch {
         /* clipboard unavailable (e.g. insecure context) — ignore */
       }
     },
-    [value]
+    [value, copyValue]
   );
   return (
     <span className={cn("group/copy inline-flex items-center gap-1.5", className)}>
@@ -477,7 +485,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
               <Th col="status" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Counterparty</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Name</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Email</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest min-w-[200px]">Description</th>
@@ -597,9 +605,17 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         {email ? <CopyValue value={email} /> : "—"}
                       </td>
 
-                      {/* Phone (from metadata) — one-click copy */}
+                      {/* Phone (from metadata) — one-click copy (copies the 10-digit number, no ISD code) */}
                       <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
-                        {phone ? <CopyValue value={phone} className="tabular-nums" /> : "—"}
+                        {phone ? (
+                          <CopyValue
+                            value={phone}
+                            copyValue={phone.replace(/\D/g, "").slice(-10)}
+                            className="tabular-nums"
+                          />
+                        ) : (
+                          "—"
+                        )}
                       </td>
 
                       {/* Description */}
