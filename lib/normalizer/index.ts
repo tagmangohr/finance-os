@@ -764,6 +764,88 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
   };
 }
 
+// ─── Cashfree webhook payload (real-time) ─────────────────────────────────────
+// The webhook payload shape differs from the recon report (data.payment / data.refund
+// instead of event_details). external_ids MATCH the recon normalizer (cf_pay_…,
+// cf_refund_…) so real-time webhook rows dedup cleanly against the batch backfill.
+// Disputes are intentionally left to the recon backfill (different id scheme).
+export type CashfreeWebhookPayload = {
+  type?: string;
+  event_time?: string;
+  data?: {
+    order?: { order_id?: string; order_amount?: number; order_currency?: string };
+    payment?: {
+      cf_payment_id?: string | number;
+      payment_status?: string;
+      payment_amount?: number;
+      payment_currency?: string;
+      payment_time?: string;
+    };
+    customer_details?: { customer_name?: string | null; customer_email?: string | null; customer_phone?: string | null };
+    refund?: {
+      cf_refund_id?: string | number;
+      refund_id?: string;
+      order_id?: string;
+      refund_amount?: number;
+      refund_currency?: string;
+      refund_status?: string;
+      processed_at?: string;
+    };
+  };
+};
+
+/** Map a Cashfree webhook (payment or refund) to a transaction (null otherwise). */
+export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): NormalizedTransaction | null {
+  const type = (p.type ?? "").toUpperCase();
+  const d = p.data ?? {};
+
+  if (type.startsWith("PAYMENT_")) {
+    const pay = d.payment ?? {};
+    const order = d.order ?? {};
+    if (pay.cf_payment_id == null) return null;
+    const st = (pay.payment_status ?? "").toUpperCase();
+    const status: NormalizedTransaction["status"] =
+      st === "SUCCESS" ? "completed" : st === "PENDING" ? "pending" : "failed";
+    const cust = d.customer_details;
+    return {
+      external_id: `cf_pay_${pay.cf_payment_id}`,
+      type: "credit",
+      amount: Number(pay.payment_amount ?? order.order_amount ?? 0),
+      currency: (pay.payment_currency ?? order.order_currency ?? "INR").toUpperCase(),
+      category: "payment",
+      counterparty_name: cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null,
+      description: order.order_id ? `Payment · order ${order.order_id}` : "Payment",
+      source: "cashfree",
+      status,
+      transaction_date: (pay.payment_time ?? p.event_time ?? "").slice(0, 10),
+      metadata: { event_type: type, order_id: order.order_id ?? null, cf_payment_id: pay.cf_payment_id },
+    };
+  }
+
+  if (type.startsWith("REFUND")) {
+    const r = d.refund ?? {};
+    if (!r.refund_id) return null;
+    const st = (r.refund_status ?? "").toUpperCase();
+    const status: NormalizedTransaction["status"] =
+      st === "SUCCESS" ? "completed" : st === "PENDING" || st === "ONHOLD" ? "pending" : "failed";
+    return {
+      external_id: `cf_refund_${r.refund_id}`,
+      type: "debit",
+      amount: Number(r.refund_amount ?? 0),
+      currency: (r.refund_currency ?? "INR").toUpperCase(),
+      category: "refund",
+      counterparty_name: null,
+      description: r.order_id ? `Refund · order ${r.order_id}` : "Refund",
+      source: "cashfree_refund",
+      status,
+      transaction_date: (r.processed_at ?? p.event_time ?? "").slice(0, 10),
+      metadata: { event_type: type, order_id: r.order_id ?? null, cf_refund_id: r.cf_refund_id ?? null },
+    };
+  }
+
+  return null; // disputes / others → handled by the recon backfill
+}
+
 // ─── PayU normalizers ─────────────────────────────────────────────────────────
 
 export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransaction {
