@@ -351,6 +351,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // Per-connector backfill progress (from sync_jobs), polled org-wide so the bar
   // is persistent — it shows ongoing backfills even after reload / cron-driven.
   const [jobsProgress, setJobsProgress] = React.useState<Record<string, { active: boolean; percent: number; remaining: number }>>({});
+  // Time-based catch-up % for the inline "Sync Latest" path (non-resumable
+  // connectors). Gateways don't report a total count, so we show how far the
+  // synced window has advanced from its start toward now — an honest proxy.
+  const [incrementalPct, setIncrementalPct] = React.useState<Record<string, number>>({});
   // Connectors that just transitioned active→done — held briefly so the bar fills
   // to 100% and fades, instead of silently vanishing at ~95% (which read as "stuck").
   const [completedPulse, setCompletedPulse] = React.useState<Record<string, true>>({});
@@ -789,17 +793,18 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
 
     setSyncingId(connector.id);
+    setIncrementalPct((p) => ({ ...p, [connector.id]: 2 }));
     try {
       let totalSynced = 0;
       let totalUpdated = 0;
       let hasMore = true;
       let step = 0;
+      let anchorMs: number | null = null; // start of the first window — the 0% mark
       const MAX_STEPS = 40; // safety cap; each step is bounded server-side
       const warnSet = new Set<string>();
 
       while (hasMore && step < MAX_STEPS) {
         step++;
-        setSyncProgress({ connectorId: connector.id, current: step, total: step });
         const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -816,11 +821,25 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         }
         const data = await res.json() as {
           synced?: number; updated?: number; has_more?: boolean; warnings?: string[];
+          from?: string; to?: string;
         };
         totalSynced += data.synced ?? 0;
         totalUpdated += data.updated ?? 0;
         (data.warnings ?? []).forEach((w) => warnSet.add(w));
         hasMore = !!data.has_more;
+
+        // Time-based catch-up %: how far the synced window's forward edge (`to`)
+        // has advanced from the first window's start (`from`) toward now.
+        if (data.from && data.to) {
+          if (anchorMs == null) anchorMs = Date.parse(data.from);
+          const toMs = Date.parse(data.to);
+          const span = Date.now() - anchorMs;
+          const pct = span > 0 ? ((toMs - anchorMs) / span) * 100 : 100;
+          setIncrementalPct((p) => ({
+            ...p,
+            [connector.id]: hasMore ? Math.min(99, Math.max(2, pct)) : 100,
+          }));
+        }
       }
 
       setActiveConnectors((prev) =>
@@ -829,6 +848,12 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         )
       );
 
+      // Hold at 100% briefly so the bar visibly completes instead of vanishing.
+      setIncrementalPct((p) => ({ ...p, [connector.id]: 100 }));
+      setTimeout(() => setIncrementalPct((p) => {
+        const n = { ...p }; delete n[connector.id]; return n;
+      }), 1000);
+
       if (warnSet.size > 0) {
         const reason = Array.from(warnSet)[0];
         toast.warning(`Synced ${totalSynced} new, refreshed ${totalUpdated} · ${warnSet.size} warning${warnSet.size > 1 ? "s" : ""} — ${reason}`);
@@ -836,6 +861,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         toast.success(`Up to date — ${totalSynced} new, ${totalUpdated} refreshed`);
       }
     } catch (err) {
+      setIncrementalPct((p) => { const n = { ...p }; delete n[connector.id]; return n; });
       if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
@@ -905,10 +931,22 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           <div className="space-y-1.5">
             {instances.map((inst) => {
               const cfg = (inst.config ?? {}) as Record<string, string>;
-              const keyId = getKeyIdentifier(inst.type, cfg);
-              const contextInfo = [cfg.email, cfg.mid].filter(Boolean).join(" · ");
-              const subtitle = [keyId, contextInfo].filter(Boolean).join(" · ")
+              // Show only the account email — never the API key/secret identifier.
+              const subtitle = cfg.email
                 || (inst.last_synced_at ? `Synced ${formatDate(inst.last_synced_at)}` : "Never synced");
+
+              // Unified sync %: queued backfills / resumable syncs report a true %
+              // via jobsProgress; inline "Sync Latest" reports a time-based catch-up %.
+              const pulse = !!completedPulse[inst.id];
+              const backfillActive = !!jobsProgress[inst.id]?.active;
+              const incrPct = incrementalPct[inst.id];
+              const syncPct = pulse
+                ? 100
+                : backfillActive
+                ? jobsProgress[inst.id].percent
+                : incrPct != null
+                ? incrPct
+                : null;
 
               const isConfirming = confirmRemove?.id === inst.id;
 
@@ -930,6 +968,11 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         <p className="text-xs font-medium text-muted-foreground truncate">{inst.name}</p>
                         <p className="text-[10px] text-muted-foreground/70 truncate font-mono">{subtitle}</p>
                       </div>
+                      {syncPct != null && (
+                        <span className="text-[10px] font-semibold text-primary tabular-nums flex-shrink-0" title="Sync progress">
+                          {Math.round(syncPct)}%
+                        </span>
+                      )}
                       <div className="flex items-center gap-0.5 flex-shrink-0">
                         <button onClick={() => handleOpenEdit(inst)} title="Edit credentials"
                           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all">
@@ -986,9 +1029,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       Determinate (fills to %) for queued backfills; indeterminate
                       sweep for quick inline syncs (link / "sync latest"). */}
                   <SyncProgressBar
-                    determinate={!!jobsProgress[inst.id]?.active || !!completedPulse[inst.id]}
-                    percent={completedPulse[inst.id] ? 100 : (jobsProgress[inst.id]?.percent ?? 0)}
-                    indeterminate={!jobsProgress[inst.id]?.active && !completedPulse[inst.id] && syncingId === inst.id}
+                    determinate={syncPct != null}
+                    percent={syncPct ?? 0}
+                    indeterminate={syncPct == null && syncingId === inst.id}
                   />
                 </div>
               );
@@ -1327,43 +1370,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
-
-/**
- * Returns a masked key identifier for a connector so users can visually
- * distinguish which account is which without exposing full credentials.
- * e.g. "rzp_live_ABCDE12345" → "rzp_live_ABCDE…2345"
- */
-function maskKey(s: string): string {
-  if (s.length <= 16) return s;
-  return `${s.slice(0, 13)}…${s.slice(-4)}`;
-}
-
-function getKeyIdentifier(type: Connector["type"], cfg: Record<string, string>): string | null {
-  switch (type) {
-    case "razorpay":
-      // key_id is non-secret (rzp_live_xxx / rzp_test_xxx) — safe to show masked
-      return cfg.key_id ? maskKey(cfg.key_id) : null;
-    case "stripe":
-      // Server sends only a masked secret (e.g. "rk_live_••••") — show it as-is.
-      return cfg.secret_key || null;
-    case "zoho":
-      return cfg.client_id ? maskKey(cfg.client_id) : null;
-    case "quickbooks":
-      return cfg.realm_id ? `Realm ${cfg.realm_id}` : null;
-    case "tally":
-      return cfg.host ? `${cfg.host}:${cfg.port ?? "9000"}` : null;
-    case "cashfree":
-      return cfg.client_id ? maskKey(cfg.client_id) : null;
-    case "payu":
-      return cfg.key ? maskKey(cfg.key) : null;
-    case "paytm":
-      return cfg.merchant_id ? maskKey(cfg.merchant_id) : null;
-    case "easebuzz":
-      return cfg.key ? maskKey(cfg.key) : null;
-    default:
-      return null;
-  }
-}
 
 // ─── Sync dropdown ────────────────────────────────────────────────────────────
 
