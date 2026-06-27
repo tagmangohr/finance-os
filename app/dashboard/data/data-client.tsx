@@ -10,10 +10,45 @@ import {
   ChevronRight,
   RefreshCw,
   ArrowUpDown,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { categorizeSource, sourceLabel, type SourceBucket } from "@/lib/finance/transaction-status";
+
+// Inline value + one-click copy. Shows the full value (no truncation) with a copy
+// icon that reveals on hover and flips to a tick for ~1.2s after copying.
+function CopyValue({ value, className }: { value: string; className?: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = React.useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(value);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      } catch {
+        /* clipboard unavailable (e.g. insecure context) — ignore */
+      }
+    },
+    [value]
+  );
+  return (
+    <span className={cn("group/copy inline-flex items-center gap-1.5", className)}>
+      <span className="whitespace-nowrap">{value}</span>
+      <button
+        type="button"
+        onClick={copy}
+        title={copied ? "Copied!" : "Copy"}
+        aria-label={`Copy ${value}`}
+        className="shrink-0 opacity-0 group-hover/copy:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground/60 hover:text-primary"
+      >
+        {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
+      </button>
+    </span>
+  );
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -552,19 +587,19 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         </span>
                       </td>
 
-                      {/* Counterparty */}
-                      <td className="px-3 py-2.5 text-muted-foreground max-w-[140px] truncate">
-                        {row.counterparty_name ?? "—"}
+                      {/* Counterparty — full display + copy (often an email for Razorpay) */}
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                        {row.counterparty_name ? <CopyValue value={row.counterparty_name} /> : "—"}
                       </td>
 
-                      {/* Email (from metadata) */}
-                      <td className="px-3 py-2.5 text-muted-foreground max-w-[180px] truncate" title={email ?? undefined}>
-                        {email ?? "—"}
+                      {/* Email (from metadata) — shown in full, one-click copy */}
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                        {email ? <CopyValue value={email} /> : "—"}
                       </td>
 
-                      {/* Phone (from metadata) */}
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
-                        {phone ?? "—"}
+                      {/* Phone (from metadata) — one-click copy */}
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                        {phone ? <CopyValue value={phone} className="tabular-nums" /> : "—"}
                       </td>
 
                       {/* Description */}
