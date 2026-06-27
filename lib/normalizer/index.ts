@@ -128,6 +128,7 @@ export type StripeCharge = {
   billing_details: {
     name: string | null;
     email: string | null;
+    phone: string | null;
   };
   metadata: Record<string, string>;
   failure_code: string | null;
@@ -269,6 +270,8 @@ export function normalizeRazorpayPayment(
       method: payment.method,
       order_id: payment.order_id,
       invoice_id: payment.invoice_id,
+      email: payment.email,
+      phone: payment.contact,
       fee: payment.fee != null ? payment.fee / 100 : null,
       tax: payment.tax != null ? payment.tax / 100 : null,
       refund_status: payment.refund_status,
@@ -504,6 +507,8 @@ export function normalizeStripeCharge(
         ? charge.amount_refunded
         : charge.amount_refunded / 100,
       fee, // processing fee in charge currency; converted to INR at aggregation
+      email: charge.billing_details?.email ?? (typeof charge.customer === "object" ? charge.customer?.email : null) ?? null,
+      phone: charge.billing_details?.phone ?? null,
       stripe_metadata: charge.metadata,
     },
   };
@@ -758,6 +763,8 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
       event_type: type,
       order_id: e.order_details?.order_id ?? null,
       cf_payment_id: pid ?? null,
+      email: cust?.customer_email ?? null,
+      phone: cust?.customer_phone ?? null,
       utr: e.settlement_details?.utr ?? null,
       ...(fee > 0 ? { fee } : {}),
     },
@@ -818,7 +825,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       source: "cashfree",
       status,
       transaction_date: (pay.payment_time ?? p.event_time ?? "").slice(0, 10),
-      metadata: { event_type: type, order_id: order.order_id ?? null, cf_payment_id: pay.cf_payment_id },
+      metadata: { event_type: type, order_id: order.order_id ?? null, cf_payment_id: pay.cf_payment_id, email: cust?.customer_email ?? null, phone: cust?.customer_phone ?? null },
     };
   }
 

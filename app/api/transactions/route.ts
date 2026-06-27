@@ -58,11 +58,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (from)        query = query.gte("transaction_date", from.slice(0, 10));
   if (to)          query = query.lte("transaction_date", to.slice(0, 10));
 
-  if (search) {
-    query = query.or(
-      `external_id.ilike.%${search}%,description.ilike.%${search}%,counterparty_name.ilike.%${search}%`
-    );
-  }
+  // Search the single search_text blob (external_id + description + counterparty +
+  // ALL metadata) — covers order id, raw payment id, UTR/RRN, email, phone, etc.
+  if (search) query = query.ilike("search_text", `%${search}%`);
 
   query = query
     .order(sortCol, { ascending })

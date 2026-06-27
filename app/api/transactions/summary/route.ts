@@ -43,11 +43,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (type)        q = q.eq("type", type);
     if (from)        q = q.gte("transaction_date", from.slice(0, 10));
     if (to)          q = q.lte("transaction_date", to.slice(0, 10));
-    if (search) {
-      q = q.or(
-        `external_id.ilike.%${search}%,description.ilike.%${search}%,counterparty_name.ilike.%${search}%`
-      );
-    }
+    // Search the single search_text blob (external_id + description + counterparty +
+    // ALL metadata) — covers order id, raw payment id, UTR/RRN, email, etc.
+    if (search) q = q.ilike("search_text", `%${search}%`);
     // Stable order is REQUIRED for correct pagination — without it Postgres can
     // shift rows between pages, double-counting some and skipping others.
     return q.order("id", { ascending: true });
