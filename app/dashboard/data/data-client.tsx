@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { categorizeSource, sourceLabel, type SourceBucket } from "@/lib/finance/transaction-status";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -85,6 +86,16 @@ const SOURCE_LABELS: Record<string, string> = {
   csv:                 "CSV",
 };
 
+// Generic per-bucket badge colour — fallback for ANY source not in SOURCE_COLOURS
+// (so a new connector's badges are coloured sensibly with no per-gateway edit).
+const BUCKET_COLOURS: Record<SourceBucket, string> = {
+  payment:    "bg-blue-500/15 text-blue-300 border-blue-500/20",
+  refund:     "bg-orange-500/15 text-orange-300 border-orange-500/20",
+  settlement: "bg-violet-500/15 text-violet-300 border-violet-500/20",
+  dispute:    "bg-red-500/15 text-destructive border-red-500/20",
+  adjustment: "bg-accent/40 text-muted-foreground border-border",
+};
+
 const STATUS_COLOURS: Record<string, string> = {
   completed: "text-success",
   pending:   "text-warning",
@@ -123,6 +134,32 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [summary, setSummary] = React.useState<SummaryResponse | null>(null);
+
+  // Bucket EVERY source in the summary into payment/refund/settlement/dispute via the
+  // generic categoriser — so the cards count all connectors' data with no per-gateway
+  // wiring (the bug where each new connector showed ₹0 until hand-added here).
+  const buckets = React.useMemo(() => {
+    const b: Record<SourceBucket, { count: number; amount: number }> = {
+      payment: { count: 0, amount: 0 }, refund: { count: 0, amount: 0 },
+      settlement: { count: 0, amount: 0 }, dispute: { count: 0, amount: 0 },
+      adjustment: { count: 0, amount: 0 },
+    };
+    if (summary) {
+      for (const [src, g] of Object.entries(summary.groups)) {
+        const k = categorizeSource(src);
+        b[k].count += g.count;
+        b[k].amount += g.amount;
+      }
+    }
+    return b;
+  }, [summary]);
+
+  // Source filter options derived from the sources actually present — new connectors
+  // appear automatically, no hardcoded per-gateway list.
+  const sourceOptions = React.useMemo(() => {
+    const keys = summary ? Object.keys(summary.groups).sort() : [];
+    return [{ value: "", label: "All sources" }, ...keys.map((k) => ({ value: k, label: sourceLabel(k) }))];
+  }, [summary]);
 
   // Expanded metadata rows
   const [expanded, setExpanded] = React.useState<Set<string>>(new Set());
@@ -304,21 +341,11 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           ]}
         />
 
-        {/* Source filter */}
+        {/* Source filter — options derived from the sources actually present */}
         <FilterSelect
           value={source}
           onChange={setSource}
-          options={[
-            { value: "", label: "All sources" },
-            { value: "razorpay",            label: "RZP Payments" },
-            { value: "razorpay_refund",     label: "RZP Refunds" },
-            { value: "razorpay_settlement", label: "RZP Settlements" },
-            { value: "razorpay_dispute",    label: "RZP Disputes" },
-            { value: "stripe",              label: "Stripe Charges" },
-            { value: "stripe_payout",       label: "Stripe Payouts" },
-            { value: "stripe_dispute",      label: "Stripe Disputes" },
-            { value: "csv",                 label: "CSV" },
-          ]}
+          options={sourceOptions}
         />
 
         {/* Type filter */}
@@ -361,26 +388,26 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <SummaryCard
             label="Payments"
-            count={(summary.groups["razorpay"]?.count ?? 0) + (summary.groups["stripe"]?.count ?? 0)}
-            amount={(summary.groups["razorpay"]?.amount ?? 0) + (summary.groups["stripe"]?.amount ?? 0)}
+            count={buckets.payment.count}
+            amount={buckets.payment.amount}
             colour="text-success"
           />
           <SummaryCard
             label="Settlements"
-            count={(summary.groups["razorpay_settlement"]?.count ?? 0) + (summary.groups["stripe_payout"]?.count ?? 0)}
-            amount={(summary.groups["razorpay_settlement"]?.amount ?? 0) + (summary.groups["stripe_payout"]?.amount ?? 0)}
+            count={buckets.settlement.count}
+            amount={buckets.settlement.amount}
             colour="text-violet-400"
           />
           <SummaryCard
             label="Refunds"
-            count={summary.groups["razorpay_refund"]?.count ?? 0}
-            amount={summary.groups["razorpay_refund"]?.amount ?? 0}
+            count={buckets.refund.count}
+            amount={buckets.refund.amount}
             colour="text-orange-400"
           />
           <SummaryCard
             label="Disputes"
-            count={(summary.groups["razorpay_dispute"]?.count ?? 0) + (summary.groups["stripe_dispute"]?.count ?? 0)}
-            amount={(summary.groups["razorpay_dispute"]?.amount ?? 0) + (summary.groups["stripe_dispute"]?.amount ?? 0)}
+            count={buckets.dispute.count}
+            amount={buckets.dispute.amount}
             colour="text-destructive"
           />
           <SummaryCard
@@ -462,10 +489,10 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         <span
                           className={cn(
                             "px-1.5 py-0.5 rounded text-[10px] font-medium border",
-                            SOURCE_COLOURS[row.source] ?? "bg-accent/40 text-muted-foreground border-border"
+                            SOURCE_COLOURS[row.source] ?? BUCKET_COLOURS[categorizeSource(row.source)]
                           )}
                         >
-                          {SOURCE_LABELS[row.source] ?? row.source}
+                          {SOURCE_LABELS[row.source] ?? sourceLabel(row.source)}
                         </span>
                       </td>
 

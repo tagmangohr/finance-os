@@ -33,9 +33,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const buildQuery = () => {
     let q = auth.supabase
       .from("transactions")
-      .select("source, type, amount, amount_base, currency, fx_rate, category, metadata")
-      .eq("org_id", auth.org.id)
-      .in("status", POSTED_TRANSACTION_STATUSES);
+      .select("source, type, amount, amount_base, currency, fx_rate, category, metadata, status")
+      // Per-source card counts include everything EXCEPT failed attempts (so pending
+      // settlements/disputes show, matching the table). Financial totals below are
+      // gated to POSTED statuses for accuracy — see the loop.
+      .neq("status", "failed");
     if (connectorId) q = q.eq("connector_id", connectorId);
     if (source)      q = q.eq("source", source);
     if (type)        q = q.eq("type", type);
@@ -70,6 +72,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       (groups[key] ??= { count: 0, amount: 0 });
       groups[key].count++;
       groups[key].amount += amt;
+
+      // Financial totals (net / credits / debits / fees) only count POSTED rows —
+      // pending settlements/disputes are real activity (shown in the cards above) but
+      // must not move Net Flow until settled.
+      if (!POSTED_TRANSACTION_STATUSES.includes(row.status as string)) continue;
 
       if (row.type === "credit") {
         totalCredits += amt;
