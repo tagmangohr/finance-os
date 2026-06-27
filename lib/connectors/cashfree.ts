@@ -7,16 +7,27 @@ import {
 const CASHFREE_BASE = "https://api.cashfree.com/pg";
 const PAGE_SIZE = 1000; // recon API max
 const API_VERSION = "2025-01-01";
+const DAY_MS = 24 * 60 * 60 * 1000;
+// recon caps each request at 30 days — and, crucially, SMALLER/arbitrary windows trip
+// its intermittent server error far more often than full 30-day windows, so use the max.
+const WINDOW_MS = 30 * DAY_MS;
+// Full re-paginations of a window before giving up ON THIS RUN (see fetchWindow).
+const WINDOW_ATTEMPTS = 4;
 
 /**
  * Cashfree Payment Gateway connector.
  *
- * IMPORTANT: the PG API has NO bulk "list orders/payments/settlements by date"
- * endpoint (the old GET /pg/orders|/settlements|/refunds calls 404). The only bulk
- * transaction feed is the Settlement Reconciliation report — POST /pg/settlement/recon
- * — which returns every money-movement event (payment/refund/dispute/chargeback) plus
- * settlement bookkeeping in a date range, cursor-paginated. Max 30 days per request
- * (callers already sub-chunk to ≤7 days, so that cap is never hit).
+ * The PG API has NO bulk "list orders/payments by date" endpoint — the only bulk
+ * transaction feed is the Settlement Reconciliation report (POST /pg/settlement/recon),
+ * cursor-paginated, ≤30 days per request, returning every money event
+ * (payment/refund/dispute/chargeback/settlement).
+ *
+ * Reliability reality: this endpoint intermittently returns a 400
+ * "internal_processing_error" (Cashfree server-side, flaky for this merchant's data).
+ * We run it as ONE sequential chain (it returns short results under concurrent
+ * pagination — enqueued as a single whole-range job), retry each window from scratch,
+ * and on persistent failure keep every other window and move on. Idempotent nightly
+ * re-syncs accumulate the union as Cashfree recovers.
  */
 export class CashfreeConnector {
   private headers: Record<string, string>;
@@ -33,62 +44,66 @@ export class CashfreeConnector {
 
   async fetchReconEvents(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
     const results: NormalizedTransaction[] = [];
-    // recon caps each request at 30 days, so walk the range in ≤28-day sub-windows.
-    // CRITICAL: do this SEQUENTIALLY in a single chain — Cashfree's recon cursor
-    // returns short/incomplete results when the same merchant paginates recon
-    // concurrently (verified: sequential = complete, parallel = ~half). This is why
-    // Cashfree is enqueued as ONE whole-range job, never parallel windowed jobs.
-    const SUB_MS = 28 * 24 * 60 * 60 * 1000;
-    for (let cur = fromDate.getTime(); cur < toDate.getTime(); cur += SUB_MS) {
-      const subFrom = new Date(cur);
-      const subTo = new Date(Math.min(cur + SUB_MS, toDate.getTime()));
-      let cursor: string | null = null;
-      do {
-        const data = await this.reconPage(subFrom, subTo, cursor);
-        for (const ev of data.data ?? []) {
-          const txn = normalizeCashfreeReconEvent(ev);
-          if (txn) results.push(txn);
-        }
-        cursor = data.cursor ?? null;
-      } while (cursor);
+    const end = toDate.getTime();
+    // UTC-midnight-aligned 30-day windows, walked sequentially (single recon chain).
+    const start = Math.round(fromDate.getTime() / DAY_MS) * DAY_MS;
+    for (let cur = start; cur < end; cur += WINDOW_MS) {
+      const windowFrom = new Date(cur);
+      const windowTo = new Date(Math.min(cur + WINDOW_MS, end));
+      results.push(...(await this.fetchWindow(windowFrom, windowTo)));
     }
     return results;
   }
 
-  /** One recon page, with backoff+jitter retry on transient failures. The recon
-   *  endpoint returns 400 "internal_processing_error" (and 429/5xx) under concurrent
-   *  load — these are transient, and the request is read-only/idempotent, so retrying
-   *  with jittered backoff lets simultaneous calls (parallel jobs) succeed. */
-  private async reconPage(
-    fromDate: Date,
-    toDate: Date,
-    cursor: string | null
-  ): Promise<{ data?: CashfreeReconEvent[]; cursor?: string | null }> {
-    const MAX_RETRIES = 6;
-    for (let attempt = 0; ; attempt++) {
-      const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
-        method: "POST",
-        headers: this.headers,
-        next: { revalidate: 0 },
-        body: JSON.stringify({
-          pagination: { limit: PAGE_SIZE, cursor },
-          filters: { start_date: fromDate.toISOString(), end_date: toDate.toISOString() },
-        }),
-      });
-      if (res.ok) return res.json();
-
-      const body = await res.text();
-      const transient =
-        res.status === 429 || res.status >= 500 || body.includes("internal_processing_error");
-      if (transient && attempt < MAX_RETRIES) {
-        // Capped exponential backoff + jitter. Capped at 5s so even 6 retries stay
-        // well within the function budget, while the jitter de-synchronises the
-        // concurrent jobs hitting recon so they stop colliding.
-        const backoff = Math.min(600 * 2 ** attempt, 5000) + Math.floor(Math.random() * 600);
-        await new Promise((r) => setTimeout(r, backoff));
-        continue;
+  /**
+   * Paginate one ≤30-day window. Cashfree's recon error can strike mid-pagination,
+   * and re-requesting the SAME cursor keeps failing — so on any failure we restart
+   * the WHOLE window from a fresh cursor. After WINDOW_ATTEMPTS we give up on this
+   * window for this run (returning the other windows intact, never aborting the
+   * sync); a later sync re-fetches it (dedup makes that free).
+   */
+  private async fetchWindow(from: Date, to: Date): Promise<NormalizedTransaction[]> {
+    for (let attempt = 1; attempt <= WINDOW_ATTEMPTS; attempt++) {
+      try {
+        const out: NormalizedTransaction[] = [];
+        let cursor: string | null = null;
+        do {
+          const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
+            method: "POST",
+            headers: this.headers,
+            next: { revalidate: 0 },
+            body: JSON.stringify({
+              pagination: { limit: PAGE_SIZE, cursor },
+              filters: { start_date: from.toISOString(), end_date: to.toISOString() },
+            }),
+          });
+          if (!res.ok) {
+            const body = await res.text();
+            throw new Error(`Cashfree recon ${res.status}: ${body.slice(0, 160)}`);
+          }
+          const data = (await res.json()) as { data?: CashfreeReconEvent[]; cursor?: string | null };
+          for (const ev of data.data ?? []) {
+            const txn = normalizeCashfreeReconEvent(ev);
+            if (txn) out.push(txn);
+          }
+          cursor = data.cursor ?? null;
+        } while (cursor);
+        return out; // window fully paginated
+      } catch (err) {
+        if (attempt < WINDOW_ATTEMPTS) {
+          await new Promise((r) => setTimeout(r, 800 * attempt + Math.floor(Math.random() * 600)));
+          continue;
+        }
+        // Cashfree's recon is erroring on this window right now; keep the others and
+        // let the next sync pick it up. (Idempotent — re-fetching costs nothing.)
+        console.error(
+          `[cashfree] recon window ${from.toISOString().slice(0, 10)}..${to.toISOString().slice(0, 10)} ` +
+          `unavailable after ${WINDOW_ATTEMPTS} attempts (Cashfree internal_processing_error); other windows kept, will retry next sync:`,
+          err
+        );
+        return [];
       }
-      throw new Error(`Cashfree recon API error ${res.status}: ${body.slice(0, 200)}`);
     }
+    return [];
   }
 }
