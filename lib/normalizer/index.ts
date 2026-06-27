@@ -880,7 +880,7 @@ export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransac
     source: "payu",
     status,
     transaction_date: dateStr,
-    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit },
+    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
   };
 }
 
@@ -939,7 +939,7 @@ export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): Normalize
     source: "easebuzz",
     status,
     transaction_date: dateStr,
-    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit },
+    metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
   };
 }
 

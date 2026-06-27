@@ -240,7 +240,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     const headers = [
       "Date","Source","Connector","Type","Amount","Currency",
       "Amount (INR)","FX Rate","Status",
-      "Counterparty","Description","External ID","Category",
+      "Counterparty","Email","Phone","Description","External ID","Category",
       "Fees","Tax","Order ID","Payment ID","UTR","Phase",
     ];
     const csvRows = data.rows.map((r) => {
@@ -256,6 +256,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         r.fx_rate ?? "",
         r.status,
         r.counterparty_name ?? "",
+        m.email ?? "",
+        m.phone ?? "",
         (r.description ?? "").replace(/,/g, ";"),
         r.external_id ?? "",
         r.category ?? "",
@@ -441,6 +443,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
               <Th col="status" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Counterparty</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Email</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest min-w-[200px]">Description</th>
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">External ID</th>
               <Th col="category" label="Category" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
@@ -450,13 +454,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           <tbody>
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={13} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   No transactions found. Try adjusting the filters or run a sync first.
                 </td>
               </tr>
@@ -464,8 +468,12 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               rows.map((row) => {
                 const isExpanded = expanded.has(row.id);
                 const meta = row.metadata ?? {};
+                const email = meta.email ? String(meta.email) : null;
+                const phone = meta.phone ? String(meta.phone) : null;
+                // email/phone are promoted to their own columns, so drop them
+                // from the metadata expander to avoid duplication.
                 const metaKeys = Object.entries(meta).filter(
-                  ([, v]) => v !== null && v !== undefined && v !== ""
+                  ([k, v]) => v !== null && v !== undefined && v !== "" && k !== "email" && k !== "phone"
                 );
                 const expandable = metaKeys.length > 0;
 
@@ -549,6 +557,16 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         {row.counterparty_name ?? "—"}
                       </td>
 
+                      {/* Email (from metadata) */}
+                      <td className="px-3 py-2.5 text-muted-foreground max-w-[180px] truncate" title={email ?? undefined}>
+                        {email ?? "—"}
+                      </td>
+
+                      {/* Phone (from metadata) */}
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
+                        {phone ?? "—"}
+                      </td>
+
                       {/* Description */}
                       <td className="px-3 py-2.5 text-muted-foreground/70 max-w-[220px] truncate">
                         {row.description ?? "—"}
@@ -585,7 +603,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                     {/* Expanded metadata row */}
                     {isExpanded && (
                       <tr className="border-b border-border bg-accent/40">
-                        <td colSpan={13} className="px-4 pb-3 pt-2">
+                        <td colSpan={15} className="px-4 pb-3 pt-2">
                           <div className="flex flex-wrap gap-x-6 gap-y-1.5">
                             {metaKeys.map(([k, v]) => (
                               <div key={k} className="flex items-center gap-2 min-w-[160px]">
