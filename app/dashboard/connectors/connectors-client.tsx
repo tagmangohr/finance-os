@@ -350,7 +350,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const [disconnectingId, setDisconnectingId] = React.useState<string | null>(null);
   // Per-connector backfill progress (from sync_jobs), polled org-wide so the bar
   // is persistent — it shows ongoing backfills even after reload / cron-driven.
-  const [jobsProgress, setJobsProgress] = React.useState<Record<string, { active: boolean; percent: number; remaining: number }>>({});
+  const [jobsProgress, setJobsProgress] = React.useState<Record<string, { active: boolean; percent: number; remaining: number; processed: number }>>({});
   // Time-based catch-up % for the inline "Sync Latest" path (non-resumable
   // connectors). Gateways don't report a total count, so we show how far the
   // synced window has advanced from its start toward now — an honest proxy.
@@ -400,7 +400,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       try {
         const res = await fetch(`/api/connectors/jobs?org_id=${orgId}`);
         if (res.ok) {
-          const data = await res.json() as { connectors?: Record<string, { active: boolean; percent: number; remaining: number }> };
+          const data = await res.json() as { connectors?: Record<string, { active: boolean; percent: number; remaining: number; processed: number }> };
           const map = data.connectors ?? {};
           anyActive = Object.values(map).some((p) => p.active);
           if (!cancelled) {
@@ -935,18 +935,32 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
               const subtitle = cfg.email
                 || (inst.last_synced_at ? `Synced ${formatDate(inst.last_synced_at)}` : "Never synced");
 
-              // Unified sync %: queued backfills / resumable syncs report a true %
-              // via jobsProgress; inline "Sync Latest" reports a time-based catch-up %.
+              // Unified sync progress. Queued backfills report a job-level % (which
+              // can sit at 0 while one big window is mid-flight) plus a live count of
+              // rows pulled; inline "Sync Latest" reports a time-based catch-up %.
+              const jp = jobsProgress[inst.id];
               const pulse = !!completedPulse[inst.id];
-              const backfillActive = !!jobsProgress[inst.id]?.active;
+              const backfillActive = !!jp?.active;
               const incrPct = incrementalPct[inst.id];
-              const syncPct = pulse
+              const determinatePct = pulse
                 ? 100
-                : backfillActive
-                ? jobsProgress[inst.id].percent
+                : backfillActive && jp!.percent > 0
+                ? jp!.percent
                 : incrPct != null
                 ? incrPct
                 : null;
+              // While a backfill is genuinely working but still at 0% (no whole
+              // window done yet), show the live rows-synced count so it never looks
+              // frozen, and sweep the bar instead of leaving it dead at 0.
+              const processed = jp?.processed ?? 0;
+              const progressLabel = determinatePct != null
+                ? `${Math.round(determinatePct)}%`
+                : backfillActive
+                ? (processed > 0
+                    ? `${new Intl.NumberFormat("en-US", { notation: "compact" }).format(processed)} synced`
+                    : "syncing…")
+                : null;
+              const showSweep = determinatePct == null && (backfillActive || syncingId === inst.id);
 
               const isConfirming = confirmRemove?.id === inst.id;
 
@@ -968,9 +982,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         <p className="text-xs font-medium text-muted-foreground truncate">{inst.name}</p>
                         <p className="text-[10px] text-muted-foreground/70 truncate font-mono">{subtitle}</p>
                       </div>
-                      {syncPct != null && (
-                        <span className="text-[10px] font-semibold text-primary tabular-nums flex-shrink-0" title="Sync progress">
-                          {Math.round(syncPct)}%
+                      {progressLabel && (
+                        <span className="text-[10px] font-semibold text-primary tabular-nums flex-shrink-0 whitespace-nowrap" title="Sync progress">
+                          {progressLabel}
                         </span>
                       )}
                       <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -1029,9 +1043,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       Determinate (fills to %) for queued backfills; indeterminate
                       sweep for quick inline syncs (link / "sync latest"). */}
                   <SyncProgressBar
-                    determinate={syncPct != null}
-                    percent={syncPct ?? 0}
-                    indeterminate={syncPct == null && syncingId === inst.id}
+                    determinate={determinatePct != null}
+                    percent={determinatePct ?? 0}
+                    indeterminate={showSweep}
                   />
                 </div>
               );

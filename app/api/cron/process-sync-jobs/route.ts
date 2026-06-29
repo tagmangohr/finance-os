@@ -42,6 +42,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         `[cron/process-sync-jobs] worker=${worker} processed=${summary.processed} ` +
         `done=${summary.done} failed=${summary.failed} progressed=${summary.progressed}`
       );
+
+      // Continuous drain: if work is ready NOW, chain another pass immediately so a
+      // large backfill finishes in a tight loop instead of crawling between sparse
+      // cron ticks. Stops when nothing is ready (queue empty, or all jobs backing
+      // off into the future) — the every-minute cron remains the backstop.
+      const { count: ready } = await supabase
+        .from("sync_jobs")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pending")
+        .lte("run_after", new Date().toISOString());
+      // Chain only if this pass actually did work AND ready work remains. The
+      // `processed > 0` guard prevents a hot loop if the queue is empty or every
+      // job is locked by another worker (claimBatch returned nothing).
+      if ((ready ?? 0) > 0 && summary.processed > 0) {
+        await fetch(`${req.nextUrl.origin}/api/cron/process-sync-jobs`, {
+          headers: { authorization: `Bearer ${cronSecret}` },
+        }).catch(() => { /* fire-and-forget; cron tick is the backstop */ });
+      }
     } catch (err) {
       console.error(`[cron/process-sync-jobs] worker=${worker} drain failed:`, err);
     }
