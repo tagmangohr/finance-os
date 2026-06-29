@@ -95,10 +95,16 @@ interface ApiResponse {
 }
 
 interface SummaryResponse {
-  groups: Record<string, { count: number; amount: number }>;
-  // Payments card figures — CAPTURED (posted) payments only, so pending payments
-  // never inflate the card.
-  paymentsPosted?: { count: number; amount: number };
+  // Server-computed card totals (see the locked spec in summary/route.ts):
+  // Payments = completed+refunded, Settlements/Refunds = completed only,
+  // Disputes = all disputes raised. Pending counts toward none of them.
+  cards: {
+    payments:    { count: number; amount: number };
+    settlements: { count: number; amount: number };
+    refunds:     { count: number; amount: number };
+    disputes:    { count: number; amount: number };
+  };
+  groups: Record<string, { count: number; amount: number }>; // source-filter dropdown only
   totalCredits: number;
   totalDebits: number;
   totalFees: number;
@@ -181,24 +187,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const [loading, setLoading] = React.useState(false);
   const [summary, setSummary] = React.useState<SummaryResponse | null>(null);
 
-  // Bucket EVERY source in the summary into payment/refund/settlement/dispute via the
-  // generic categoriser — so the cards count all connectors' data with no per-gateway
-  // wiring (the bug where each new connector showed ₹0 until hand-added here).
-  const buckets = React.useMemo(() => {
-    const b: Record<SourceBucket, { count: number; amount: number }> = {
-      payment: { count: 0, amount: 0 }, refund: { count: 0, amount: 0 },
-      settlement: { count: 0, amount: 0 }, dispute: { count: 0, amount: 0 },
-      adjustment: { count: 0, amount: 0 },
-    };
-    if (summary) {
-      for (const [src, g] of Object.entries(summary.groups)) {
-        const k = categorizeSource(src);
-        b[k].count += g.count;
-        b[k].amount += g.amount;
-      }
-    }
-    return b;
-  }, [summary]);
+  // Card totals come straight from the server (summary.cards) per the locked spec
+  // in summary/route.ts — pending counts toward none of them.
 
   // Source filter options derived from the sources actually present — new connectors
   // appear automatically, no hardcoded per-gateway list.
@@ -453,26 +443,26 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <SummaryCard
             label="Payments"
-            count={summary.paymentsPosted?.count ?? buckets.payment.count}
-            amount={summary.paymentsPosted?.amount ?? buckets.payment.amount}
+            count={summary.cards.payments.count}
+            amount={summary.cards.payments.amount}
             colour="text-success"
           />
           <SummaryCard
             label="Settlements"
-            count={buckets.settlement.count}
-            amount={buckets.settlement.amount}
+            count={summary.cards.settlements.count}
+            amount={summary.cards.settlements.amount}
             colour="text-violet-400"
           />
           <SummaryCard
             label="Refunds"
-            count={buckets.refund.count}
-            amount={buckets.refund.amount}
+            count={summary.cards.refunds.count}
+            amount={summary.cards.refunds.amount}
             colour="text-orange-400"
           />
           <SummaryCard
             label="Disputes"
-            count={buckets.dispute.count}
-            amount={buckets.dispute.amount}
+            count={summary.cards.disputes.count}
+            amount={summary.cards.disputes.amount}
             colour="text-destructive"
           />
           <SummaryCard
