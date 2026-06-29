@@ -14,6 +14,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/auth/login");
 
+  // ── Force first-login password change ──────────────────────────────────────
+  // Admin-created users get a temp password + must_change_password flag. Until
+  // they set their own, every dashboard route bounces to the change-password
+  // screen (which lives OUTSIDE /dashboard, so this can't loop).
+  if (user.user_metadata?.must_change_password === true) {
+    redirect("/account/change-password");
+  }
+
   // ── Auto-activate any pending invites for this email ───────────────────────
   // Done BEFORE resolving the active org so a freshly-accepted invite is usable
   // immediately. Service client + try/catch so a missing org_members table (or

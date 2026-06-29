@@ -4,7 +4,7 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import {
-  UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, Trash2, Settings2, Check, Building2,
+  UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, User, Trash2, Settings2, Check, Building2, Copy, KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -48,6 +48,12 @@ export interface OrgGroup {
   members: OrgMember[];
 }
 
+// Response of POST /api/users — a member row plus one-time credentials.
+type CreateResponse = OrgMember & {
+  created: boolean;
+  credentials: { email: string; password: string } | null;
+};
+
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
 function Avatar({ name, email }: { name: string | null; email: string }) {
@@ -89,10 +95,40 @@ function PageChip({ label, active }: { label: string; active: boolean }) {
   );
 }
 
-// ─── Invite / Edit dialog ─────────────────────────────────────────────────────
+/** A read-only credential field with a one-click copy button. */
+function CopyField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = React.useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch { /* clipboard unavailable */ }
+  };
+  return (
+    <div>
+      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <code className="flex-1 min-w-0 truncate px-3 py-2 rounded-lg text-[13px] text-foreground bg-accent/60 border border-border font-mono">
+          {value}
+        </code>
+        <button
+          type="button"
+          onClick={copy}
+          title={copied ? "Copied!" : "Copy"}
+          className="flex-shrink-0 p-2 rounded-lg text-muted-foreground/70 hover:text-primary hover:bg-accent transition-all"
+        >
+          {copied ? <Check className="w-4 h-4 text-success" /> : <Copy className="w-4 h-4" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Create / Edit dialog ─────────────────────────────────────────────────────
 
 interface MemberDialogProps {
-  mode:    "invite" | "edit";
+  mode:    "create" | "edit";
   orgId:   string;
   orgName: string;
   member?: OrgMember;
@@ -101,12 +137,15 @@ interface MemberDialogProps {
 }
 
 function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: MemberDialogProps) {
+  const [fullName,   setFullName]   = React.useState(member?.full_name ?? "");
   const [email,      setEmail]      = React.useState(member?.invited_email ?? "");
   const [role,       setRole]       = React.useState<Role>(member?.role ?? "viewer");
   const [pageAccess, setPageAccess] = React.useState<string[]>(
     member?.page_access ?? ["dashboard", "revenue", "cashflow", "collections"]
   );
   const [saving, setSaving] = React.useState(false);
+  // Once a user is created, show their credentials instead of the form.
+  const [credentials, setCredentials] = React.useState<{ email: string; password: string } | null>(null);
 
   // Admins implicitly get all pages; viewers/managers use the explicit list.
   const restrictsPages  = role !== "admin";
@@ -122,18 +161,21 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   }
 
   const handleSave = async () => {
-    if (mode === "invite" && (!email.trim() || !email.includes("@"))) {
+    if (mode === "create" && (!email.trim() || !email.includes("@"))) {
       toast.error("Enter a valid email address");
       return;
     }
     setSaving(true);
     try {
       let res: Response;
-      if (mode === "invite") {
+      if (mode === "create") {
         res = await fetch("/api/users", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ org_id: orgId, email: email.trim(), role, page_access: effectiveAccess }),
+          body: JSON.stringify({
+            org_id: orgId, email: email.trim(), full_name: fullName.trim() || null,
+            role, page_access: effectiveAccess,
+          }),
         });
       } else {
         res = await fetch(`/api/users/${member!.id}`, {
@@ -144,14 +186,32 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
       }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
-      toast.success(mode === "invite" ? "Invite sent" : "Permissions updated");
-      onSaved(orgId, data as OrgMember);
+
+      if (mode === "edit") {
+        onSaved(orgId, data as OrgMember);
+        toast.success("Permissions updated");
+        onClose();
+        return;
+      }
+
+      // Create: update the list, then either show credentials or close.
+      const resp = data as CreateResponse;
+      onSaved(orgId, resp);
+      if (resp.credentials) {
+        setCredentials(resp.credentials);
+      } else {
+        // Existing account linked to the org — no new password to share.
+        toast.success("Added — they can sign in with their existing password.");
+        onClose();
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
       setSaving(false);
     }
   };
+
+  const title = credentials ? "User created" : mode === "create" ? "Create Team Member" : "Edit Permissions";
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -164,9 +224,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
           {/* Header */}
           <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
             <div>
-              <Dialog.Title className="text-[14px] font-semibold text-foreground">
-                {mode === "invite" ? "Invite Team Member" : "Edit Permissions"}
-              </Dialog.Title>
+              <Dialog.Title className="text-[14px] font-semibold text-foreground">{title}</Dialog.Title>
               <p className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
                 <Building2 className="w-3 h-3" /> {orgName}
               </p>
@@ -178,129 +236,170 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
             </Dialog.Close>
           </div>
 
-          <div className="px-5 py-4 space-y-4">
-            {/* Email (invite only) */}
-            {mode === "invite" && (
-              <div>
-                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
-                  Email Address
-                </label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSave()}
-                    placeholder="colleague@company.com"
-                    autoFocus
-                    className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
-                    style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
-                  />
+          {credentials ? (
+            /* ── Credentials view (shown once) ─────────────────────────────── */
+            <>
+              <div className="px-5 py-4 space-y-4">
+                <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-emerald-500/[0.07] border border-emerald-500/20">
+                  <KeyRound className="w-4 h-4 text-success mt-0.5 flex-shrink-0" />
+                  <p className="text-[11.5px] text-muted-foreground leading-relaxed">
+                    Account ready. <span className="font-semibold text-foreground">Copy these now</span> and share them
+                    securely — the password is shown only once. They&apos;ll be asked to set their own password on first login.
+                  </p>
+                </div>
+                <CopyField label="Email" value={credentials.email} />
+                <CopyField label="Temporary Password" value={credentials.password} />
+              </div>
+              <div className="flex gap-2.5 px-5 pb-5 pt-2">
+                <Button className="flex-1" onClick={onClose}>Done</Button>
+              </div>
+            </>
+          ) : (
+            /* ── Form view ─────────────────────────────────────────────────── */
+            <>
+              <div className="px-5 py-4 space-y-4">
+                {/* Name + Email (create only) */}
+                {mode === "create" && (
+                  <>
+                    <div>
+                      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
+                        Full Name <span className="font-medium text-muted-foreground/50 normal-case tracking-normal">(optional)</span>
+                      </label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
+                        <input
+                          type="text"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          placeholder="Jane Doe"
+                          autoFocus
+                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                          style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
+                        Email Address
+                      </label>
+                      <div className="relative">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
+                        <input
+                          type="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                          placeholder="colleague@company.com"
+                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                          style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Role */}
+                <div>
+                  <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
+                    Role
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(Object.keys(ROLE_META) as Role[]).map((r) => {
+                      const active = role === r;
+                      const { label, desc, Icon } = ROLE_META[r];
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => setRole(r)}
+                          className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
+                          style={{
+                            background: active ? "rgba(124,82,240,0.10)" : "hsl(var(--accent))",
+                            border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "hsl(var(--border))"}`,
+                          }}
+                        >
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-muted-foreground/70")} />
+                            <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
+                              {label}
+                            </span>
+                          </div>
+                          <span className="text-[9.5px] leading-tight text-muted-foreground/70">{desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Page access */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
+                      Page Access
+                    </label>
+                    {restrictsPages && (
+                      <button
+                        type="button"
+                        onClick={toggleAll}
+                        className="text-[10px] text-violet-400/70 hover:text-violet-400 transition-colors"
+                      >
+                        {pageAccess.length === PAGE_OPTIONS.length ? "Deselect all" : "Select all"}
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {PAGE_OPTIONS.map(({ value, label }) => {
+                      const on = effectiveAccess.includes(value);
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => togglePage(value)}
+                          disabled={!restrictsPages}
+                          className={cn(
+                            "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
+                            on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
+                               : "bg-accent/40 border border-border hover:bg-accent",
+                            !restrictsPages && "opacity-60"
+                          )}
+                        >
+                          <div className={cn(
+                            "w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0 border",
+                            on ? "bg-emerald-500/20 border-emerald-500/40" : "border-border"
+                          )}>
+                            {on && <Check className="w-2 h-2 text-success" />}
+                          </div>
+                          <span className={cn("text-[11.5px] font-medium", on ? "text-muted-foreground" : "text-muted-foreground/70")}>
+                            {label}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {!restrictsPages && (
+                    <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Admins always have access to all pages.</p>
+                  )}
+                  {role === "manager" && (
+                    <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
+                  )}
                 </div>
               </div>
-            )}
 
-            {/* Role */}
-            <div>
-              <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
-                Role
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(Object.keys(ROLE_META) as Role[]).map((r) => {
-                  const active = role === r;
-                  const { label, desc, Icon } = ROLE_META[r];
-                  return (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => setRole(r)}
-                      className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
-                      style={{
-                        background: active ? "rgba(124,82,240,0.10)" : "hsl(var(--accent))",
-                        border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "hsl(var(--border))"}`,
-                      }}
-                    >
-                      <div className="flex items-center gap-1.5 mb-0.5">
-                        <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-muted-foreground/70")} />
-                        <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
-                          {label}
-                        </span>
-                      </div>
-                      <span className="text-[9.5px] leading-tight text-muted-foreground/70">{desc}</span>
-                    </button>
-                  );
-                })}
+              {/* Footer */}
+              <div className="flex gap-2.5 px-5 pb-5 pt-2">
+                <Dialog.Close asChild>
+                  <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
+                    Cancel
+                  </Button>
+                </Dialog.Close>
+                <Button className="flex-1 gap-2" onClick={handleSave} disabled={saving}>
+                  {saving
+                    ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> {mode === "create" ? "Creating…" : "Saving…"}</>
+                    : mode === "create" ? "Create User" : "Save Changes"}
+                </Button>
               </div>
-            </div>
-
-            {/* Page access */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
-                  Page Access
-                </label>
-                {restrictsPages && (
-                  <button
-                    type="button"
-                    onClick={toggleAll}
-                    className="text-[10px] text-violet-400/70 hover:text-violet-400 transition-colors"
-                  >
-                    {pageAccess.length === PAGE_OPTIONS.length ? "Deselect all" : "Select all"}
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {PAGE_OPTIONS.map(({ value, label }) => {
-                  const on = effectiveAccess.includes(value);
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => togglePage(value)}
-                      disabled={!restrictsPages}
-                      className={cn(
-                        "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
-                        on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
-                           : "bg-accent/40 border border-border hover:bg-accent",
-                        !restrictsPages && "opacity-60"
-                      )}
-                    >
-                      <div className={cn(
-                        "w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0 border",
-                        on ? "bg-emerald-500/20 border-emerald-500/40" : "border-border"
-                      )}>
-                        {on && <Check className="w-2 h-2 text-success" />}
-                      </div>
-                      <span className={cn("text-[11.5px] font-medium", on ? "text-muted-foreground" : "text-muted-foreground/70")}>
-                        {label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-              {!restrictsPages && (
-                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Admins always have access to all pages.</p>
-              )}
-              {role === "manager" && (
-                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
-              )}
-            </div>
-          </div>
-
-          {/* Footer */}
-          <div className="flex gap-2.5 px-5 pb-5 pt-2">
-            <Dialog.Close asChild>
-              <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
-                Cancel
-              </Button>
-            </Dialog.Close>
-            <Button className="flex-1 gap-2" onClick={handleSave} disabled={saving}>
-              {saving
-                ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                : mode === "invite" ? "Send Invite" : "Save Changes"}
-            </Button>
-          </div>
+            </>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -389,10 +488,10 @@ function MemberRow({
 // ─── Per-org section ──────────────────────────────────────────────────────────
 
 function OrgSection({
-  group, onInvite, onEdit, onRevoke,
+  group, onCreate, onEdit, onRevoke,
 }: {
   group: OrgGroup;
-  onInvite: (orgId: string, orgName: string) => void;
+  onCreate: (orgId: string, orgName: string) => void;
   onEdit: (m: OrgMember) => void;
   onRevoke: (orgId: string, id: string) => void;
 }) {
@@ -412,15 +511,15 @@ function OrgSection({
             {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
           </span>
         </div>
-        <Button size="sm" className="gap-1.5 h-7 text-[11px]" onClick={() => onInvite(group.org.id, group.org.name)}>
-          <UserPlus className="w-3 h-3" /> Invite
+        <Button size="sm" className="gap-1.5 h-7 text-[11px]" onClick={() => onCreate(group.org.id, group.org.name)}>
+          <UserPlus className="w-3 h-3" /> Create User
         </Button>
       </div>
 
       <div className="p-3 space-y-1.5">
         {group.members.length === 0 ? (
           <p className="text-[12px] text-muted-foreground/70 text-center py-4">
-            No members yet — invite someone to {group.org.name}
+            No members yet — create a user for {group.org.name}
           </p>
         ) : (
           <>
@@ -437,7 +536,7 @@ function OrgSection({
 
 export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
   const [groups, setGroups] = React.useState<OrgGroup[]>(initialGroups);
-  const [invite, setInvite] = React.useState<{ orgId: string; orgName: string } | null>(null);
+  const [creating, setCreating] = React.useState<{ orgId: string; orgName: string } | null>(null);
   const [editing, setEditing] = React.useState<OrgMember | null>(null);
 
   const orgNameFor = (orgId: string) => groups.find((g) => g.org.id === orgId)?.org.name ?? "";
@@ -453,8 +552,8 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
           : [...g.members, updated],
       };
     }));
-    setInvite(null);
-    setEditing(null);
+    // Note: the dialog stays open after a create so it can show credentials;
+    // it closes itself via onClose. Edit mode closes immediately.
   }
 
   function handleRevoked(orgId: string, id: string) {
@@ -468,7 +567,7 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
       <div>
         <h1 className="text-[18px] font-bold text-foreground tracking-tight">Team</h1>
         <p className="text-[12px] text-muted-foreground/70 mt-0.5">
-          Invite teammates to any organisation you manage and control their role &amp; page access
+          Create users for any organisation you manage and control their role &amp; page access
         </p>
       </div>
 
@@ -477,7 +576,7 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
           <OrgSection
             key={g.org.id}
             group={g}
-            onInvite={(orgId, orgName) => setInvite({ orgId, orgName })}
+            onCreate={(orgId, orgName) => setCreating({ orgId, orgName })}
             onEdit={(m) => setEditing(m)}
             onRevoke={handleRevoked}
           />
@@ -485,15 +584,15 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
       </div>
 
       <p className="text-[11px] text-muted-foreground/70">
-        Pending invites activate automatically when the invitee signs in with that email address.
+        Creating a user makes a ready-to-use account — share the password shown, and they&apos;ll set their own on first login.
       </p>
 
-      {invite && (
+      {creating && (
         <MemberDialog
-          mode="invite"
-          orgId={invite.orgId}
-          orgName={invite.orgName}
-          onClose={() => setInvite(null)}
+          mode="create"
+          orgId={creating.orgId}
+          orgName={creating.orgName}
+          onClose={() => setCreating(null)}
           onSaved={handleSaved}
         />
       )}

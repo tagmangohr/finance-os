@@ -6,6 +6,7 @@ import {
   TrendingUp, Receipt, Zap, Wallet, Gauge, Coins, Flame, Sparkles, ArrowRight,
 } from "lucide-react";
 import { getFinancialSummary, getOrgId, orgHasConnectors } from "@/lib/data";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import type { DashboardSummary } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
@@ -133,6 +134,9 @@ function Unit({ label, value, color }: { label: string; value?: string; color?: 
 export default async function DashboardPage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
+  // A restricted member with no dashboard-tab access is redirected to their
+  // first allowed page (e.g. Connectors or Raw Data).
+  await requireRouteAccess("dashboard");
 
   const summary = await getFinancialSummary();
   // Sample preview only when nothing is connected yet; a connected org sees its

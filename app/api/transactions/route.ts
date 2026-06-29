@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { hasPageAccessForOrg } from "@/lib/org/page-access";
 import {
   parsePagination,
   parseTransactionSort,
@@ -39,6 +40,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const auth = await requireOrgAccess(orgId);
   if (isAuthFailure(auth)) return auth.error;
+  // Raw Data is gated by the "data" page permission — block restricted members
+  // from pulling transactions via the API directly.
+  if (!(await hasPageAccessForOrg(orgId, "data"))) {
+    return NextResponse.json({ error: "Forbidden — no access to Raw Data" }, { status: 403 });
+  }
 
   let query = auth.supabase
     .from("transactions")

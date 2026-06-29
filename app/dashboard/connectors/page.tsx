@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { generateSyncToken } from "@/lib/api/sync-token";
 import { redactConnector } from "@/lib/connectors/secret-fields";
 import { ConnectorsClient } from "./connectors-client";
@@ -17,6 +18,8 @@ export default async function ConnectorsPage() {
   const { userId, org } = await getActiveOrg();
   if (!userId) redirect("/auth/login");
   if (!org) redirect("/onboarding");
+  // Restricted members without "connectors" access can't reach this route by URL.
+  await requireRouteAccess("connectors");
 
   // ── Fetch API-key connectors + drive connections in parallel ───────────────
   const [{ data: connectors }, { data: driveConnections }] = await Promise.all([

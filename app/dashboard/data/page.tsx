@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { DataExplorerClient } from "./data-client";
 
 export default async function DataPage() {
@@ -11,6 +12,8 @@ export default async function DataPage() {
   const { userId, org } = await getActiveOrg();
   if (!userId) redirect("/auth/login");
   if (!org) redirect("/onboarding");
+  // Restricted members without "data" access can't reach Raw Data by URL.
+  await requireRouteAccess("data");
 
   // Fetch all connectors so the filter dropdown is populated
   const { data: connectors } = await supabase

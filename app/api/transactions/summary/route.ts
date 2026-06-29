@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { hasPageAccessForOrg } from "@/lib/org/page-access";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { baseAmt } from "@/lib/utils";
@@ -25,6 +26,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const auth = await requireOrgAccess(orgId);
   if (isAuthFailure(auth)) return auth.error;
+  if (!(await hasPageAccessForOrg(orgId, "data"))) {
+    return NextResponse.json({ error: "Forbidden — no access to Raw Data" }, { status: 403 });
+  }
 
   // Build the filtered query fresh each page (Supabase caps a single .select at
   // 1000 rows — summing only the first page made "All accounts" smaller than one
