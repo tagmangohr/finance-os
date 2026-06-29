@@ -726,6 +726,11 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
   const type = (ev.event_type ?? "").toUpperCase();
   if (!type) return null;
 
+  // Disputes are owned by the real-time webhook (keyed by a stable dispute_id).
+  // Recon has no dispute_id, so emitting disputes here would create duplicate
+  // dispute rows under a different id. Skip them — the webhook is the sole source.
+  if (type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION") return null;
+
   // Direction from sale_type; PAYMENT is a credit by default.
   const credit = ev.sale_type ? ev.sale_type.toUpperCase() === "CREDIT" : type === "PAYMENT";
 
@@ -801,9 +806,10 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
 
 // ─── Cashfree webhook payload (real-time) ─────────────────────────────────────
 // The webhook payload shape differs from the recon report (data.payment / data.refund
-// instead of event_details). external_ids MATCH the recon normalizer (cf_pay_…,
-// cf_refund_…) so real-time webhook rows dedup cleanly against the batch backfill.
-// Disputes are intentionally left to the recon backfill (different id scheme).
+// instead of event_details). Payment/refund external_ids MATCH the recon normalizer
+// (cf_pay_…, cf_refund_…) so they dedup cleanly against the batch backfill.
+// Disputes are keyed by their stable dispute_id (cf_dispute_<id>); recon does NOT
+// emit disputes (it has no dispute_id), so the webhook is their sole source.
 export type CashfreeWebhookPayload = {
   type?: string;
   event_time?: string;
@@ -826,6 +832,21 @@ export type CashfreeWebhookPayload = {
       refund_status?: string;
       processed_at?: string;
     };
+    // Dispute / chargeback events (DISPUTE_CREATED | DISPUTE_UPDATED | DISPUTE_CLOSED).
+    dispute?: {
+      dispute_id?: string | number;
+      dispute_type?: string;          // DISPUTE | CHARGEBACK | PRE_ARBITRATION | ARBITRATION | RETRIEVAL
+      reason_code?: string | null;
+      reason_description?: string | null;
+      dispute_amount?: number;
+      dispute_amount_currency?: string;
+      dispute_status?: string;        // e.g. DISPUTE_CREATED, CHARGEBACK_MERCHANT_WON, *_MERCHANT_LOST
+      created_at?: string;
+      updated_at?: string;
+      respond_by?: string;
+      resolved_at?: string;
+    };
+    order_details?: { order_id?: string; cf_payment_id?: string | number; order_amount?: number; order_currency?: string };
   };
 };
 
@@ -880,7 +901,49 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
     };
   }
 
-  return null; // disputes / others → handled by the recon backfill
+  if (type.startsWith("DISPUTE")) {
+    const disp = d.dispute ?? {};
+    if (disp.dispute_id == null) return null;
+    const od = d.order_details ?? {};
+    const cust = d.customer_details;
+    // dispute_status carries the outcome, e.g. CHARGEBACK_MERCHANT_WON / *_MERCHANT_LOST.
+    const st = (disp.dispute_status ?? "").toUpperCase();
+    const status: NormalizedTransaction["status"] =
+      st.includes("WON") ? "completed"
+      : (st.includes("LOST") || st.includes("ACCEPTED") || st.includes("INSUFFICIENT")) ? "failed"
+      : "pending"; // created / docs_received / under_review → still open
+    // resolved_at on close, else the most recent timestamp we have.
+    const when = disp.resolved_at || disp.updated_at || disp.created_at || p.event_time || "";
+    const kind = (disp.dispute_type ?? "Dispute").replace(/_/g, " ");
+    return {
+      external_id: `cf_dispute_${disp.dispute_id}`,
+      type: "debit",
+      amount: Number(disp.dispute_amount ?? od.order_amount ?? 0),
+      currency: (disp.dispute_amount_currency ?? od.order_currency ?? "INR").toUpperCase(),
+      category: "dispute",
+      counterparty_name: cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null,
+      description: `${kind}${disp.reason_description ? ` · ${disp.reason_description}` : ""}${od.order_id ? ` · order ${od.order_id}` : ""}`,
+      source: "cashfree_dispute",
+      status,
+      transaction_date: (when || "").slice(0, 10),
+      transaction_at: gatewayTimeToIso(when),
+      metadata: {
+        event_type: type,
+        dispute_id: disp.dispute_id,
+        dispute_type: disp.dispute_type ?? null,
+        dispute_status: disp.dispute_status ?? null,
+        reason_code: disp.reason_code ?? null,
+        reason_description: disp.reason_description ?? null,
+        respond_by: disp.respond_by ?? null,
+        order_id: od.order_id ?? null,
+        cf_payment_id: od.cf_payment_id ?? null,
+        email: cust?.customer_email ?? null,
+        phone: cust?.customer_phone ?? null,
+      },
+    };
+  }
+
+  return null; // other event types → ignored
 }
 
 // ─── PayU normalizers ─────────────────────────────────────────────────────────
