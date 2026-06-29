@@ -9,6 +9,7 @@ import {
   type ExistingTransactionByExternalId,
 } from "@/lib/db/dedup";
 import type { NormalizedTransaction } from "@/lib/normalizer";
+import { categorizeSource } from "@/lib/finance/transaction-status";
 import { BASE_CURRENCY } from "@/lib/utils";
 import { enrichRowsWithFx } from "@/lib/fx/rates";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
@@ -433,7 +434,80 @@ export async function persistTransactions(
   }
   await runPooled(updateThunks, UPDATE_CONCURRENCY);
 
+  // Refunds carry no customer of their own — a refund references a payment, not a
+  // person. Inherit the customer (name/email/phone) from the linked payment row so
+  // refunds show who they belong to. Runs for webhooks AND syncs (real-time).
+  // Non-fatal: a failure here must never break the core persist (e.g. a webhook 200).
+  try {
+    await enrichRefundCustomers(
+      supabase,
+      orgId,
+      rows.filter((r) => categorizeSource(r.source) === "refund")
+    );
+  } catch (err) {
+    console.error("[persist] refund customer enrichment failed (non-fatal):", err);
+  }
+
   return out;
+}
+
+/**
+ * Copy the customer (name/email/phone) onto refund rows from the payment they
+ * reference. Razorpay refunds link via metadata.payment_id (pay_xxx); Cashfree
+ * via metadata.cf_payment_id (→ cf_pay_<id>). Only fills gaps — never overwrites a
+ * value the refund already has. Idempotent.
+ */
+async function enrichRefundCustomers(
+  supabase: ServiceClient,
+  orgId: string,
+  refundRows: TransactionInsert[]
+): Promise<void> {
+  const linkByRefund = new Map<string, string>(); // refund external_id → payment external_id
+  for (const r of refundRows) {
+    if (!r.external_id) continue;
+    const m = (r.metadata ?? {}) as Record<string, unknown>;
+    let payExt: string | null = null;
+    if (typeof m.payment_id === "string" && m.payment_id) payExt = m.payment_id;
+    else if (m.cf_payment_id != null) payExt = `cf_pay_${m.cf_payment_id}`;
+    if (payExt) linkByRefund.set(r.external_id, payExt);
+  }
+  if (linkByRefund.size === 0) return;
+
+  const { data: pays } = await supabase
+    .from("transactions")
+    .select("external_id, counterparty_name, metadata")
+    .eq("org_id", orgId)
+    .in("external_id", [...new Set(linkByRefund.values())]);
+  const payByExt = new Map((pays ?? []).map((p) => [p.external_id as string, p]));
+
+  const { data: refs } = await supabase
+    .from("transactions")
+    .select("id, external_id, counterparty_name, metadata")
+    .eq("org_id", orgId)
+    .in("external_id", [...linkByRefund.keys()]);
+
+  const thunks: Array<() => Promise<void>> = [];
+  for (const ref of refs ?? []) {
+    const pay = payByExt.get(linkByRefund.get(ref.external_id as string) ?? "");
+    if (!pay) continue;
+    const rm = (ref.metadata ?? {}) as Record<string, unknown>;
+    const pm = (pay.metadata ?? {}) as Record<string, unknown>;
+    const curEmail = (rm.email as string | null | undefined) ?? null;
+    const curPhone = (rm.phone as string | null | undefined) ?? null;
+    const name = ref.counterparty_name ?? (pay.counterparty_name as string | null) ?? null;
+    const email = curEmail ?? (pm.email as string | null | undefined) ?? null;
+    const phone = curPhone ?? (pm.phone as string | null | undefined) ?? null;
+    if (name === (ref.counterparty_name ?? null) && email === curEmail && phone === curPhone) continue; // nothing to fill
+    const metadata = { ...rm, email, phone };
+    thunks.push(async () => {
+      await supabase
+        .from("transactions")
+        .update({ counterparty_name: name, metadata: metadata as import("@/lib/supabase/types").Json })
+        .eq("id", ref.id as string)
+        .eq("org_id", orgId);
+    });
+  }
+  await runPooled(thunks, UPDATE_CONCURRENCY);
 }
 
 /**
