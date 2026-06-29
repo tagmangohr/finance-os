@@ -96,6 +96,9 @@ interface ApiResponse {
 
 interface SummaryResponse {
   groups: Record<string, { count: number; amount: number }>;
+  // Payments card figures — CAPTURED (posted) payments only, so pending payments
+  // never inflate the card.
+  paymentsPosted?: { count: number; amount: number };
   totalCredits: number;
   totalDebits: number;
   totalFees: number;
@@ -230,8 +233,18 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     return params;
   }, [orgId, connectorId, source, txType, from, to, debouncedSearch]);
 
+  // Latest-wins guards: a new fetch aborts the previous in-flight one so a slow
+  // earlier response can never overwrite a newer one (the stale-card race), and
+  // redundant requests are cancelled (no lag under rapid filter changes).
+  const dataAbort = React.useRef<AbortController | null>(null);
+  const summaryAbort = React.useRef<AbortController | null>(null);
+  const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
+
   // Fetch table rows
   const fetchData = React.useCallback(async () => {
+    dataAbort.current?.abort();
+    const ctrl = new AbortController();
+    dataAbort.current = ctrl;
     setLoading(true);
     try {
       const params = buildFilterParams();
@@ -240,27 +253,34 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
       params.set("sort", sortCol);
       params.set("order", sortAsc ? "asc" : "desc");
 
-      const res = await fetch(`/api/transactions?${params}`);
+      const res = await fetch(`/api/transactions?${params}`, { signal: ctrl.signal });
       if (!res.ok) throw new Error(await res.text());
       const data: ApiResponse = await res.json();
       setRows(data.rows);
       setTotal(data.total);
     } catch (e) {
+      if (isAbort(e)) return; // superseded by a newer request — ignore
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!ctrl.signal.aborted) setLoading(false);
     }
   }, [buildFilterParams, offset, sortCol, sortAsc]);
 
   // Fetch summary cards — re-runs whenever filters change (not pagination/sort)
   const fetchSummary = React.useCallback(async () => {
+    summaryAbort.current?.abort();
+    const ctrl = new AbortController();
+    summaryAbort.current = ctrl;
     try {
       const params = buildFilterParams();
-      const res = await fetch(`/api/transactions/summary?${params}`);
+      const res = await fetch(`/api/transactions/summary?${params}`, { signal: ctrl.signal });
       if (!res.ok) return;
       const data: SummaryResponse = await res.json();
       setSummary(data);
-    } catch { /* non-critical */ }
+    } catch (e) {
+      if (isAbort(e)) return; // superseded — keep the newer request's result
+      /* non-critical */
+    }
   }, [buildFilterParams]);
 
   React.useEffect(() => { fetchData(); }, [fetchData]);
@@ -433,8 +453,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
           <SummaryCard
             label="Payments"
-            count={buckets.payment.count}
-            amount={buckets.payment.amount}
+            count={summary.paymentsPosted?.count ?? buckets.payment.count}
+            amount={summary.paymentsPosted?.amount ?? buckets.payment.amount}
             colour="text-success"
           />
           <SummaryCard

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { hasPageAccessForOrg } from "@/lib/org/page-access";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
-import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
+import { POSTED_TRANSACTION_STATUSES, isTransferSource, categorizeSource } from "@/lib/finance/transaction-status";
 import { baseAmt } from "@/lib/utils";
 
 export const maxDuration = 60;
@@ -57,6 +57,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const groups: Record<string, { count: number; amount: number }> = {};
   let totalFees = 0, totalCredits = 0, totalDebits = 0, totalPayments = 0, operationalDebits = 0, total = 0;
+  // Payments card = CAPTURED money only (posted payment-category rows). Tracked
+  // apart from `groups` so the source filter + other cards still reflect all
+  // non-failed activity, while pending payments never inflate Payments.
+  let paymentsPostedCount = 0, paymentsPostedAmount = 0;
 
   const PAGE = 1000;
   for (let offset = 0; ; offset += PAGE) {
@@ -71,14 +75,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       // move already-counted charge money to the bank, not income/expense.
       const transfer = isTransferSource(row.source as string);
       const key = row.source as string;
+      const posted = POSTED_TRANSACTION_STATUSES.includes(row.status as string);
+
+      // Per-source tallies (drive the source filter + the settlement/refund/
+      // dispute cards): all non-failed rows, matching the table — unchanged.
       (groups[key] ??= { count: 0, amount: 0 });
       groups[key].count++;
       groups[key].amount += amt;
 
+      // Payments card = CAPTURED money only — a pending payment hasn't been
+      // collected, so exclude it from the Payments count AND amount.
+      if (posted && categorizeSource(key) === "payment") {
+        paymentsPostedCount++;
+        paymentsPostedAmount += amt;
+      }
+
       // Financial totals (net / credits / debits / fees) only count POSTED rows —
       // pending settlements/disputes are real activity (shown in the cards above) but
       // must not move Net Flow until settled.
-      if (!POSTED_TRANSACTION_STATUSES.includes(row.status as string)) continue;
+      if (!posted) continue;
 
       if (row.type === "credit") {
         totalCredits += amt;
@@ -105,6 +120,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({
     groups,
+    paymentsPosted: { count: paymentsPostedCount, amount: paymentsPostedAmount },
     totalCredits,
     totalDebits,
     totalFees,
