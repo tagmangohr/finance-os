@@ -14,6 +14,7 @@ export type NormalizedTransaction = {
   source: string;
   status: "pending" | "completed" | "failed" | "refunded";
   transaction_date: string; // YYYY-MM-DD
+  transaction_at?: string | null; // full UTC ISO timestamp (the precise transaction time)
   metadata: Record<string, unknown>;
   // Base-currency (INR) equivalent. Set when the connector can provide it
   // (e.g. Stripe's settled balance-transaction amount). When omitted, the sync
@@ -219,6 +220,24 @@ export function parseDateString(raw: string): string {
   return trimmed;
 }
 
+// Full transaction timestamp as a UTC ISO string (for the precise Time column).
+// Unlike transaction_date (date-only), this preserves the time the gateway reported.
+function unixToIso(ts: number): string {
+  return new Date(ts * 1000).toISOString();
+}
+
+// Parse a gateway datetime string to a UTC ISO string. Strings carrying a tz
+// offset (e.g. Cashfree "…+05:30") are respected; bare "YYYY-MM-DD HH:mm:ss"
+// values (PayU/Paytm/Easebuzz) are IST, so we tag them +05:30 before converting.
+function gatewayTimeToIso(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const t = s.trim();
+  if (!t) return null;
+  const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(t);
+  const d = new Date(hasTz ? t : `${t.replace(" ", "T")}+05:30`);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 function unixToDateString(ts: number): string {
   // Use IST (Asia/Kolkata, UTC+5:30) so transaction dates match what Razorpay /
   // Stripe show in their dashboards.  toISOString() always returns UTC, which
@@ -266,6 +285,7 @@ export function normalizeRazorpayPayment(
     source: "razorpay",
     status,
     transaction_date: unixToDateString(payment.created_at),
+    transaction_at: unixToIso(payment.created_at),
     metadata: {
       method: payment.method,
       order_id: payment.order_id,
@@ -310,6 +330,7 @@ export function normalizeRazorpayPayout(
     source: "razorpay_payout",
     status,
     transaction_date: unixToDateString(payout.created_at),
+    transaction_at: unixToIso(payout.created_at),
     metadata: {
       fund_account_id: payout.fund_account_id,
       mode: payout.mode,
@@ -352,6 +373,7 @@ export function normalizeRazorpayDispute(
     source: "razorpay_dispute",
     status,
     transaction_date: unixToDateString(dispute.created_at),
+    transaction_at: unixToIso(dispute.created_at),
     metadata: {
       payment_id: dispute.payment_id,
       phase: dispute.phase,
@@ -389,6 +411,7 @@ export function normalizeRazorpayRefund(
     source: "razorpay_refund",
     status,
     transaction_date: unixToDateString(refund.created_at),
+    transaction_at: unixToIso(refund.created_at),
     metadata: {
       payment_id: refund.payment_id,
       receipt: refund.receipt,
@@ -413,6 +436,7 @@ export function normalizeRazorpaySettlement(
     source: "razorpay_settlement",
     status: settlement.status === "processed" ? "completed" : "pending",
     transaction_date: unixToDateString(settlement.created_at),
+    transaction_at: unixToIso(settlement.created_at),
     metadata: {
       fees: settlement.fees / 100,
       tax: settlement.tax / 100,
@@ -497,6 +521,7 @@ export function normalizeStripeCharge(
     source: "stripe",
     status,
     transaction_date: unixToDateString(charge.created),
+    transaction_at: unixToIso(charge.created),
     amount_base,
     base_currency,
     fx_rate,
@@ -546,6 +571,7 @@ export function normalizeStripePayout(
     source: "stripe_payout",
     status,
     transaction_date: unixToDateString(payout.created),
+    transaction_at: unixToIso(payout.created),
     metadata: {
       arrival_date: payout.arrival_date,
       stripe_metadata: payout.metadata,
@@ -575,6 +601,7 @@ export function normalizeStripeDispute(
     source: "stripe_dispute",
     status,
     transaction_date: unixToDateString(dispute.created),
+    transaction_at: unixToIso(dispute.created),
     metadata: {
       dispute_status: dispute.status,
       charge: dispute.charge,
@@ -759,6 +786,7 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
     source,
     status,
     transaction_date: when.slice(0, 10),
+    transaction_at: gatewayTimeToIso(when),
     metadata: {
       event_type: type,
       order_id: e.order_details?.order_id ?? null,
@@ -825,6 +853,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       source: "cashfree",
       status,
       transaction_date: (pay.payment_time ?? p.event_time ?? "").slice(0, 10),
+      transaction_at: gatewayTimeToIso(pay.payment_time ?? p.event_time),
       metadata: { event_type: type, order_id: order.order_id ?? null, cf_payment_id: pay.cf_payment_id, email: cust?.customer_email ?? null, phone: cust?.customer_phone ?? null },
     };
   }
@@ -846,6 +875,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       source: "cashfree_refund",
       status,
       transaction_date: (r.processed_at ?? p.event_time ?? "").slice(0, 10),
+      transaction_at: gatewayTimeToIso(r.processed_at ?? p.event_time),
       metadata: { event_type: type, order_id: r.order_id ?? null, cf_refund_id: r.cf_refund_id ?? null },
     };
   }
@@ -880,6 +910,7 @@ export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransac
     source: "payu",
     status,
     transaction_date: dateStr,
+    transaction_at: gatewayTimeToIso(tx.addedon),
     metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
   };
 }
@@ -908,6 +939,7 @@ export function normalizePaytmTransaction(tx: PaytmTransaction): NormalizedTrans
     source: "paytm",
     status,
     transaction_date: dateStr,
+    transaction_at: gatewayTimeToIso(tx.txnDate),
     metadata: { orderId: tx.orderId, txnId: tx.txnId, paymentMode: tx.paymentMode, bankTxnId: tx.bankTxnId, responseCode: tx.responseCode },
   };
 }
@@ -939,6 +971,7 @@ export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): Normalize
     source: "easebuzz",
     status,
     transaction_date: dateStr,
+    transaction_at: gatewayTimeToIso(tx.addedon),
     metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
   };
 }

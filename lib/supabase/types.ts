@@ -59,12 +59,13 @@ export interface Database {
           source: string;
           status: "pending" | "completed" | "failed" | "refunded";
           transaction_date: string;
+          transaction_at: string | null;
           metadata: Json;
           created_at: string;
         };
-        // New multi-currency columns are optional on insert (nullable, with sane
-        // defaults filled by the sync layer) so existing inserters don't break.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate">>;
+        // New multi-currency columns + transaction_at are optional on insert
+        // (nullable, filled by the sync layer) so existing inserters don't break.
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       entities: {

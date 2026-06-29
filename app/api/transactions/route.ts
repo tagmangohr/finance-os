@@ -49,7 +49,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let query = auth.supabase
     .from("transactions")
     .select(
-      `id, transaction_date, source, type, amount, currency, status,
+      `id, transaction_date, transaction_at, source, type, amount, currency, status,
        amount_base, base_currency, fx_rate,
        counterparty_name, description, external_id, category, metadata,
        connector_id,

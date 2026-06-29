@@ -69,6 +69,7 @@ interface ConnectorSummary {
 interface TxRow {
   id: string;
   transaction_date: string;
+  transaction_at: string | null;
   source: string;
   type: "credit" | "debit";
   amount: number;
@@ -157,6 +158,11 @@ const STATUS_COLOURS: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
+// IST (Asia/Kolkata) calendar date, N days ago, as YYYY-MM-DD. Used for the
+// default filter so the page lands on the last 7 days.
+const istDate = (daysAgo = 0) =>
+  new Date(Date.now() - daysAgo * 86_400_000).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface DataExplorerClientProps {
@@ -171,8 +177,9 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const [connectorId, setConnectorId] = React.useState("");
   const [source, setSource] = React.useState("");
   const [txType, setTxType] = React.useState("");
-  const [from, setFrom] = React.useState("");
-  const [to, setTo] = React.useState("");
+  // Default to the last 7 days (today + 6 prior, IST). Cleared → all dates.
+  const [from, setFrom] = React.useState(() => istDate(6));
+  const [to, setTo] = React.useState(() => istDate(0));
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
 
@@ -291,7 +298,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     const data: ApiResponse = await res.json();
 
     const headers = [
-      "Date","Source","Connector","Type","Amount","Currency",
+      "Date","Time (IST)","Source","Connector","Type","Amount","Currency",
       "Amount (INR)","FX Rate","Status",
       "Counterparty","Email","Phone","Description","External ID","Category",
       "Fees","Tax","Order ID","Payment ID","UTR","Phase",
@@ -300,6 +307,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
       const m = r.metadata ?? {};
       return [
         r.transaction_date,
+        fmtTime(r.transaction_at),
         r.source,
         r.connectors?.name ?? "",
         r.type,
@@ -353,6 +361,20 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
+
+  // Transaction time in IST, 24-hour (HH:mm). Null for rows without a captured
+  // timestamp (e.g. CSV imports or historical rows not yet backfilled).
+  const fmtTime = (iso: string | null) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleTimeString("en-GB", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  };
 
   const fmtAmount = (amount: number, currency: string, type: "credit" | "debit") => {
     const sign = type === "credit" ? "+" : "−";
@@ -488,6 +510,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           <thead>
             <tr className="border-b border-border bg-accent/40">
               <Th col="transaction_date" label="Date" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
+              <Th col="transaction_at" label="Time" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="source" label="Source" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Connector</th>
               <Th col="type" label="Type" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
@@ -507,13 +530,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           <tbody>
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={16} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={16} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   No transactions found. Try adjusting the filters or run a sync first.
                 </td>
               </tr>
@@ -543,6 +566,11 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                       {/* Date */}
                       <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
                         {row.transaction_date}
+                      </td>
+
+                      {/* Time (IST, 24h) */}
+                      <td className="px-3 py-2.5 text-muted-foreground/70 whitespace-nowrap tabular-nums">
+                        {fmtTime(row.transaction_at)}
                       </td>
 
                       {/* Source badge */}
@@ -664,7 +692,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                     {/* Expanded metadata row */}
                     {isExpanded && (
                       <tr className="border-b border-border bg-accent/40">
-                        <td colSpan={15} className="px-4 pb-3 pt-2">
+                        <td colSpan={16} className="px-4 pb-3 pt-2">
                           <div className="flex flex-wrap gap-x-6 gap-y-1.5">
                             {metaKeys.map(([k, v]) => (
                               <div key={k} className="flex items-center gap-2 min-w-[160px]">

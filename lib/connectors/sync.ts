@@ -309,6 +309,7 @@ function toInsertRows(
     source: tx.source,
     status: tx.status,
     transaction_date: tx.transaction_date,
+    transaction_at: tx.transaction_at ?? null,
     metadata: tx.metadata as import("@/lib/supabase/types").Json,
     };
   });
@@ -328,6 +329,7 @@ function toRefreshFields(row: TransactionInsert): TransactionUpdate {
     source: row.source,
     status: row.status,
     transaction_date: row.transaction_date,
+    transaction_at: row.transaction_at ?? null,
     metadata: row.metadata,
   };
 }

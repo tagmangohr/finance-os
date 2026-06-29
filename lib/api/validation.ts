@@ -22,6 +22,7 @@ export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;
 
 const TRANSACTION_SORT_COLUMNS = new Set([
   "transaction_date",
+  "transaction_at",
   "amount",
   "source",
   "type",
