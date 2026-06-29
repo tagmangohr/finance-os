@@ -835,6 +835,7 @@ export type CashfreeWebhookPayload = {
     // Dispute / chargeback events (DISPUTE_CREATED | DISPUTE_UPDATED | DISPUTE_CLOSED).
     dispute?: {
       dispute_id?: string | number;
+      cf_dispute_id?: string | number; // the disputes LIST API names it cf_dispute_id; treat as canonical
       dispute_type?: string;          // DISPUTE | CHARGEBACK | PRE_ARBITRATION | ARBITRATION | RETRIEVAL
       reason_code?: string | null;
       reason_description?: string | null;
@@ -903,7 +904,8 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
 
   if (type.startsWith("DISPUTE")) {
     const disp = d.dispute ?? {};
-    if (disp.dispute_id == null) return null;
+    const disputeId = disp.cf_dispute_id ?? disp.dispute_id; // cf_dispute_id is canonical
+    if (disputeId == null) return null;
     const od = d.order_details ?? {};
     const cust = d.customer_details;
     // dispute_status carries the outcome, e.g. CHARGEBACK_MERCHANT_WON / *_MERCHANT_LOST.
@@ -916,10 +918,10 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
     const when = disp.resolved_at || disp.updated_at || disp.created_at || p.event_time || "";
     const kind = (disp.dispute_type ?? "Dispute").replace(/_/g, " ");
     return {
-      external_id: `cf_dispute_${disp.dispute_id}`,
+      external_id: `cf_dispute_${disputeId}`,
       type: "debit",
       amount: Number(disp.dispute_amount ?? od.order_amount ?? 0),
-      currency: (disp.dispute_amount_currency ?? od.order_currency ?? "INR").toUpperCase(),
+      currency: (disp.dispute_amount_currency || od.order_currency || "INR").toUpperCase(),
       category: "dispute",
       counterparty_name: cust?.customer_name ?? cust?.customer_email ?? cust?.customer_phone ?? null,
       description: `${kind}${disp.reason_description ? ` · ${disp.reason_description}` : ""}${od.order_id ? ` · order ${od.order_id}` : ""}`,
@@ -929,7 +931,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       transaction_at: gatewayTimeToIso(when),
       metadata: {
         event_type: type,
-        dispute_id: disp.dispute_id,
+        dispute_id: disputeId,
         dispute_type: disp.dispute_type ?? null,
         dispute_status: disp.dispute_status ?? null,
         reason_code: disp.reason_code ?? null,
