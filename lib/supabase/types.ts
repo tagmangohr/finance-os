@@ -39,6 +39,26 @@ export interface Database {
         Insert: Omit<Database["public"]["Tables"]["connectors"]["Row"], "id" | "created_at">;
         Update: Partial<Database["public"]["Tables"]["connectors"]["Insert"]>;
       };
+      webhook_events: {
+        Row: {
+          id: string;
+          received_at: string;
+          provider: string;
+          event_type: string | null;
+          signature_ok: boolean;
+          outcome: "missing_headers" | "signature_failed" | "bad_json" | "ignored" | "persisted" | "persist_error";
+          connector_id: string | null;
+          org_id: string | null;
+          external_id: string | null;
+          order_id: string | null;
+          amount: number | null;
+          status: string | null;
+          error: string | null;
+          payload: Json | null;
+        };
+        Insert: Omit<Database["public"]["Tables"]["webhook_events"]["Row"], "id" | "received_at"> & { received_at?: string };
+        Update: Partial<Database["public"]["Tables"]["webhook_events"]["Insert"]>;
+      };
       transactions: {
         Row: {
           id: string;
