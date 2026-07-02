@@ -39,8 +39,11 @@ export class StripeConnector {
     const out: { chargeId: string; fee: number }[] = [];
     let startingAfter: string | undefined;
     while (Date.now() < opts.deadlineMs) {
+      // No `type` filter: a charge's balance transaction is type "charge" for
+      // classic charges but "payment" for PaymentIntent-based ones — filtering to
+      // "charge" silently drops the latter. We instead key on the source id prefix
+      // (ch_/py_), which captures both and naturally excludes refunds/payouts.
       const page = await this.stripe.balanceTransactions.list({
-        type: "charge",
         created: { gte: opts.sinceSec },
         limit: 100,
         ...(startingAfter ? { starting_after: startingAfter } : {}),
