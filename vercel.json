@@ -1,5 +1,6 @@
 {
   "crons": [
+    { "path": "/api/cron/nightly-sync",      "schedule": "0 19 * * *" },
     { "path": "/api/cron/process-sync-jobs", "schedule": "* * * * *"  },
     { "path": "/api/cron/fx-backfill",       "schedule": "*/5 * * * *" },
     { "path": "/api/cron/drive-sync",        "schedule": "0 * * * *"  },
