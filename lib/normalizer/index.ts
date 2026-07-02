@@ -734,12 +734,16 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
   // Direction from sale_type; PAYMENT is a credit by default.
   const credit = ev.sale_type ? ev.sale_type.toUpperCase() === "CREDIT" : type === "PAYMENT";
 
-  // A PAYMENT's value is order_amount (recon leaves payment_amount = 0); every other
-  // event carries its own amount in event_amount.
-  const amount =
-    type === "PAYMENT"
-      ? Number(e.order_details?.order_amount ?? ev.event_amount ?? 0)
-      : Number(ev.event_amount ?? e.order_details?.order_amount ?? 0);
+  // Amount = event_amount, the ACTUAL money moved for this event (payments,
+  // refunds, everything). Do NOT use order_amount for a PAYMENT: order_amount is the
+  // order's face value, which can exceed what was actually captured — e.g. a partial
+  // / underpayment (order created for ₹53,100 but only ₹1 paid) still settles as
+  // order_status=PAID, and booking order_amount overstates revenue by the shortfall.
+  // event_amount is ₹1 there (event_settlement_amount ₹0.99 + service_charge ₹0.01),
+  // and equals order_amount for the normal fully-paid case. order_amount is only a
+  // fallback for the rare row missing event_amount. (payment_details.payment_amount
+  // is always null in recon, so it's not usable here.)
+  const amount = Number(ev.event_amount ?? e.order_details?.order_amount ?? 0);
 
   let status: NormalizedTransaction["status"];
   switch ((ev.event_status ?? "").toUpperCase()) {
