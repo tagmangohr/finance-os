@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
+import { reconcileFxRates } from "@/lib/fx/rates";
 import { fyStartISO } from "@/lib/utils";
 import type { Database } from "@/lib/supabase/types";
 
@@ -105,6 +106,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   );
   const failed = outcomes.filter((o) => o.status === "rejected").length;
 
+  // Reconcile FX over a trailing window. The fx_rate frozen at sync time is only an
+  // approximation for the current day (ECB publishes that day's rate at ~16:00 CET,
+  // after many same-day transactions have already synced against the prior day's
+  // rate). Re-deriving the authoritative nearest-prior rate now collapses each day
+  // to a single rate once its ECB rate is published. Global (rates aren't org-
+  // specific), idempotent, and non-fatal so it never blocks the sync.
+  let fxReconciled = 0;
+  try {
+    const istDate = (offsetDays: number) => {
+      const d = new Date(now.getTime() - offsetDays * 86_400_000);
+      return d.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+    };
+    const fx = await reconcileFxRates(supabase, { fromDate: istDate(10), toDate: istDate(0) });
+    fxReconciled = fx.updated;
+  } catch (e) {
+    console.error("[cron/nightly-sync] fx reconcile failed:", e);
+  }
+
   // Kick the worker so draining starts immediately instead of waiting for the
   // next per-minute process-sync-jobs tick.
   const worker = randomUUID();
@@ -121,6 +140,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     fy_start: fyStartISO(now),
     stripe_events_delta: eventsDelta,
     stripe_fees_filled: feesFilled,
+    fx_reconciled: fxReconciled,
     connectors_enqueued: enqueued,
     links_synced: links,
     skipped_already_running: skipped,

@@ -148,6 +148,99 @@ export async function enrichRowsWithFx(rows: FxRow[]): Promise<void> {
 }
 
 /**
+ * Reconcile fx_rate/amount_base on rows whose stored rate is no longer the
+ * authoritative one for their date.
+ *
+ * Why this is needed: the fx_rate is computed ONCE at sync time and frozen. ECB
+ * publishes each day's reference rate at ~16:00 CET, so a transaction that syncs
+ * earlier the same day can't find its own date's rate — `nearestPrior` correctly
+ * falls back to the previous business day and stores THAT. Rows synced later the
+ * same day get the real rate. The early rows are never corrected, so a single
+ * calendar day ends up with two permanent rates (and slightly wrong INR totals).
+ *
+ * This sweep re-derives the authoritative nearest-prior rate for every (date,
+ * currency) in the window and updates any row that disagrees — collapsing each day
+ * to one rate once its ECB rate is published. Idempotent (only writes on a real
+ * difference) and self-healing: run nightly over a trailing window so each day
+ * finalizes within ~a day, plus once over full history to fix the backlog. It also
+ * fills rows with a null fx_rate/amount_base, so it subsumes backfillMissingBaseAmounts.
+ *
+ * Dates are inclusive IST YYYY-MM-DD (transaction_date is an IST date — see
+ * unixToDateString in the normalizer), matching how the dashboard groups by day.
+ */
+export async function reconcileFxRates(
+  supabase: SupabaseClient,
+  opts: { fromDate: string; toDate: string }
+): Promise<{ scanned: number; updated: number }> {
+  // Rates that only publish to a handful of decimals still round-trip through
+  // Postgres numeric exactly, so a tight epsilon avoids rewriting rows that only
+  // differ by floating-point noise while still catching a genuine rate change.
+  const EPS = 1e-6;
+  let scanned = 0;
+  let updated = 0;
+  let from = 0;
+  const PAGE = 1000;
+
+  for (;;) {
+    const { data: rows, error } = await supabase
+      .from("transactions")
+      .select("id, amount, currency, transaction_date, fx_rate, amount_base")
+      .not("currency", "is", null)
+      .neq("currency", BASE_CURRENCY)
+      .gte("transaction_date", opts.fromDate)
+      .lte("transaction_date", opts.toDate)
+      .order("id")
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`reconcileFxRates select failed: ${error.message}`);
+    if (!rows || rows.length === 0) break;
+    scanned += rows.length;
+
+    // getInrRates memoises per currency across calls, so grouping per page and
+    // re-requesting the same dates is free after the first page fetches the range.
+    const byCurrency = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const list = byCurrency.get(r.currency) ?? [];
+      list.push(r);
+      byCurrency.set(r.currency, list);
+    }
+
+    for (const [currency, rs] of byCurrency) {
+      const rateMap = await getInrRates(
+        currency,
+        rs.map((r) => String(r.transaction_date).slice(0, 10))
+      );
+      const changed = rs.filter((r) => {
+        const auth = rateMap.get(String(r.transaction_date).slice(0, 10));
+        if (auth == null) return false; // rate not published yet — leave as-is
+        return r.fx_rate == null || Math.abs(Number(r.fx_rate) - auth) > EPS;
+      });
+      for (let i = 0; i < changed.length; i += 50) {
+        const batch = changed.slice(i, i + 50);
+        await Promise.all(
+          batch.map(async (r) => {
+            const rate = rateMap.get(String(r.transaction_date).slice(0, 10))!;
+            const { error: uErr } = await supabase
+              .from("transactions")
+              .update({
+                amount_base: Math.round(Number(r.amount) * rate * 100) / 100,
+                base_currency: BASE_CURRENCY,
+                fx_rate: rate,
+              })
+              .eq("id", r.id);
+            if (!uErr) updated++;
+          })
+        );
+      }
+    }
+
+    if (rows.length < PAGE) break;
+    from += PAGE;
+  }
+
+  return { scanned, updated };
+}
+
+/**
  * Convert EXISTING transaction rows that still lack a base-currency value.
  * Works directly on the DB (no gateway re-fetch needed — the charges are already
  * stored, only amount_base is missing), so it's fast and can't time out the way a
