@@ -65,3 +65,47 @@ export async function syncStripeEventsDelta(
 
   return { processed: transactions.length, advancedTo, needsBackfill: false };
 }
+
+/**
+ * Reconcile Stripe processing fees for a connector over a recent window. The fee
+ * lives on each charge's balance transaction (never in the webhook or events feed),
+ * so we sweep the balance-transactions feed and fill `metadata.fee` on charges that
+ * don't have it yet. Fill-only (never overwrites an existing fee) and idempotent —
+ * safe to run nightly with an overlapping window. Bounded by deadlineMs.
+ */
+export async function reconcileStripeFees(
+  supabase: SupabaseLike,
+  connector: ConnectorRow,
+  opts: { sinceSec: number; deadlineMs: number }
+): Promise<{ updated: number }> {
+  const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
+  if (!cfg.secret_key) return { updated: 0 };
+
+  const client = new StripeConnector(cfg.secret_key);
+  const fees = await client.fetchChargeFeesSince(opts);
+  if (fees.length === 0) return { updated: 0 };
+  const feeById = new Map(fees.map((f) => [f.chargeId, f.fee]));
+
+  const ids = [...feeById.keys()];
+  let updated = 0;
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: rows } = await supabase
+      .from("transactions")
+      .select("id, external_id, metadata")
+      .eq("org_id", connector.org_id)
+      .eq("source", "stripe")
+      .in("external_id", ids.slice(i, i + 200));
+    for (const r of rows ?? []) {
+      const m = (r.metadata ?? {}) as Record<string, unknown>;
+      if (m.fee != null) continue; // fill-only — never overwrite an existing fee
+      const fee = feeById.get(r.external_id as string);
+      if (fee == null) continue;
+      const { error } = await supabase
+        .from("transactions")
+        .update({ metadata: { ...m, fee } as Database["public"]["Tables"]["transactions"]["Row"]["metadata"] })
+        .eq("id", r.id as string);
+      if (!error) updated++;
+    }
+  }
+  return { updated };
+}

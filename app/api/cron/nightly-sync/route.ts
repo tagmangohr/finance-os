@@ -2,7 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
-import { syncStripeEventsDelta } from "@/lib/connectors/stripe-events";
+import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { fyStartISO } from "@/lib/utils";
 import type { Database } from "@/lib/supabase/types";
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // Leave headroom under the 60s function budget for the inline Stripe events delta.
   const eventsDeadline = Date.now() + 40_000;
 
-  let enqueued = 0, links = 0, skipped = 0, eventsDelta = 0;
+  let enqueued = 0, links = 0, skipped = 0, eventsDelta = 0, feesFilled = 0;
   const outcomes = await Promise.allSettled(
     (connectors as ConnectorRow[]).map(async (c) => {
       if (isLinkConnector(c.type)) {
@@ -70,7 +70,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       if (c.type === "stripe") {
         try {
           const res = await syncStripeEventsDelta(supabase, c, eventsDeadline);
-          if (!res.needsBackfill) { eventsDelta++; return; }
+          if (!res.needsBackfill) {
+            // Fees never arrive via the webhook or events feed (they live on the
+            // balance transaction), so reconcile the recent window from the
+            // balance-transactions feed. Fill-only + idempotent; non-fatal.
+            try {
+              const sinceSec = Math.floor((Date.now() - 7 * 86_400_000) / 1000);
+              const feeRes = await reconcileStripeFees(supabase, c, { sinceSec, deadlineMs: Date.now() + 15_000 });
+              feesFilled += feeRes.updated;
+            } catch (e) {
+              console.error(`[cron/nightly-sync] stripe fee reconcile failed (${c.id}):`, e);
+            }
+            eventsDelta++;
+            return;
+          }
         } catch (e) {
           console.error(`[cron/nightly-sync] stripe events delta failed (${c.id}), falling back to backfill:`, e);
         }
@@ -107,6 +120,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     message: "Nightly reconcile started",
     fy_start: fyStartISO(now),
     stripe_events_delta: eventsDelta,
+    stripe_fees_filled: feesFilled,
     connectors_enqueued: enqueued,
     links_synced: links,
     skipped_already_running: skipped,

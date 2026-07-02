@@ -24,6 +24,43 @@ export class StripeConnector {
     });
   }
 
+  // ─── Fees (balance transactions) ────────────────────────────────────────────
+  // The processing fee lives on the charge's balance transaction, NOT the charge
+  // event — so it never arrives via webhook or the events delta. Sweep the
+  // balance-transactions feed (type=charge) to reconcile it. Fee is returned in the
+  // SAME units as normalizeStripeCharge (bt.fee/100, zero-decimal-aware), so the
+  // summary's INR conversion stays identical. Bounded by deadlineMs.
+  async fetchChargeFeesSince(
+    opts: { sinceSec: number; deadlineMs: number }
+  ): Promise<{ chargeId: string; fee: number }[]> {
+    const ZERO_DECIMAL = new Set([
+      "BIF","CLP","DJF","GNF","JPY","KMF","KRW","MGA","PYG","RWF","UGX","VND","VUV","XAF","XOF","XPF",
+    ]);
+    const out: { chargeId: string; fee: number }[] = [];
+    let startingAfter: string | undefined;
+    while (Date.now() < opts.deadlineMs) {
+      const page = await this.stripe.balanceTransactions.list({
+        type: "charge",
+        created: { gte: opts.sinceSec },
+        limit: 100,
+        ...(startingAfter ? { starting_after: startingAfter } : {}),
+      });
+      for (const bt of page.data) {
+        const src =
+          typeof bt.source === "string" ? bt.source
+          : bt.source && "id" in bt.source ? bt.source.id
+          : null;
+        if (!src || (!src.startsWith("ch_") && !src.startsWith("py_"))) continue;
+        if (typeof bt.fee !== "number") continue;
+        const fee = ZERO_DECIMAL.has((bt.currency || "").toUpperCase()) ? bt.fee : bt.fee / 100;
+        out.push({ chargeId: src, fee });
+      }
+      if (!page.has_more || page.data.length === 0) break;
+      startingAfter = page.data[page.data.length - 1].id;
+    }
+    return out;
+  }
+
   // ─── Charges ──────────────────────────────────────────────────────────────
 
   async fetchCharges(
