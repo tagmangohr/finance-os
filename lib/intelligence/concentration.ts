@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { selectAll } from '@/lib/supabase/paginate';
 import type { ConcentrationResult } from './types';
 
 export async function calculateConcentration(
@@ -10,17 +11,21 @@ export async function calculateConcentration(
   const twelveMonthsAgo = new Date(today.getFullYear(), today.getMonth() - 11, 1);
   const fmt = (d: Date) => d.toISOString().split('T')[0];
 
-  // Get all credit transactions with counterparty info for last 12 months
-  const { data: transactions } = await supabase
-    .from('transactions')
-    .select('amount, counterparty_id, counterparty_name')
-    .eq('org_id', orgId)
-    .eq('type', 'credit')
-    .in('status', POSTED_TRANSACTION_STATUSES)
-    .gte('transaction_date', fmt(twelveMonthsAgo))
-    .not('counterparty_id', 'is', null);
-
-  const txns = transactions ?? [];
+  // Get all credit transactions with counterparty info for last 12 months.
+  // Paginated — a busy org has far more than 1000 rows here; the old capped
+  // query only saw the oldest 1000 and understated concentration.
+  const txns = await selectAll<{ amount: number; counterparty_id: string | null; counterparty_name: string | null }>((from, to) =>
+    supabase
+      .from('transactions')
+      .select('amount, counterparty_id, counterparty_name')
+      .eq('org_id', orgId)
+      .eq('type', 'credit')
+      .in('status', POSTED_TRANSACTION_STATUSES)
+      .gte('transaction_date', fmt(twelveMonthsAgo))
+      .lte('transaction_date', fmt(today))
+      .not('counterparty_id', 'is', null)
+      .range(from, to)
+  );
 
   // Aggregate revenue per entity
   const entityMap = new Map<string, { name: string; revenue: number }>();

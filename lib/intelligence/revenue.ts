@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
 import { baseAmt } from '@/lib/utils';
+import { selectAll } from '@/lib/supabase/paginate';
 import type { RevenueResult } from './types';
 
 export async function calculateRevenue(
@@ -13,17 +14,21 @@ export async function calculateRevenue(
   const startDate = new Date(today.getFullYear(), today.getMonth() - 12, 1);
   const fmt = (d: Date) => d.toISOString().split('T')[0];
 
-  const { data: transactions } = await supabase
-    .from('transactions')
-    .select('amount, amount_base, transaction_date')
-    .eq('org_id', orgId)
-    .eq('type', 'credit')
-    .not('category', 'eq', 'settlement')   // exclude settlement transfers — already counted as payments
-    .in('status', POSTED_TRANSACTION_STATUSES)
-    .gte('transaction_date', fmt(startDate))
-    .order('transaction_date', { ascending: true });
-
-  const txns = transactions ?? [];
+  // Paginated: an org with >1000 revenue rows would otherwise only surface the
+  // oldest 1000 (ascending), zeroing out recent-month MRR.
+  const txns = await selectAll<{ amount: number; amount_base: number | null; transaction_date: string }>((from, to) =>
+    supabase
+      .from('transactions')
+      .select('amount, amount_base, transaction_date')
+      .eq('org_id', orgId)
+      .eq('type', 'credit')
+      .not('category', 'eq', 'settlement')   // exclude settlement transfers — already counted as payments
+      .in('status', POSTED_TRANSACTION_STATUSES)
+      .gte('transaction_date', fmt(startDate))
+      .lte('transaction_date', fmt(today))   // guard corrupt future dates
+      .order('transaction_date', { ascending: true })
+      .range(from, to)
+  );
 
   // Group by YYYY-MM
   const monthMap = new Map<string, number>();

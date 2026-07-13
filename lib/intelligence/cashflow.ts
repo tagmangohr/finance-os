@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { selectAll } from '@/lib/supabase/paginate';
 import type { CashFlowResult } from './types';
 
 /** Simple OLS linear regression: returns { slope, intercept } */
@@ -32,17 +33,20 @@ export async function calculateCashFlow(
   ninetyDaysAgo.setDate(today.getDate() - 90);
   const fmt = (d: Date) => d.toISOString().split('T')[0];
 
-  // Fetch all transactions from last 90 days.
+  // Fetch all transactions from last 90 days (paginated — a busy 90-day window
+  // exceeds 1000 rows, and the old capped query truncated the daily series).
   // category is fetched so we can exclude settlement transfers from inflows.
-  const { data: transactions } = await supabase
-    .from('transactions')
-    .select('amount, type, category, transaction_date')
-    .eq('org_id', orgId)
-    .in('status', POSTED_TRANSACTION_STATUSES)
-    .gte('transaction_date', fmt(ninetyDaysAgo))
-    .order('transaction_date', { ascending: true });
-
-  const txns = transactions ?? [];
+  const txns = await selectAll<{ amount: number; type: 'credit' | 'debit'; category: string | null; transaction_date: string }>((from, to) =>
+    supabase
+      .from('transactions')
+      .select('amount, type, category, transaction_date')
+      .eq('org_id', orgId)
+      .in('status', POSTED_TRANSACTION_STATUSES)
+      .gte('transaction_date', fmt(ninetyDaysAgo))
+      .lte('transaction_date', fmt(today))
+      .order('transaction_date', { ascending: true })
+      .range(from, to)
+  );
 
   // Build day-by-day map.
   // Exclude settlements (category = 'settlement') from inflows — they are the

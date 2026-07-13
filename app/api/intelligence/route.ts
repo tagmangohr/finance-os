@@ -3,6 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { getFinancialSummary } from "@/lib/intelligence/index";
 import { askFinancialQuestion, type ChatMessage } from "@/lib/intelligence/claude";
 
+// The intelligence modules now paginate their windowed queries (no silent 1000-row
+// truncation). On a large org that's several sequential pages per module; give the
+// on-demand call headroom (capped lower automatically on Hobby-tier).
+export const maxDuration = 60;
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);

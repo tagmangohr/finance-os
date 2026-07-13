@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from '@/lib/finance/transaction-status';
 import { baseAmt } from '@/lib/utils';
+import { selectAll } from '@/lib/supabase/paginate';
 import type { RunwayResult } from './types';
 
 export async function calculateRunway(
@@ -10,9 +11,10 @@ export async function calculateRunway(
   const today = new Date();
   const ninetyDaysAgo = new Date(today);
   ninetyDaysAgo.setDate(today.getDate() - 90);
+  const todayStr = today.toISOString().split('T')[0];
 
-  // Run balance snapshot fetch and debit transactions in parallel
-  const [snapshotResult, debitsResult] = await Promise.all([
+  // Run balance snapshot fetch and debit transactions in parallel (debits paginated).
+  const [snapshotResult, debits90] = await Promise.all([
     supabase
       .from('financial_snapshots')
       .select('cash_balance')
@@ -20,13 +22,17 @@ export async function calculateRunway(
       .order('snapshot_date', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    supabase
-      .from('transactions')
-      .select('amount, amount_base, transaction_date, source')
-      .eq('org_id', orgId)
-      .eq('type', 'debit')
-      .in('status', POSTED_TRANSACTION_STATUSES)
-      .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0]),
+    selectAll<{ amount: number; amount_base: number | null; transaction_date: string; source: string | null }>((from, to) =>
+      supabase
+        .from('transactions')
+        .select('amount, amount_base, transaction_date, source')
+        .eq('org_id', orgId)
+        .eq('type', 'debit')
+        .in('status', POSTED_TRANSACTION_STATUSES)
+        .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
+        .lte('transaction_date', todayStr)
+        .range(from, to)
+    ),
   ]);
 
   // Compute cash balance: prefer snapshot, fall back to credits - debits
@@ -43,31 +49,32 @@ export async function calculateRunway(
     // (all-time payout debits ≈ all-time settlement credits when Razorpay
     // sweeps nearly every rupee collected into the bank account).
     //
-    // debitsResult.data is already scoped to 90 days (fetched above).
+    // debits90 is already scoped to 90 days (fetched above).
     // Settlements are excluded from credits — they double-count payments.
-    const creditsResult = await supabase
-      .from('transactions')
-      .select('amount, amount_base')
-      .eq('org_id', orgId)
-      .eq('type', 'credit')
-      .not('category', 'eq', 'settlement')
-      .in('status', POSTED_TRANSACTION_STATUSES)
-      .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0]);
-
-    const totalCredits = (creditsResult.data ?? []).reduce(
-      (sum, t) => sum + baseAmt(t),
-      0
+    const credits90 = await selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
+      supabase
+        .from('transactions')
+        .select('amount, amount_base')
+        .eq('org_id', orgId)
+        .eq('type', 'credit')
+        .not('category', 'eq', 'settlement')
+        .in('status', POSTED_TRANSACTION_STATUSES)
+        .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
+        .lte('transaction_date', todayStr)
+        .range(from, to)
     );
-    const totalDebits = (debitsResult.data ?? [])
-      .filter((t) => !isTransferSource((t as { source?: string }).source))
+
+    const totalCredits = credits90.reduce((sum, t) => sum + baseAmt(t), 0);
+    const totalDebits = debits90
+      .filter((t) => !isTransferSource(t.source ?? undefined))
       .reduce((sum, t) => sum + baseAmt(t), 0);
     cashBalance = Math.max(0, totalCredits - totalDebits);
   }
 
   // Compute average monthly burn from last 90 days of debits — excluding bank
   // transfers (payouts/settlements move charge money to the bank, not spend).
-  const debits = (debitsResult.data ?? []).filter(
-    (t) => !isTransferSource((t as { source?: string }).source)
+  const debits = debits90.filter(
+    (t) => !isTransferSource(t.source ?? undefined)
   );
   const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
   // 90 days ≈ 3 months

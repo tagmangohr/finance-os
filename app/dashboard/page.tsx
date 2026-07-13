@@ -2,17 +2,20 @@ export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import {
-  TrendingUp, Receipt, Zap, Wallet, Gauge, Coins, Flame, Sparkles, ArrowRight,
-} from "lucide-react";
+import { Zap, Sparkles, ArrowRight } from "lucide-react";
 import { getFinancialSummary, getOrgId, orgHasConnectors } from "@/lib/data";
 import { requireRouteAccess } from "@/lib/org/page-access";
 import type { DashboardSummary } from "@/lib/data";
-import { MetricCard } from "@/components/dashboard/metric-card";
+import { createClient } from "@/lib/supabase/server";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { MetricStrip } from "@/components/dashboard/metric-strip";
 import { RevenueChart } from "@/components/charts/revenue-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
 import { InflowOutflowChart } from "@/components/charts/inflow-outflow-chart";
+import { METRICS } from "@/lib/metrics/registry";
+import { getMetricPrefs, defaultPrefs } from "@/lib/metrics/prefs";
+import { SAMPLE_METRIC_DATA } from "@/lib/metrics/sample";
+import type { ComputedMetric } from "@/lib/metrics/types";
 import { formatCurrency, formatRunway } from "@/lib/utils";
 
 // ─── View model ──────────────────────────────────────────────────────
@@ -144,6 +147,15 @@ export default async function DashboardPage() {
   const preview = !(await orgHasConnectors(orgId));
   const v = preview ? SAMPLE : buildReal(summary);
 
+  // Customizable metric strip: compute every catalog metric from the aggregated
+  // data (sample data in preview so it looks alive), then load the user's pins.
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const metricData = preview ? SAMPLE_METRIC_DATA : summary.metricData;
+  const computed: Record<string, ComputedMetric> = {};
+  for (const m of METRICS) computed[m.key] = m.compute(metricData);
+  const prefs = user ? await getMetricPrefs(user.id, orgId, supabase) : defaultPrefs();
+
   const runwayMonths = v.runwayDays / 30;
   const ringC = 2 * Math.PI * 40;
   const ringDash = (v.healthScore / 100) * ringC;
@@ -165,22 +177,14 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* KPI strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 animate-enter">
-        <MetricCard title="Cash Balance" value={formatCurrency(v.cash, "INR", true)}
-          icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" sparklineData={v.cashSpark} />
-        <MetricCard title="Runway" value={formatRunway(v.runwayDays)} subtitle={`${formatCurrency(v.burn, "INR", true)}/mo burn`}
-          icon={<Gauge className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
-        <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)}
-          trend={v.mrrGrowth ?? undefined} trendLabel="MoM"
-          icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" sparklineData={v.mrrSpark} />
-        <MetricCard title="ARR" value={formatCurrency(v.mrr * 12, "INR", true)} subtitle="Annual run rate"
-          icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
-        <MetricCard title="Burn Rate" value={`${formatCurrency(v.burn, "INR", true)}/mo`}
-          subtitle={v.burnChange != null ? `${v.burnChange > 0 ? "+" : ""}${v.burnChange.toFixed(0)}% MoM` : "Operating burn"}
-          icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))" />
-        <MetricCard title="Receivables" value={formatCurrency(v.receivables, "INR", true)} subtitle="Top accounts"
-          icon={<Receipt className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
+      {/* Customizable key-metrics strip */}
+      <div className="animate-enter">
+        <MetricStrip
+          computed={computed}
+          initialPinned={prefs.pinned}
+          initialVisibleCount={prefs.visibleCount}
+          orgId={orgId}
+        />
       </div>
 
       {/* Inflow vs outflow + expense donut */}
@@ -219,8 +223,8 @@ export default async function DashboardPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
             <Unit label="MRR" value={formatCurrency(v.mrr, "INR", true)} color="hsl(var(--metric-revenue))" />
             <Unit label="ARR" value={formatCurrency(v.mrr * 12, "INR", true)} color="hsl(var(--metric-profit))" />
-            <Unit label="Customers" value={v.preview ? "1,284" : undefined} color="hsl(var(--metric-cash))" />
-            <Unit label="ARPU" value={v.preview ? "₹6,380" : undefined} color="hsl(var(--metric-margin))" />
+            <Unit label="Customers" value={metricData.customers.paying > 0 ? metricData.customers.paying.toLocaleString("en-IN") : undefined} color="hsl(var(--metric-cash))" />
+            <Unit label="ARPU" value={computed.arpu?.available ? computed.arpu.display : undefined} color="hsl(var(--metric-margin))" />
             <Unit label="CAC" />
             <Unit label="LTV / CAC" />
           </div>

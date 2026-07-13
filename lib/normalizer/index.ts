@@ -235,7 +235,14 @@ function gatewayTimeToIso(s: string | null | undefined): string | null {
   if (!t) return null;
   const hasTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(t);
   const d = new Date(hasTz ? t : `${t.replace(" ", "T")}+05:30`);
-  return isNaN(d.getTime()) ? null : d.toISOString();
+  if (isNaN(d.getTime())) return null;
+  // Reject implausible sentinel dates (e.g. Cashfree returns respond_by/date =
+  // "9999-09-08" for open disputes with no deadline). A garbage far-future date
+  // would otherwise pollute every date-windowed metric. Anything outside a sane
+  // range is treated as "unknown" so callers fall back to a real timestamp.
+  const y = d.getUTCFullYear();
+  if (y < 2000 || y > new Date().getUTCFullYear() + 1) return null;
+  return d.toISOString();
 }
 
 function unixToDateString(ts: number): string {
@@ -246,6 +253,15 @@ function unixToDateString(ts: number): string {
   return new Date(ts * 1000).toLocaleDateString("en-CA", {
     timeZone: "Asia/Kolkata",
   });
+}
+
+// Apple reports timestamps in MILLISECONDS since the epoch (not seconds like the
+// gateways). Same IST convention for the date-only column.
+function msToIso(ms: number): string {
+  return new Date(ms).toISOString();
+}
+function msToDateString(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 // ─── Razorpay normalizers ─────────────────────────────────────────────────────
@@ -918,8 +934,12 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       st.includes("WON") ? "completed"
       : (st.includes("LOST") || st.includes("ACCEPTED") || st.includes("INSUFFICIENT")) ? "failed"
       : "pending"; // created / docs_received / under_review → still open
-    // resolved_at on close, else the most recent timestamp we have.
-    const when = disp.resolved_at || disp.updated_at || disp.created_at || p.event_time || "";
+    // resolved_at on close, else the most recent timestamp we have. Each candidate
+    // is validated (gatewayTimeToIso rejects sentinels like 9999-…); fall through
+    // to a real timestamp, and to "now" only if every candidate is missing/garbage.
+    const whenIso =
+      gatewayTimeToIso(disp.resolved_at) || gatewayTimeToIso(disp.updated_at) ||
+      gatewayTimeToIso(disp.created_at) || gatewayTimeToIso(p.event_time);
     const kind = (disp.dispute_type ?? "Dispute").replace(/_/g, " ");
     return {
       external_id: `cf_dispute_${disputeId}`,
@@ -931,8 +951,8 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       description: `${kind}${disp.reason_description ? ` · ${disp.reason_description}` : ""}${od.order_id ? ` · order ${od.order_id}` : ""}`,
       source: "cashfree_dispute",
       status,
-      transaction_date: (when || "").slice(0, 10),
-      transaction_at: gatewayTimeToIso(when),
+      transaction_date: (whenIso ?? new Date().toISOString()).slice(0, 10),
+      transaction_at: whenIso,
       metadata: {
         event_type: type,
         dispute_id: disputeId,
@@ -950,6 +970,119 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
   }
 
   return null; // other event types → ignored
+}
+
+// ─── Apple App Store normalizers ──────────────────────────────────────────────
+// App Store Server Notifications V2. The money lives in the decoded
+// `signedTransactionInfo` (a JWSTransactionDecodedPayload). We map only the
+// notifications that represent a money movement; lifecycle-only notifications
+// (renewal-pref changes, expirations, price-increase consent, TEST, …) return
+// null and are logged as "ignored".
+//
+// KEY: dedup by transactionId. A refund/revocation for a transaction carries the
+// SAME transactionId as the original purchase, so it COLLAPSES onto that row and
+// flips its status to "refunded" — exactly how a fully-refunded Stripe charge is
+// handled (same external_id, status refunded, still a credit). Apple also retries
+// delivery, so keying on transactionId makes re-delivery idempotent.
+
+// Subset of Apple's JWSTransactionDecodedPayload we consume. Structurally
+// compatible with @apple/app-store-server-library's type (kept local so the pure
+// normalizer doesn't hard-depend on the SDK).
+export type AppStoreTransactionInfo = {
+  transactionId?: string;
+  originalTransactionId?: string;
+  productId?: string;
+  subscriptionGroupIdentifier?: string;
+  purchaseDate?: number;            // ms epoch
+  originalPurchaseDate?: number;    // ms epoch
+  expiresDate?: number;             // ms epoch
+  signedDate?: number;              // ms epoch
+  revocationDate?: number;          // ms epoch — set when refunded/revoked
+  revocationReason?: number;
+  quantity?: number;
+  type?: string;                    // "Auto-Renewable Subscription" | "Non-Consumable" | …
+  transactionReason?: string;       // "PURCHASE" | "RENEWAL"
+  inAppOwnershipType?: string;
+  offerType?: number;
+  offerIdentifier?: string;
+  environment?: string;             // "Sandbox" | "Production"
+  storefront?: string;              // ISO-3166 alpha-3
+  storefrontId?: string;
+  currency?: string;                // ISO 4217, e.g. "USD" | "INR"
+  price?: number;                   // in MILLIUNITS of `currency` (÷1000 → units)
+  appAccountToken?: string;
+};
+
+// Notifications that book a fresh charge (each a distinct transactionId).
+const APPSTORE_MONEY_IN = new Set(["SUBSCRIBED", "DID_RENEW", "ONE_TIME_CHARGE", "OFFER_REDEEMED"]);
+// Notifications that reverse money on an existing transaction.
+const APPSTORE_REVERSAL = new Set(["REFUND", "REVOKE"]);
+// Notifications that restore a previously-reversed transaction to good standing.
+const APPSTORE_RESTORE = new Set(["REFUND_REVERSED", "REFUND_DECLINED"]);
+
+/**
+ * Map one App Store notification's transaction to a NormalizedTransaction.
+ * Returns null for lifecycle-only notifications (no money moved) and for a
+ * payload missing a transactionId.
+ */
+export function normalizeAppStoreTransaction(
+  txn: AppStoreTransactionInfo,
+  ctx: { notificationType?: string; subtype?: string }
+): NormalizedTransaction | null {
+  const nt = (ctx.notificationType ?? "").toUpperCase();
+  const txId = txn.transactionId;
+  if (!txId) return null;
+
+  const isRestore = APPSTORE_RESTORE.has(nt);
+  const isReversal = !isRestore && (APPSTORE_REVERSAL.has(nt) || txn.revocationDate != null);
+  const isMoneyIn = APPSTORE_MONEY_IN.has(nt);
+  // Lifecycle-only (no money movement, no reversal) → let the caller log it as ignored.
+  if (!isRestore && !isReversal && !isMoneyIn) return null;
+
+  // Refund/revoke → refunded; everything else (purchase, renewal, refund reversed) → completed.
+  const status: NormalizedTransaction["status"] = isReversal ? "refunded" : "completed";
+
+  // price is in milliunits of `currency` (e.g. 9990 → 9.99). It's always the
+  // ORIGINAL transaction's price, including on a refund — so a refunded row keeps
+  // the sale amount and only flips status, matching the Stripe charge treatment.
+  const amount = txn.price != null ? txn.price / 1000 : 0;
+  const currency = (txn.currency ?? "USD").toUpperCase();
+
+  // Economic date = the purchase date (unchanged by a later refund, so re-syncs
+  // don't churn the date). Fall back to the JWS signed date if absent.
+  const whenMs = txn.purchaseDate ?? txn.signedDate;
+
+  return {
+    external_id: `appstore_${txId}`,
+    type: "credit",
+    amount,
+    currency,
+    category: null,
+    counterparty_name: null, // Apple provides no customer PII (only appAccountToken)
+    description: `${nt}${txn.productId ? ` · ${txn.productId}` : ""}`,
+    source: "app_store",
+    status,
+    transaction_date: whenMs != null ? msToDateString(whenMs) : parseDateString(""),
+    transaction_at: whenMs != null ? msToIso(whenMs) : null,
+    // Foreign-currency rows leave amount_base unset — persistTransactions'
+    // enrichRowsWithFx converts to INR via ECB (INR rows go 1:1 in toInsertRows).
+    metadata: {
+      notification_type: nt,
+      subtype: ctx.subtype ?? null,
+      product_id: txn.productId ?? null,
+      transaction_id: txId,
+      original_transaction_id: txn.originalTransactionId ?? null,
+      transaction_reason: txn.transactionReason ?? null,
+      subscription_group: txn.subscriptionGroupIdentifier ?? null,
+      offer_type: txn.offerType ?? null,
+      offer_identifier: txn.offerIdentifier ?? null,
+      quantity: txn.quantity ?? null,
+      environment: txn.environment ?? null,
+      storefront: txn.storefront ?? null,
+      app_account_token: txn.appAccountToken ?? null,
+      ...(isReversal ? { revocation_reason: txn.revocationReason ?? null, revocation_date: txn.revocationDate ?? null } : {}),
+    },
+  };
 }
 
 // ─── PayU normalizers ─────────────────────────────────────────────────────────
