@@ -16,6 +16,7 @@ export const CONNECTOR_TYPES = [
   "onedrive",
   "google_sheets",
   "excel",
+  "app_store",
 ] as const;
 
 export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;
@@ -99,6 +100,18 @@ export function validateConnectorConfig(
       const url = get("file_url");
       if (!url) return "Paste a public link to your Excel file.";
       if (!/^https:\/\//.test(url)) return "The Excel link must be a public https URL (Google Drive, OneDrive, or a direct .xlsx link).";
+      return null;
+    }
+    case "app_store": {
+      // No secret: App Store Server Notifications are verified via Apple's cert
+      // chain, not a shared key. We only need the app's bundle id to route
+      // notifications to this connector; app_apple_id is recommended (required by
+      // Apple to verify Production notifications) but optional here.
+      const bundleId = get("bundle_id");
+      if (!bundleId) return "Enter your app's Bundle ID (e.g. com.yourcompany.app) from App Store Connect.";
+      if (!/^[A-Za-z0-9][A-Za-z0-9.\-]+$/.test(bundleId)) return "That doesn't look like a Bundle ID. It's a reverse-DNS string like com.yourcompany.app.";
+      const appId = get("app_apple_id");
+      if (appId && !/^\d+$/.test(appId)) return "Apple App ID (appAppleId) must be numeric — find it in App Store Connect → App Information.";
       return null;
     }
     default:

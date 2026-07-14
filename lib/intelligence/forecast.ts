@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { selectAll } from "@/lib/supabase/paginate";
 import type { ForecastResult } from "./types";
 
 // Simple linear regression: returns slope and intercept
@@ -34,14 +35,20 @@ export async function generateForecast(
   // Get last 6 months of monthly revenue
   const sixMonthsAgo = new Date();
   sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+  const todayStr = new Date().toISOString().split("T")[0];
 
-  const { data: txns } = await supabase
-    .from("transactions")
-    .select("amount, transaction_date")
-    .eq("org_id", orgId)
-    .eq("type", "credit")
-    .in("status", POSTED_TRANSACTION_STATUSES)
-    .gte("transaction_date", sixMonthsAgo.toISOString().split("T")[0]);
+  // Paginated so the regression sees every month's full revenue, not a 1000-row slice.
+  const txns = await selectAll<{ amount: number; transaction_date: string }>((from, to) =>
+    supabase
+      .from("transactions")
+      .select("amount, transaction_date")
+      .eq("org_id", orgId)
+      .eq("type", "credit")
+      .in("status", POSTED_TRANSACTION_STATUSES)
+      .gte("transaction_date", sixMonthsAgo.toISOString().split("T")[0])
+      .lte("transaction_date", todayStr)
+      .range(from, to)
+  );
 
   if (!txns?.length) {
     return {

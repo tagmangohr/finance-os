@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { POSTED_TRANSACTION_STATUSES } from "@/lib/finance/transaction-status";
+import { selectAll } from "@/lib/supabase/paginate";
 import type { TaxPositionResult } from "./types";
 import { format, addMonths, startOfQuarter, endOfQuarter } from "date-fns";
 
@@ -30,16 +31,23 @@ export async function calculateTaxPosition(
   const now = new Date();
   const quarterStart = startOfQuarter(now);
 
-  // Get revenue this quarter (credits)
-  const [revenueResult, tdsResult] = await Promise.all([
-    supabase
-      .from("transactions")
-      .select("amount")
-      .eq("org_id", orgId)
-      .eq("type", "credit")
-      .in("status", POSTED_TRANSACTION_STATUSES)
-      .gte("transaction_date", quarterStart.toISOString().split("T")[0]),
-    // TDS: transactions tagged 'tds' category
+  const nowStr = now.toISOString().split("T")[0];
+
+  // Get revenue this quarter (credits) + YTD TDS. Revenue is paginated so a full
+  // quarter of payments isn't truncated to its oldest 1000 rows.
+  const [revenueRows, tdsResult] = await Promise.all([
+    selectAll<{ amount: number }>((from, to) =>
+      supabase
+        .from("transactions")
+        .select("amount")
+        .eq("org_id", orgId)
+        .eq("type", "credit")
+        .in("status", POSTED_TRANSACTION_STATUSES)
+        .gte("transaction_date", quarterStart.toISOString().split("T")[0])
+        .lte("transaction_date", nowStr)
+        .range(from, to)
+    ),
+    // TDS: transactions tagged 'tds' category (typically few — single page).
     supabase
       .from("transactions")
       .select("amount")
@@ -49,7 +57,7 @@ export async function calculateTaxPosition(
       .gte("transaction_date", new Date(now.getFullYear(), 0, 1).toISOString().split("T")[0]),
   ]);
 
-  const quarterRevenue = (revenueResult.data ?? []).reduce((sum, t) => sum + t.amount, 0);
+  const quarterRevenue = revenueRows.reduce((sum, t) => sum + t.amount, 0);
   const tdsDeducted = (tdsResult.data ?? []).reduce((sum, t) => sum + t.amount, 0);
 
   // GST estimate: 18% of revenue is a rough estimate (actual rate varies by category)

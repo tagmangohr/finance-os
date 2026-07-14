@@ -27,7 +27,7 @@ export interface Database {
         Row: {
           id: string;
           org_id: string;
-          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz" | "google_drive" | "onedrive" | "google_sheets" | "excel";
+          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz" | "google_drive" | "onedrive" | "google_sheets" | "excel" | "app_store";
           name: string;
           status: "active" | "inactive" | "error";
           config: Json;
@@ -46,7 +46,7 @@ export interface Database {
           provider: string;
           event_type: string | null;
           signature_ok: boolean;
-          outcome: "missing_headers" | "signature_failed" | "bad_json" | "ignored" | "persisted" | "persist_error";
+          outcome: "missing_headers" | "signature_failed" | "bad_json" | "ignored" | "persisted" | "persist_error" | "unmatched";
           connector_id: string | null;
           org_id: string | null;
           external_id: string | null;
@@ -58,6 +58,17 @@ export interface Database {
         };
         Insert: Omit<Database["public"]["Tables"]["webhook_events"]["Row"], "id" | "received_at"> & { received_at?: string };
         Update: Partial<Database["public"]["Tables"]["webhook_events"]["Insert"]>;
+      };
+      user_metric_prefs: {
+        Row: {
+          user_id: string;
+          org_id: string;
+          pinned_metric_keys: string[];
+          visible_count: number;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["user_metric_prefs"]["Row"], "updated_at"> & { updated_at?: string };
+        Update: Partial<Database["public"]["Tables"]["user_metric_prefs"]["Insert"]>;
       };
       transactions: {
         Row: {

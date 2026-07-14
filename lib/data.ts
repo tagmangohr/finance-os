@@ -4,7 +4,9 @@ import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
-import { calculateBurnRate } from "@/lib/intelligence/burn-rate";
+import { getMetricData } from "@/lib/metrics/aggregate";
+import { EMPTY_METRIC_DATA, type MetricData } from "@/lib/metrics/types";
+import { selectAll } from "@/lib/supabase/paginate";
 import type {
   FinancialSnapshot,
   IntelligenceAlert,
@@ -30,6 +32,8 @@ export interface DashboardSummary {
   mrrGrowth: number;
   /** MoM burn change % */
   burnChange: number;
+  /** Pre-aggregated metric inputs (drives the customizable metric strip). */
+  metricData: MetricData;
   /** True when the org has any synced transaction data */
   hasData: boolean;
 }
@@ -84,6 +88,7 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       runwayDays: 0,
       mrrGrowth: 0,
       burnChange: 0,
+      metricData: EMPTY_METRIC_DATA,
       hasData: false,
     };
   }
@@ -94,12 +99,8 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     snapshotResult,
     alertsResult,
     debtorsResult,
-    revenueResult,
-    transactionsResult,
     categoryResult,
-    revenueMetrics,
-    runwayMetrics,
-    burnRateMetrics,
+    metricData,
   ] = await Promise.all([
     supabase
       .from("financial_snapshots")
@@ -123,71 +124,50 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
       .order("outstanding_amount", { ascending: false })
       .limit(5),
     supabase
-      .from("transactions")
-      .select("transaction_date, amount, amount_base")
-      .eq("org_id", orgId)
-      .eq("type", "credit")
-      .not("category", "eq", "settlement")   // exclude settlement transfers
-      .in("status", POSTED_TRANSACTION_STATUSES)
-      .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .order("transaction_date", { ascending: true }),
-    supabase
-      .from("transactions")
-      .select("transaction_date, type, amount, amount_base, category, source")
-      .eq("org_id", orgId)
-      .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .in("status", POSTED_TRANSACTION_STATUSES)
-      .order("transaction_date", { ascending: true }),
-    supabase
       .from("vw_category_breakdown" as never)
       .select("*")
       .eq("org_id" as never, orgId)
       .order("total_amount" as never, { ascending: false })
       .limit(8),
-    // Live intelligence — computed from transactions, never depends on snapshots
-    calculateRevenue(orgId, supabase),
-    calculateRunway(orgId, supabase),
-    calculateBurnRate(orgId, supabase),
+    // Server-side aggregation — uncapped, scales past the 1000-row PostgREST limit.
+    getMetricData(orgId, supabase),
   ]);
 
   const snapshots = snapshotResult.data ?? [];
   const snapshot = snapshots[0] ?? null;
   const previousSnapshot = snapshots[1] ?? null;
 
-  // Build cash flow data from transactions.
-  // Settlements (category = 'settlement') are Razorpay's delayed bank transfer of
-  // already-collected payments — they must be excluded from inflows to prevent
-  // double-counting every payment once as a payment and again as a settlement.
-  const txByDate = new Map<string, { inflow: number; outflow: number }>();
-  for (const tx of transactionsResult.data ?? []) {
-    // Skip bank transfers (gateway payouts/settlements) — moving already-counted
-    // money to the bank isn't cash flow in or out.
-    if (isTransferSource((tx as { source?: string }).source)) continue;
-    if (tx.type === "credit" && (tx as { category?: string }).category === "settlement") continue;
-    const date = tx.transaction_date.split("T")[0];
-    const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += baseAmt(tx);
-    else existing.outflow += baseAmt(tx);
-    txByDate.set(date, existing);
-  }
+  // All time-series derived from the pre-aggregated metric data (uncapped, INR).
+  const monthly = metricData.monthly;
 
+  // Monthly cash-flow points (one per month): inflow = gross revenue,
+  // outflow = expenses + refunds. The dashboard chart groups by month anyway, so
+  // month-level points avoid re-fetching 100k+ rows for daily granularity.
   let runningBalance = snapshot?.cash_balance ?? 0;
-  const sortedDates = Array.from(txByDate.keys()).sort();
-  const cashFlowData = sortedDates.map((date) => {
-    const day = txByDate.get(date)!;
-    runningBalance = runningBalance + day.inflow - day.outflow;
-    return { date, inflow: day.inflow, outflow: day.outflow, balance: runningBalance };
+  const cashFlowData = monthly.map((m) => {
+    const inflow = m.gross;
+    const outflow = m.expense + m.refunds;
+    runningBalance = runningBalance + inflow - outflow;
+    return { date: `${m.month}-01`, inflow, outflow, balance: runningBalance };
   });
 
-  // Revenue by month from posted transaction rows.
-  const revenueMonthMap = new Map<string, number>();
-  for (const tx of revenueResult.data ?? []) {
-    const m = tx.transaction_date.split("T")[0].slice(0, 7);
-    revenueMonthMap.set(m, (revenueMonthMap.get(m) ?? 0) + baseAmt(tx));
-  }
-  const revenueByMonth = Array.from(revenueMonthMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, amount]) => ({ month, amount }));
+  const revenueByMonth = monthly.map((m) => ({ month: m.month, amount: m.net }));
+
+  // Run-rate MRR = average net of the last 3 COMPLETE months (drop the current
+  // partial month). Phase 2 replaces this with true recurring MRR.
+  const completeMonths = monthly.length > 1 ? monthly.slice(0, -1) : monthly;
+  const last3 = completeMonths.slice(-3);
+  const mrr = last3.length ? last3.reduce((s, m) => s + m.net, 0) / last3.length : 0;
+  const arr = mrr * 12;
+  const curM = monthly[monthly.length - 1];
+  const prevM = monthly[monthly.length - 2];
+  const mrrGrowth = prevM && prevM.net > 0 && curM ? ((curM.net - prevM.net) / prevM.net) * 100 : 0;
+
+  const cashBalance = metricData.totals.lifetimeInflow - metricData.totals.lifetimeOutflow;
+  const burnRate = metricData.hasExpenses
+    ? Math.max(0, last3.reduce((s, m) => s + (m.expense - m.net), 0) / (last3.length || 1))
+    : 0;
+  const runwayDays = burnRate > 0 ? (cashBalance / burnRate) * 30 : 0;
 
   // Category breakdown
   type CategoryRow = { category: string; total_amount: number; pct_of_total: number };
@@ -206,31 +186,39 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     revenueByMonth,
     cashFlowData,
     categoryBreakdown,
-    // Live computed metrics — replace stale snapshot values on War Room
-    mrr:        revenueMetrics.mrr,
-    arr:        revenueMetrics.arr,
-    burnRate:   runwayMetrics.burn_rate,
-    cashBalance: runwayMetrics.cash_balance,
-    runwayDays: runwayMetrics.runway_days,
-    mrrGrowth:  revenueMetrics.mom_growth,
-    burnChange:  burnRateMetrics.change_pct,
-    hasData:    revenueMetrics.mrr > 0 || runwayMetrics.cash_balance > 0 || revenueByMonth.length > 0,
+    mrr,
+    arr,
+    burnRate,
+    cashBalance,
+    runwayDays,
+    mrrGrowth,
+    burnChange: 0,
+    metricData,
+    hasData: monthly.some((m) => m.gross > 0) || cashBalance > 0,
   };
 }
 
 export async function getRevenueDetails(orgId: string) {
   const supabase = await createClient();
 
-  const [revenueResult, customersResult, revenueMetrics] = await Promise.all([
-    supabase
-      .from("transactions")
-      .select("transaction_date, amount, amount_base, currency, counterparty_name")
-      .eq("org_id", orgId)
-      .eq("type", "credit")
-      .not("category", "eq", "settlement")   // exclude settlement transfers
-      .in("status", POSTED_TRANSACTION_STATUSES)
-      .gte("transaction_date", new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .order("transaction_date", { ascending: true }),
+  const today = new Date().toISOString().split("T")[0];
+  const from365 = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+  const [revRows, customersResult, revenueMetrics] = await Promise.all([
+    // Paginated — full year of revenue, not just the first 1000 rows.
+    selectAll<{ transaction_date: string; amount: number; amount_base: number | null; currency: string; counterparty_name: string | null }>((f, t) =>
+      supabase
+        .from("transactions")
+        .select("transaction_date, amount, amount_base, currency, counterparty_name")
+        .eq("org_id", orgId)
+        .eq("type", "credit")
+        .not("category", "eq", "settlement")   // exclude settlement transfers
+        .in("status", POSTED_TRANSACTION_STATUSES)
+        .gte("transaction_date", from365)
+        .lte("transaction_date", today)        // guard corrupt future dates
+        .order("transaction_date", { ascending: true })
+        .range(f, t)
+    ),
     supabase
       .from("entities")
       .select("*")
@@ -244,7 +232,7 @@ export async function getRevenueDetails(orgId: string) {
 
   // Aggregate by month for the chart (in base currency).
   const monthMap = new Map<string, number>();
-  for (const tx of revenueResult.data ?? []) {
+  for (const tx of revRows) {
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
     monthMap.set(m, (monthMap.get(m) ?? 0) + baseAmt(tx));
   }
@@ -255,7 +243,7 @@ export async function getRevenueDetails(orgId: string) {
   // Per-currency breakdown so the original mix stays visible (e.g. "$Y from USD").
   // `original` is the sum in the source currency; `inr` is the base-currency value.
   const curMap = new Map<string, { original: number; inr: number }>();
-  for (const tx of revenueResult.data ?? []) {
+  for (const tx of revRows) {
     const cur = (tx as { currency?: string }).currency ?? "INR";
     const e = curMap.get(cur) ?? { original: 0, inr: 0 };
     e.original += Number(tx.amount);
@@ -292,15 +280,23 @@ export async function getRevenueDetails(orgId: string) {
 export async function getCashFlowDetails(orgId: string) {
   const supabase = await createClient();
 
-  // All three queries run in parallel — no snapshot dependency.
-  const [txResult, runwayMetrics, categoryResult] = await Promise.all([
-    supabase
-      .from("transactions")
-      .select("transaction_date, type, amount, amount_base, category, counterparty_name, source")
-      .eq("org_id", orgId)
-      .in("status", POSTED_TRANSACTION_STATUSES)
-      .gte("transaction_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0])
-      .order("transaction_date", { ascending: true }),
+  const cfToday = new Date().toISOString().split("T")[0];
+  const cfFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+  // All three run in parallel; the transaction fetch is paginated so a busy 90-day
+  // window (>1000 rows) isn't truncated to its oldest slice.
+  const [transactions, runwayMetrics, categoryResult] = await Promise.all([
+    selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; counterparty_name: string | null; source: string | null }>((f, t) =>
+      supabase
+        .from("transactions")
+        .select("transaction_date, type, amount, amount_base, category, counterparty_name, source")
+        .eq("org_id", orgId)
+        .in("status", POSTED_TRANSACTION_STATUSES)
+        .gte("transaction_date", cfFrom)
+        .lte("transaction_date", cfToday)   // guard corrupt future dates
+        .order("transaction_date", { ascending: true })
+        .range(f, t)
+    ),
     // Live burn rate + cash balance computed from transactions
     calculateRunway(orgId, supabase),
     supabase
@@ -310,8 +306,6 @@ export async function getCashFlowDetails(orgId: string) {
       .order("total_amount" as never, { ascending: false })
       .limit(8),
   ]);
-
-  const transactions = txResult.data ?? [];
   const burnRate    = runwayMetrics.burn_rate;
   const cashBalance = runwayMetrics.cash_balance;
 

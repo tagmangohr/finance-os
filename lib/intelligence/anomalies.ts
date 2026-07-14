@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES } from '@/lib/finance/transaction-status';
+import { selectAll } from '@/lib/supabase/paginate';
 import type { AnomalyResult } from './types';
 
 export async function detectAnomalies(
@@ -10,30 +11,34 @@ export async function detectAnomalies(
   const thirtyDaysAgo = new Date(today);
   thirtyDaysAgo.setDate(today.getDate() - 30);
 
-  // Fetch last 30 days + historical baseline (90 days) in parallel
-  const [recentResult, historicalResult] = await Promise.all([
-    supabase
-      .from('transactions')
-      .select('id, amount, category, counterparty_id, description, transaction_date')
-      .eq('org_id', orgId)
-      .in('status', POSTED_TRANSACTION_STATUSES)
-      .gte('transaction_date', thirtyDaysAgo.toISOString().split('T')[0])
-      .order('transaction_date', { ascending: false }),
-    supabase
-      .from('transactions')
-      .select('amount, category, counterparty_id')
-      .eq('org_id', orgId)
-      .in('status', POSTED_TRANSACTION_STATUSES)
-      .gte(
-        'transaction_date',
-        new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000)
-          .toISOString()
-          .split('T')[0]
-      ),
-  ]);
+  const todayStr = today.toISOString().split('T')[0];
+  const ninetyStr = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-  const recentTxns = recentResult.data ?? [];
-  const historicalTxns = historicalResult.data ?? [];
+  // Fetch last 30 days + historical baseline (90 days) in parallel — both
+  // paginated so the z-score baseline and outlier scan see the full windows.
+  const [recentTxns, historicalTxns] = await Promise.all([
+    selectAll<{ id: string; amount: number; category: string | null; counterparty_id: string | null; description: string | null; transaction_date: string }>((from, to) =>
+      supabase
+        .from('transactions')
+        .select('id, amount, category, counterparty_id, description, transaction_date')
+        .eq('org_id', orgId)
+        .in('status', POSTED_TRANSACTION_STATUSES)
+        .gte('transaction_date', thirtyDaysAgo.toISOString().split('T')[0])
+        .lte('transaction_date', todayStr)
+        .order('transaction_date', { ascending: false })
+        .range(from, to)
+    ),
+    selectAll<{ amount: number; category: string | null; counterparty_id: string | null }>((from, to) =>
+      supabase
+        .from('transactions')
+        .select('amount, category, counterparty_id')
+        .eq('org_id', orgId)
+        .in('status', POSTED_TRANSACTION_STATUSES)
+        .gte('transaction_date', ninetyStr)
+        .lte('transaction_date', todayStr)
+        .range(from, to)
+    ),
+  ]);
 
   // Build category stats from historical data
   const categoryStats = new Map<

@@ -41,6 +41,9 @@ interface ConnectorDef {
   icon: React.ReactNode;
   fields?: FieldDef[];
   isCSV?: boolean;
+  // Webhook-only connector (no polling API): the endpoint path to display so the
+  // user can register it with the provider. Shown as a setup note in the modal.
+  webhookPath?: string;
 }
 
 // ─── Logo helpers ─────────────────────────────────────────────────────────────
@@ -239,6 +242,17 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     icon: <SiIcon slug="microsoftexcel" bg="#217346" />,
     fields: [
       { key: "file_url", label: "Excel file link", placeholder: "Public Google Drive / OneDrive / .xlsx link" },
+    ],
+  },
+  {
+    type: "app_store",
+    name: "Apple App Store",
+    description: "In-app purchase & subscription revenue via App Store Server Notifications",
+    icon: <SiIcon slug="appstore" bg="#0D96F6" />,
+    webhookPath: "/api/webhooks/app-store",
+    fields: [
+      { key: "bundle_id",    label: "Bundle ID",   placeholder: "com.yourcompany.app" },
+      { key: "app_apple_id", label: "Apple App ID", placeholder: "1234567890 (App Store Connect → App Information)", isOptional: true },
     ],
   },
 ];
@@ -1245,6 +1259,22 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         />
                       ))}
                     </>
+                  )}
+
+                  {/* Webhook-only connector: show the endpoint URL to register with the provider. */}
+                  {openModal?.webhookPath && (
+                    <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-1.5">
+                      <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Webhook setup</p>
+                      <p className="text-xs text-muted-foreground/80 leading-relaxed">
+                        In App Store Connect → your app → <span className="text-foreground">App Information → App Store Server Notifications</span>, set the <span className="text-foreground">Version 2</span> Production (and Sandbox) URL to:
+                      </p>
+                      <code className="block text-[11px] break-all rounded bg-background/60 border border-border px-2 py-1.5 text-foreground select-all">
+                        {(typeof window !== "undefined" ? window.location.origin : "")}{openModal.webhookPath}
+                      </code>
+                      <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+                        No secret needed — notifications are verified against Apple&apos;s certificate. Revenue appears in real time as customers subscribe, renew, and refund.
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
