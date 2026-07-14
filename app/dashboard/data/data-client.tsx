@@ -19,6 +19,60 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { parsePaymentText, type ParsedPayment } from "@/lib/ocr/parse";
+
+// ─── Client-side OCR (no AI) ─────────────────────────────────────────────────
+// Reads a payment screenshot entirely in the browser with Tesseract.js (lazy-
+// loaded on first use), lightly preprocessing for legibility. Returns raw text.
+async function ocrImage(file: File, onProgress?: (p: number) => void): Promise<string> {
+  const dataUrl: string = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(new Error("Could not read the file"));
+    r.readAsDataURL(file);
+  });
+  const img = document.createElement("img");
+  img.src = dataUrl;
+  await img.decode();
+
+  // Upscale small images (helps OCR) but don't blow up large ones; then grayscale.
+  const longEdge = Math.max(img.width, img.height) || 1;
+  const scale = Math.min(2, Math.max(1, 1600 / longEdge));
+  const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.drawImage(img, 0, 0, w, h);
+  const id = ctx.getImageData(0, 0, w, h);
+  const d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(id, 0, 0);
+
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("eng", 1, {
+    logger: (m) => {
+      if (m.status === "recognizing text" && onProgress) onProgress(m.progress);
+    },
+  });
+  try {
+    const { data } = await worker.recognize(canvas);
+    return data.text ?? "";
+  } finally {
+    await worker.terminate();
+  }
+}
+
+function toExtracted(p: ParsedPayment): ImageExtracted {
+  return {
+    amount: p.amount, currency: p.currency, date: p.date, datetime: null,
+    ids: p.tokens, upi_ref: null, upi_id: null, email: null, phone: null,
+    counterparty_name: null, method: p.method, summary: null,
+  };
+}
 
 // ─── Screenshot-search result shapes (mirror /api/transactions/search-by-image) ──
 type ImageExtracted = {
@@ -217,29 +271,36 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [imgOpen, setImgOpen] = React.useState(false);
   const [imgLoading, setImgLoading] = React.useState(false);
+  const [ocrProgress, setOcrProgress] = React.useState(0);
   const [imgError, setImgError] = React.useState<string | null>(null);
   const [imgResult, setImgResult] = React.useState<ImageSearchResult | null>(null);
 
   const handleScreenshot = React.useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) { setImgError("Please choose an image file."); setImgOpen(true); return; }
-    setImgOpen(true); setImgError(null); setImgResult(null); setImgLoading(true);
+    setImgOpen(true); setImgError(null); setImgResult(null); setImgLoading(true); setOcrProgress(0);
     try {
-      const dataUrl: string = await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result));
-        r.onerror = () => reject(new Error("Could not read the file"));
-        r.readAsDataURL(file);
-      });
+      // 1) Read the screenshot in the browser (no AI, no API key).
+      const text = await ocrImage(file, setOcrProgress);
+      // 2) Pull identifiers out with regex.
+      const parsed = parsePaymentText(text);
+      if (parsed.tokens.length === 0) {
+        setImgResult({
+          extracted: toExtracted(parsed), tokens: [], matches: [],
+          note: "Couldn't read any reference / UPI / order ID from that screenshot. Try a clearer image that shows the transaction, UTR, or reference number.",
+        });
+        return;
+      }
+      // 3) Match on identifiers server-side (amount/date only raise confidence).
       const res = await fetch("/api/transactions/search-by-image", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ org_id: orgId, image: dataUrl }),
+        body: JSON.stringify({ org_id: orgId, tokens: parsed.tokens, amount: parsed.amount, date: parsed.date }),
       });
       const data = await res.json();
-      if (!res.ok) { setImgError(data?.error ?? "Something went wrong reading the screenshot."); }
-      else { setImgResult(data as ImageSearchResult); }
+      if (!res.ok) { setImgError(data?.error ?? "Something went wrong searching for matches."); }
+      else { setImgResult({ extracted: toExtracted(parsed), tokens: parsed.tokens, matches: data.matches ?? [], note: data.note ?? null }); }
     } catch (e) {
-      setImgError(e instanceof Error ? e.message : "Something went wrong.");
+      setImgError(e instanceof Error ? e.message : "Something went wrong reading the screenshot.");
     } finally {
       setImgLoading(false);
     }
@@ -843,7 +904,8 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               {imgLoading && (
                 <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  <p className="text-[12.5px]">Reading your screenshot…</p>
+                  <p className="text-[12.5px]">Reading your screenshot{ocrProgress > 0 && ocrProgress < 1 ? ` — ${Math.round(ocrProgress * 100)}%` : "…"}</p>
+                  <p className="text-[11px] text-muted-foreground/60">On-device OCR — the image never leaves your browser.</p>
                 </div>
               )}
 
