@@ -5,10 +5,19 @@ import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY (same as the AI chat)
-
 // Vision-capable model already provisioned on this account (matches lib/intelligence/claude.ts).
 const MODEL = "claude-sonnet-4-5";
+
+// Real Anthropic keys start with sk-ant-. A missing/placeholder value (the common
+// "forgot to set it in Vercel" case) would otherwise surface as a raw 401 JSON blob
+// to the user — catch it here and give an actionable message instead.
+function resolveApiKey(): { key: string } | { error: string } {
+  const key = process.env.ANTHROPIC_API_KEY?.trim();
+  if (!key || !key.startsWith("sk-ant-")) {
+    return { error: "Screenshot search isn't set up yet: the server has no valid ANTHROPIC_API_KEY. Add your Anthropic API key in the deployment's environment variables, then redeploy. (This same key powers the AI chat.)" };
+  }
+  return { key };
+}
 
 type Extracted = {
   amount: number | null;
@@ -106,6 +115,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const auth = await requireOrgAccess(orgId);
   if (isAuthFailure(auth)) return auth.error;
 
+  // Fail fast with a clear message if the AI key isn't configured (vs. a raw 401).
+  const resolved = resolveApiKey();
+  if ("error" in resolved) return NextResponse.json({ error: resolved.error }, { status: 503 });
+  const client = new Anthropic({ apiKey: resolved.key });
+
   // Accept a data URL or a bare base64 string.
   let data = body.image;
   let mediaType = body.media_type || "image/png";
@@ -139,7 +153,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const textBlock = resp.content.find((b) => b.type === "text");
     extracted = textBlock && textBlock.type === "text" ? parseExtracted(textBlock.text) : null;
   } catch (err) {
-    return NextResponse.json({ error: `Could not read the screenshot: ${err instanceof Error ? err.message : "vision error"}` }, { status: 502 });
+    // Surface a clean message for the common auth failure; hide the raw JSON blob.
+    const status = (err as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      return NextResponse.json({ error: "Screenshot search isn't set up yet: the server's Anthropic API key is invalid. Update ANTHROPIC_API_KEY in the deployment settings and redeploy." }, { status: 503 });
+    }
+    return NextResponse.json({ error: "Couldn't read that screenshot — please try a clearer image." }, { status: 502 });
   }
   if (!extracted) return NextResponse.json({ error: "Could not read a payment from that screenshot." }, { status: 422 });
 
