@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   Search,
   Download,
@@ -12,8 +13,25 @@ import {
   ArrowUpDown,
   Copy,
   Check,
+  ScanSearch,
+  X,
+  Loader2,
+  Sparkles,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatDate } from "@/lib/utils";
+
+// ─── Screenshot-search result shapes (mirror /api/transactions/search-by-image) ──
+type ImageExtracted = {
+  amount: number | null; currency: string | null; date: string | null; datetime: string | null;
+  ids: string[]; upi_ref: string | null; upi_id: string | null; email: string | null;
+  phone: string | null; counterparty_name: string | null; method: string | null; summary: string | null;
+};
+type ImageMatch = {
+  id: string; transaction_date: string; source: string; type: "credit" | "debit"; amount: number;
+  currency: string; status: string; counterparty_name: string | null; description: string | null;
+  external_id: string | null; confidence: "high" | "medium" | "low"; matched_on: string; amount_matches: boolean;
+};
+type ImageSearchResult = { extracted: ImageExtracted; tokens: string[]; matches: ImageMatch[]; note: string | null };
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { categorizeSource, sourceLabel, type SourceBucket } from "@/lib/finance/transaction-status";
 
@@ -193,6 +211,48 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
   const [summary, setSummary] = React.useState<SummaryResponse | null>(null);
+
+  // Screenshot search: upload an image of a payment (UPI app / bank SMS / receipt),
+  // Claude reads its identifiers and we match them against transactions.
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [imgOpen, setImgOpen] = React.useState(false);
+  const [imgLoading, setImgLoading] = React.useState(false);
+  const [imgError, setImgError] = React.useState<string | null>(null);
+  const [imgResult, setImgResult] = React.useState<ImageSearchResult | null>(null);
+
+  const handleScreenshot = React.useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/")) { setImgError("Please choose an image file."); setImgOpen(true); return; }
+    setImgOpen(true); setImgError(null); setImgResult(null); setImgLoading(true);
+    try {
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error("Could not read the file"));
+        r.readAsDataURL(file);
+      });
+      const res = await fetch("/api/transactions/search-by-image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ org_id: orgId, image: dataUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setImgError(data?.error ?? "Something went wrong reading the screenshot."); }
+      else { setImgResult(data as ImageSearchResult); }
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setImgLoading(false);
+    }
+  }, [orgId]);
+
+  // Jump to a matched transaction: search by its ID and widen the date range so
+  // it shows in the table regardless of the current window.
+  const jumpToMatch = React.useCallback((m: ImageMatch) => {
+    setSearch(m.external_id || m.matched_on || "");
+    setFrom(istDate(3650)); // ~10 years back — matches can be from any date
+    setTo(istDate(0));
+    setImgOpen(false);
+  }, []);
 
   // Card totals come straight from the server (summary.cards) per the locked spec
   // in summary/route.ts — pending counts toward none of them.
@@ -404,8 +464,24 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search ID, description, counterparty…"
-            className="w-full h-9 rounded-lg border border-border bg-accent/40 pl-8 pr-3 text-xs text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
+            className="w-full h-9 rounded-lg border border-border bg-accent/40 pl-8 pr-9 text-xs text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
           />
+          {/* Search a payment by screenshot */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleScreenshot(f); e.target.value = ""; }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            title="Search a payment by screenshot"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-colors"
+          >
+            <ScanSearch className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Connector filter */}
@@ -744,6 +820,107 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           </div>
         </div>
       )}
+
+      {/* ── Screenshot search modal ─────────────────────────────────────── */}
+      <Dialog.Root open={imgOpen} onOpenChange={setImgOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(560px,94vw)] max-h-[88vh] -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border bg-background shadow-2xl flex flex-col focus:outline-none">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <ScanSearch className="h-4 w-4 text-primary" />
+                <div>
+                  <Dialog.Title className="text-[14px] font-semibold text-foreground">Find a payment by screenshot</Dialog.Title>
+                  <Dialog.Description className="text-[11.5px] text-muted-foreground">Matches on reference / UPI / order IDs read from the image.</Dialog.Description>
+                </div>
+              </div>
+              <Dialog.Close asChild>
+                <button className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"><X className="h-4 w-4" /></button>
+              </Dialog.Close>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {imgLoading && (
+                <div className="flex flex-col items-center justify-center gap-2 py-10 text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  <p className="text-[12.5px]">Reading your screenshot…</p>
+                </div>
+              )}
+
+              {imgError && !imgLoading && (
+                <div className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2.5 text-[12.5px] text-foreground/80">{imgError}</div>
+              )}
+
+              {imgResult && !imgLoading && (
+                <>
+                  {/* What we read */}
+                  <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-2">
+                    <p className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide"><Sparkles className="h-3 w-3 text-primary" /> Read from screenshot</p>
+                    {imgResult.extracted.summary && <p className="text-[12.5px] text-foreground/80">{imgResult.extracted.summary}</p>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {imgResult.extracted.amount != null && (
+                        <span className="text-[11px] rounded-md bg-background border border-border px-2 py-0.5 text-foreground">{formatCurrency(imgResult.extracted.amount, imgResult.extracted.currency ?? "INR")}</span>
+                      )}
+                      {imgResult.extracted.date && <span className="text-[11px] rounded-md bg-background border border-border px-2 py-0.5 text-muted-foreground">{imgResult.extracted.date}</span>}
+                      {imgResult.extracted.method && <span className="text-[11px] rounded-md bg-background border border-border px-2 py-0.5 text-muted-foreground">{imgResult.extracted.method}</span>}
+                      {imgResult.extracted.counterparty_name && <span className="text-[11px] rounded-md bg-background border border-border px-2 py-0.5 text-muted-foreground truncate max-w-[180px]">{imgResult.extracted.counterparty_name}</span>}
+                      {imgResult.tokens.map((t) => (
+                        <span key={t} className="num text-[11px] rounded-md bg-primary/10 border border-primary/20 px-2 py-0.5 text-primary truncate max-w-[220px]">{t}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Matches */}
+                  {imgResult.matches.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{imgResult.matches.length} matching payment{imgResult.matches.length > 1 ? "s" : ""}</p>
+                      {imgResult.matches.map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => jumpToMatch(m)}
+                          className="w-full text-left rounded-lg border border-border bg-card hover:border-primary/40 hover:bg-primary/[0.04] transition-colors px-3 py-2.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[13px] font-semibold text-foreground">{formatCurrency(Number(m.amount), m.currency)}</span>
+                            <span className={cn(
+                              "text-[9.5px] font-medium uppercase tracking-wide rounded px-1.5 py-0.5 border",
+                              m.confidence === "high" ? "text-success border-success/30 bg-success/10"
+                                : m.confidence === "medium" ? "text-warning border-warning/30 bg-warning/10"
+                                : "text-muted-foreground border-border bg-accent/40"
+                            )}>{m.confidence} match</span>
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                            <span>{formatDate(m.transaction_date)}</span>
+                            <span>·</span>
+                            <span>{sourceLabel(categorizeSource(m.source))}</span>
+                            <span>·</span>
+                            <span className="capitalize">{m.status}</span>
+                            {m.amount_matches && <><span>·</span><span className="text-success">amount ✓</span></>}
+                          </div>
+                          {(m.counterparty_name || m.external_id) && (
+                            <p className="mt-0.5 num text-[11px] text-muted-foreground/70 truncate">{m.counterparty_name ?? ""}{m.counterparty_name && m.external_id ? " · " : ""}{m.external_id ?? ""}</p>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {imgResult.note && <p className="text-[12px] text-muted-foreground/80 leading-relaxed">{imgResult.note}</p>}
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 px-5 py-3.5 border-t border-border flex-shrink-0">
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="h-8 px-3 rounded-lg text-[12px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                Try another screenshot
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
