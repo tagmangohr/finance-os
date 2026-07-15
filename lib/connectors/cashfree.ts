@@ -8,11 +8,14 @@ const CASHFREE_BASE = "https://api.cashfree.com/pg";
 const PAGE_SIZE = 1000; // recon API max
 const API_VERSION = "2025-01-01";
 const DAY_MS = 24 * 60 * 60 * 1000;
-// recon caps each request at 30 days — and, crucially, SMALLER/arbitrary windows trip
-// its intermittent server error far more often than full 30-day windows, so use the max.
-const WINDOW_MS = 30 * DAY_MS;
+// recon caps each request at 30 days, but for this merchant's data the endpoint's
+// intermittent "internal_processing_error" trips FAR more often on large (25–30 day)
+// windows than on ~10-day ones (verified empirically: 25-day windows fail where
+// consecutive 10–12 day windows succeed). Smaller windows also keep a single
+// (non-resumable) recon job well under the function time budget.
+const WINDOW_MS = 10 * DAY_MS;
 // Full re-paginations of a window before giving up ON THIS RUN (see fetchWindow).
-const WINDOW_ATTEMPTS = 4;
+const WINDOW_ATTEMPTS = 5;
 
 /**
  * Cashfree Payment Gateway connector.

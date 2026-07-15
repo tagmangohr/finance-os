@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
-import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
+import { enqueueIncremental, drainSyncJobs } from "@/lib/connectors/jobs";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
-import { fyStartISO } from "@/lib/utils";
 import type { Database } from "@/lib/supabase/types";
 
 export const maxDuration = 60;
@@ -49,9 +48,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const now = new Date();
-  // FY start = 1 Apr of the current Indian FY, at IST midnight (fyStartISO is
-  // IST-correct). enqueueBackfill slices [fyStart, now] into resumable windows.
-  const fyStart = new Date(`${fyStartISO(now)}T00:00:00+05:30`);
 
   // Leave headroom under the 60s function budget for the inline Stripe events delta.
   const eventsDeadline = Date.now() + 40_000;
@@ -89,9 +85,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           console.error(`[cron/nightly-sync] stripe events delta failed (${c.id}), falling back to backfill:`, e);
         }
       }
-      // Skip if a backfill (advance_checkpoint = false) is already draining for
-      // this connector — from last night or a manual sync — so nightly runs never
-      // pile duplicate windows on top of in-flight ones.
+      // Skip if an on-demand backfill (advance_checkpoint = false) is already
+      // draining for this connector — so nightly runs never pile on top of it.
       const { count } = await supabase
         .from("sync_jobs")
         .select("id", { count: "exact", head: true })
@@ -100,8 +95,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         .in("status", ["pending", "running"]);
       if ((count ?? 0) > 0) { skipped++; return; }
 
-      const windows = await enqueueBackfill(supabase, c, fyStart, now);
-      if (windows > 0) enqueued++;
+      // Incremental catch-up from the connector's checkpoint (synced_through − 3d
+      // overlap → now), NOT a full-FY re-scan. Advances synced_through on success.
+      // The old full-FY enqueueBackfill re-scanned Apr→now every night; for Cashfree
+      // (a single non-resumable recon job) that grew too large to finish, so it kept
+      // timing out and the checkpoint never advanced — freezing the data.
+      const { enqueued: didEnqueue } = await enqueueIncremental(supabase, c);
+      if (didEnqueue) enqueued++;
     })
   );
   const failed = outcomes.filter((o) => o.status === "rejected").length;
@@ -137,7 +137,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({
     message: "Nightly reconcile started",
-    fy_start: fyStartISO(now),
     stripe_events_delta: eventsDelta,
     stripe_fees_filled: feesFilled,
     fx_reconciled: fxReconciled,
