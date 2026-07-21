@@ -16,6 +16,12 @@ export type NormalizedTransaction = {
   transaction_date: string; // YYYY-MM-DD
   transaction_at?: string | null; // full UTC ISO timestamp (the precise transaction time)
   metadata: Record<string, unknown>;
+  // The COMPLETE, unmodified source payload for this row (the gateway object /
+  // webhook body / CSV row we normalized from). Persisted verbatim to the `raw`
+  // jsonb column so any field we don't surface today becomes a display-only change
+  // later — never a re-fetch. Curated `metadata` above stays the indexed/searchable
+  // subset; `raw` is the full record. Optional only so older call sites still compile.
+  raw?: unknown;
   // Base-currency (INR) equivalent. Set when the connector can provide it
   // (e.g. Stripe's settled balance-transaction amount). When omitted, the sync
   // layer fills it in: amount for INR rows, null for un-converted foreign rows.
@@ -313,6 +319,7 @@ export function normalizeRazorpayPayment(
       refund_status: payment.refund_status,
       notes: payment.notes,
     },
+    raw: payment,
   };
 }
 
@@ -355,6 +362,7 @@ export function normalizeRazorpayPayout(
       processed_at: payout.processed_at,
       notes: payout.notes,
     },
+    raw: payout,
   };
 }
 
@@ -398,6 +406,7 @@ export function normalizeRazorpayDispute(
       respondby: dispute.respondby,
       comments: dispute.comments,
     },
+    raw: dispute,
   };
 }
 
@@ -435,6 +444,7 @@ export function normalizeRazorpayRefund(
       speed_requested: refund.speed_requested,
       acquirer_data: refund.acquirer_data,
     },
+    raw: refund,
   };
 }
 
@@ -459,6 +469,7 @@ export function normalizeRazorpaySettlement(
       utr: settlement.utr,
       onhold_amount: settlement.onhold_amount / 100,
     },
+    raw: settlement,
   };
 }
 
@@ -552,6 +563,7 @@ export function normalizeStripeCharge(
       phone: charge.billing_details?.phone ?? null,
       stripe_metadata: charge.metadata,
     },
+    raw: charge,
   };
 }
 
@@ -592,6 +604,7 @@ export function normalizeStripePayout(
       arrival_date: payout.arrival_date,
       stripe_metadata: payout.metadata,
     },
+    raw: payout,
   };
 }
 
@@ -623,6 +636,7 @@ export function normalizeStripeDispute(
       charge: dispute.charge,
       stripe_metadata: dispute.metadata,
     },
+    raw: dispute,
   };
 }
 
@@ -821,6 +835,7 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
       utr: e.settlement_details?.utr ?? null,
       ...(fee > 0 ? { fee } : {}),
     },
+    raw: e,
   };
 }
 
@@ -897,6 +912,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       transaction_date: (pay.payment_time ?? p.event_time ?? "").slice(0, 10),
       transaction_at: gatewayTimeToIso(pay.payment_time ?? p.event_time),
       metadata: { event_type: type, order_id: order.order_id ?? null, cf_payment_id: pay.cf_payment_id, email: cust?.customer_email ?? null, phone: cust?.customer_phone ?? null },
+      raw: p,
     };
   }
 
@@ -919,6 +935,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
       transaction_date: (r.processed_at ?? p.event_time ?? "").slice(0, 10),
       transaction_at: gatewayTimeToIso(r.processed_at ?? p.event_time),
       metadata: { event_type: type, order_id: r.order_id ?? null, cf_refund_id: r.cf_refund_id ?? null },
+      raw: p,
     };
   }
 
@@ -966,6 +983,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
         email: cust?.customer_email ?? null,
         phone: cust?.customer_phone ?? null,
       },
+      raw: p,
     };
   }
 
@@ -1082,6 +1100,7 @@ export function normalizeAppStoreTransaction(
       app_account_token: txn.appAccountToken ?? null,
       ...(isReversal ? { revocation_reason: txn.revocationReason ?? null, revocation_date: txn.revocationDate ?? null } : {}),
     },
+    raw: txn,
   };
 }
 
@@ -1114,6 +1133,7 @@ export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransac
     transaction_date: dateStr,
     transaction_at: gatewayTimeToIso(tx.addedon),
     metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
+    raw: tx,
   };
 }
 
@@ -1143,6 +1163,7 @@ export function normalizePaytmTransaction(tx: PaytmTransaction): NormalizedTrans
     transaction_date: dateStr,
     transaction_at: gatewayTimeToIso(tx.txnDate),
     metadata: { orderId: tx.orderId, txnId: tx.txnId, paymentMode: tx.paymentMode, bankTxnId: tx.bankTxnId, responseCode: tx.responseCode },
+    raw: tx,
   };
 }
 
@@ -1175,6 +1196,7 @@ export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): Normalize
     transaction_date: dateStr,
     transaction_at: gatewayTimeToIso(tx.addedon),
     metadata: { txnid: tx.txnid, mihpayid: tx.mihpayid, mode: tx.mode, bank_ref_no: tx.bank_ref_no, net_amount_debit: tx.net_amount_debit, email: tx.email ?? null, phone: tx.phone ?? null },
+    raw: tx,
   };
 }
 
@@ -1226,5 +1248,6 @@ export function normalizeCsvRow(
     status: "completed",
     transaction_date: parseDateString(rawDate),
     metadata: { raw: row },
+    raw: row,
   };
 }

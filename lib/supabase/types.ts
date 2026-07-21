@@ -92,11 +92,16 @@ export interface Database {
           transaction_date: string;
           transaction_at: string | null;
           metadata: Json;
+          // Full unmodified source payload. `has_raw` is a generated column
+          // (raw IS NOT NULL) — never written directly, only read.
+          raw: Json | null;
+          has_raw: boolean;
           created_at: string;
         };
-        // New multi-currency columns + transaction_at are optional on insert
+        // New multi-currency columns + transaction_at + raw are optional on insert
         // (nullable, filled by the sync layer) so existing inserters don't break.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at">>;
+        // has_raw is generated → omitted from Insert entirely.
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "raw" | "has_raw"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "raw">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       entities: {

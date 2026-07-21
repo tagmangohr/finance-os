@@ -39,6 +39,9 @@ export type ExistingTransactionByExternalId = {
   status: string;
   transaction_date: string;
   metadata: unknown;
+  // Presence flag for the `raw` payload — a generated boolean column, so we never
+  // pull the (large) raw blob during dedup, only whether it's already populated.
+  has_raw: boolean;
 };
 
 export async function getExistingExternalIds(
@@ -86,7 +89,7 @@ export async function getExistingTransactionsByExternalId(
       .from("transactions")
       .select(
         `id, external_id, type, amount, currency, amount_base, category, counterparty_name,
-         description, source, status, transaction_date, metadata`
+         description, source, status, transaction_date, metadata, has_raw`
       )
       .eq("org_id", orgId)
       .in("external_id", batch);

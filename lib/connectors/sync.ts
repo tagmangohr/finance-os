@@ -312,6 +312,9 @@ function toInsertRows(
     transaction_date: tx.transaction_date,
     transaction_at: tx.transaction_at ?? null,
     metadata: tx.metadata as import("@/lib/supabase/types").Json,
+    // Full unmodified source payload → the `raw` jsonb column. Stored so any field
+    // we don't surface today is a display-only change later, never a re-fetch.
+    raw: (tx.raw ?? null) as import("@/lib/supabase/types").Json,
     };
   });
 }
@@ -332,6 +335,9 @@ function toRefreshFields(row: TransactionInsert): TransactionUpdate {
     transaction_date: row.transaction_date,
     transaction_at: row.transaction_at ?? null,
     metadata: row.metadata,
+    // Keep the stored raw payload current (and backfill it onto rows that predate
+    // raw capture — see hasTransactionChanged's has_raw gap check).
+    raw: row.raw ?? null,
   };
 }
 
@@ -357,7 +363,11 @@ function hasTransactionChanged(
     existing.source !== next.source ||
     existing.status !== next.status ||
     existing.transaction_date !== next.transaction_date ||
-    stableJson(existing.metadata) !== stableJson(next.metadata)
+    stableJson(existing.metadata) !== stableJson(next.metadata) ||
+    // Row predates raw-payload capture but this sync carries one → refresh to
+    // backfill `raw`. Makes every re-sync self-healing (fills raw gaps) and drives
+    // the one-time historical backfill without a bespoke script.
+    (!existing.has_raw && next.raw != null)
   );
 }
 

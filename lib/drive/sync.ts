@@ -123,6 +123,7 @@ export async function syncDriveFile({
     status:            tx.status,
     transaction_date:  tx.transaction_date,
     metadata:          tx.metadata as import("@/lib/supabase/types").Json,
+    raw:               (tx.raw ?? null) as import("@/lib/supabase/types").Json,
   }));
 
   // ── Dedup against existing rows ──────────────────────────────────────────

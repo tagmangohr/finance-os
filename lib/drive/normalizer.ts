@@ -223,6 +223,7 @@ export function normalizeDriverRows(
         drive_file_id:  fileId,
         ...(customMeta ? { custom: customMeta } : {}),
       },
+      raw:              row,
     });
   }
 
