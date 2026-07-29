@@ -114,26 +114,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (subRec) {
     try {
       const nowIso = new Date().toISOString();
-      await supabase.from("cashfree_subscriptions").upsert(
-        {
-          subscription_id: subRec.subscription_id,
-          connector_id:    matched.id,
-          org_id:          matched.org_id,
-          status:          subRec.status,
-          plan_name:       subRec.plan_name,
-          plan_amount:     subRec.plan_amount,
-          currency:        subRec.currency,
-          customer_name:   subRec.customer_name,
-          customer_email:  subRec.customer_email,
-          customer_phone:  subRec.customer_phone,
-          next_charge_at:  subRec.next_charge_at,
-          last_event_type: subRec.event_type,
-          last_event_at:   nowIso,
-          raw:             subRec.raw as Database["public"]["Tables"]["cashfree_subscriptions"]["Row"]["raw"],
-          updated_at:      nowIso,
-        },
-        { onConflict: "subscription_id,connector_id" }
-      );
+      // Always-set keys; optional fields only when this event actually carries them, so a
+      // payment/auth event (which has no plan/customer) never nulls-out the rich values a
+      // prior STATUS_CHANGED wrote. onConflict updates only the keys present in this object.
+      const row: Record<string, unknown> = {
+        subscription_id: subRec.subscription_id,
+        connector_id:    matched.id,
+        org_id:          matched.org_id,
+        last_event_type: subRec.event_type,
+        last_event_at:   nowIso,
+        raw:             subRec.raw as Database["public"]["Tables"]["cashfree_subscriptions"]["Row"]["raw"],
+        updated_at:      nowIso,
+      };
+      const optional = {
+        status: subRec.status, plan_name: subRec.plan_name, plan_amount: subRec.plan_amount,
+        currency: subRec.currency, customer_name: subRec.customer_name,
+        customer_email: subRec.customer_email, customer_phone: subRec.customer_phone,
+        next_charge_at: subRec.next_charge_at,
+      };
+      for (const [k, v] of Object.entries(optional)) if (v != null) row[k] = v;
+      await supabase
+        .from("cashfree_subscriptions")
+        .upsert(row as Database["public"]["Tables"]["cashfree_subscriptions"]["Insert"], { onConflict: "subscription_id,connector_id" });
     } catch (e) {
       console.error("[cashfree webhook] subscription registry upsert failed (non-fatal):", e);
     }
