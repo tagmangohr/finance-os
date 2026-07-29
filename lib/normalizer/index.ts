@@ -902,25 +902,31 @@ export type CashfreeWebhookPayload = {
     subscription_id?: string;            // e.g. "sub_0703981c7d74d52b1ef9bcd1"
     cf_subscription_id?: string | number;
     failure_details?: { failure_reason?: string | null };
-    // Lifecycle events (SUBSCRIPTION_STATUS_CHANGED) carry the rich subscription/plan/customer:
+    // Lifecycle events (SUBSCRIPTION_STATUS_CHANGED) carry the rich subscription/plan/customer.
+    // Only the fields we actually read are declared (payloads carry more — raw keeps them).
     subscription_details?: {
       subscription_id?: string;
-      cf_subscription_id?: string | number;
       subscription_status?: string;      // ACTIVE | BANK_APPROVAL_PENDING | CANCELLED | COMPLETED | ...
       next_schedule_date?: string | null;
-      subscription_first_charge_time?: string | null;
-      subscription_tags?: Record<string, unknown>;
     };
     plan_details?: {
-      plan_id?: string;
       plan_name?: string | null;
       plan_currency?: string | null;
       plan_recurring_amount?: number | null;
       plan_max_amount?: number | null;
-      plan_interval_type?: string | null;
     };
   };
 };
+
+/** Map a Cashfree payment_status to our transaction status. Shared by the one-time
+ *  PAYMENT_ webhook, the subscription webhook, and the subscription poller so the
+ *  mapping can't drift between them. (Refund/dispute have different rules — not this.) */
+function mapCashfreePaymentStatus(raw: string | null | undefined): NormalizedTransaction["status"] {
+  const st = (raw ?? "").toUpperCase();
+  if (st === "SUCCESS" || st === "PAID") return "completed";
+  if (st === "PENDING" || st === "INITIALIZED") return "pending";
+  return "failed";
+}
 
 /** Map a Cashfree webhook (payment or refund) to a transaction (null otherwise). */
 export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): NormalizedTransaction | null {
@@ -931,9 +937,7 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
     const pay = d.payment ?? {};
     const order = d.order ?? {};
     if (pay.cf_payment_id == null) return null;
-    const st = (pay.payment_status ?? "").toUpperCase();
-    const status: NormalizedTransaction["status"] =
-      st === "SUCCESS" ? "completed" : st === "PENDING" ? "pending" : "failed";
+    const status = mapCashfreePaymentStatus(pay.payment_status);
     const cust = d.customer_details;
     return {
       external_id: `cf_pay_${pay.cf_payment_id}`,
@@ -1037,8 +1041,9 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
 /**
  * Map a Cashfree SUBSCRIPTION_* webhook to a recurring-charge transaction, or null
  * for lifecycle-only events (no payment in the payload). Money rows use
- * source = "cashfree_subscription" and external_id "cf_subpay_<cf_payment_id>" so
- * they dedup against the settlement-recon backfill and each other.
+ * source = "cashfree" and external_id "cf_pay_<cf_txn_id>" (the SAME identity recon
+ * uses) so they dedup against the settlement-recon backfill and each other — never
+ * double-counting. cf_txn_id is the recon key, NOT the subscription cf_payment_id.
  */
 export function normalizeCashfreeSubscriptionPayment(p: CashfreeWebhookPayload): NormalizedTransaction | null {
   const type = (p.type ?? "").toUpperCase();
@@ -1051,9 +1056,7 @@ export function normalizeCashfreeSubscriptionPayment(p: CashfreeWebhookPayload):
   const payId = d.cf_txn_id ?? d.cf_payment_id;
   if (payId == null) return null;
 
-  const st = (d.payment_status ?? "").toUpperCase();
-  const status: NormalizedTransaction["status"] =
-    st === "SUCCESS" ? "completed" : st === "PENDING" ? "pending" : "failed";
+  const status = mapCashfreePaymentStatus(d.payment_status);
   const subId = d.subscription_id ?? null;
   const when = d.payment_initiated_date ?? p.event_time;
 
@@ -1138,8 +1141,8 @@ export function extractCashfreeSubscription(p: CashfreeWebhookPayload): Cashfree
  * Normalize ONE payment object from GET /pg/subscriptions/{id}/payments (the poller
  * path — Layer 2's self-healing net). The API shape differs from the webhook, so we
  * read several likely field names defensively and keep the full object as `raw`.
- * Same external_id scheme as the webhook (cf_subpay_<cf_payment_id>) so the two paths
- * dedup against each other. Returns null if there's no usable payment id.
+ * Same external_id scheme as the webhook (cf_pay_<cf_txn_id>) so the two paths and
+ * settlement recon all dedup onto one row. Returns null if there's no usable payment id.
  */
 export type CashfreeSubscriptionApiPayment = {
   cf_txn_id?: string | number;         // PG payment id recon reports — preferred dedup key
@@ -1166,9 +1169,7 @@ export function normalizeCashfreeSubscriptionApiPayment(
   // normalizer). Fall back through the other id fields if the endpoint names it differently.
   const payId = pay.cf_txn_id ?? pay.cf_payment_id ?? pay.payment_id ?? pay.subscription_payment_id;
   if (payId == null) return null;
-  const st = (pay.payment_status ?? pay.status ?? "").toUpperCase();
-  const status: NormalizedTransaction["status"] =
-    st === "SUCCESS" || st === "PAID" ? "completed" : st === "PENDING" || st === "INITIALIZED" ? "pending" : "failed";
+  const status = mapCashfreePaymentStatus(pay.payment_status ?? pay.status);
   const whenIso = gatewayTimeToIso(pay.payment_time ?? pay.payment_initiated_date ?? pay.scheduled_on);
   return {
     // Same identity as recon (source "cashfree", cf_pay_<id>) — dedups, never double-counts.

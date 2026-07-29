@@ -145,8 +145,8 @@ export const SUBSCRIPTION_POLL_BATCH = 200;
  * registry least-recently-polled first and re-fetches each one's payments via
  * GET /pg/subscriptions/{id}/payments — which returns ALL charges (incl. failed,
  * with no settlement wait), so any recurring charge a webhook never delivered is
- * recovered here. Idempotent (dedup on cf_subpay_<id>), best-effort, and bounded by
- * both `limit` and `deadlineMs`. Returns counts for logging.
+ * recovered here. Idempotent (dedup on cf_pay_<cf_txn_id>), best-effort, and bounded
+ * by both `limit` and `deadlineMs`. Returns counts for logging.
  *
  * NOTE: decrypts connector secrets, so it only works where CONNECTOR_ENC_KEY matches
  * (production). Non-fatal everywhere — a missing table (migration 031 not applied)
@@ -185,6 +185,7 @@ export async function pollCashfreeSubscriptions(
   }
 
   let polled = 0, inserted = 0, updated = 0;
+  const polledIds: string[] = [];
   for (const s of subs) {
     if (Date.now() > deadline) break;
     const txns = await client.fetchSubscriptionPayments(s.subscription_id, {
@@ -207,12 +208,17 @@ export async function pollCashfreeSubscriptions(
           .is("subscription_id", null);
       }
     }
+    polledIds.push(s.subscription_id);
+    polled++;
+  }
+  // One UPDATE stamps last_polled_at on every subscription actually polled this pass
+  // (instead of a round-trip per subscription), so next run rotates to the rest.
+  if (polledIds.length > 0) {
     await supabase
       .from("cashfree_subscriptions")
       .update({ last_polled_at: new Date().toISOString() })
       .eq("connector_id", connector.id)
-      .eq("subscription_id", s.subscription_id);
-    polled++;
+      .in("subscription_id", polledIds);
   }
   return { polled, inserted, updated };
 }

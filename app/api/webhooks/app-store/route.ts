@@ -177,12 +177,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return handleFiestaRelay(supabase, parsed);
   }
 
-  let signedPayload: string | undefined;
-  try {
-    signedPayload = (JSON.parse(rawBody) as { signedPayload?: string }).signedPayload;
-  } catch {
-    signedPayload = undefined;
-  }
+  // Apple direct path: reuse the body already parsed above (reaching here means it either
+  // failed to parse or carries a signedPayload).
+  const signedPayload = typeof parsed?.signedPayload === "string" ? parsed.signedPayload : undefined;
   if (!signedPayload) {
     await logWebhook(supabase, { outcome: "bad_json", signature_ok: false });
     return NextResponse.json({ error: "Missing signedPayload" }, { status: 400 });
