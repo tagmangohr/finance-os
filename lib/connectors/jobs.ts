@@ -3,6 +3,7 @@ import type { ConnectorSyncResult } from "@/lib/connectors/sync";
 import { syncConnectorTransactions, persistTransactions, SyncConfigError } from "@/lib/connectors/sync";
 import { StripeConnector } from "@/lib/connectors/stripe";
 import { RazorpayConnector } from "@/lib/connectors/razorpay";
+import { CashfreeConnector } from "@/lib/connectors/cashfree";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
@@ -131,6 +132,89 @@ export async function enqueueIncremental(
   });
   if (error) throw new Error(`Failed to enqueue incremental: ${error.message}`);
   return { enqueued: true };
+}
+
+/** Max subscriptions polled per nightly pass. Cashfree has no list-subscriptions
+ *  API, so the registry only grows as webhooks arrive; this keeps the nightly
+ *  self-heal bounded well within the function budget. Least-recently-polled first,
+ *  so over successive nights every subscription is refreshed in rotation. */
+export const SUBSCRIPTION_POLL_BATCH = 200;
+
+/**
+ * Self-healing net for Cashfree recurring charges (Layer 2). Walks the subscription
+ * registry least-recently-polled first and re-fetches each one's payments via
+ * GET /pg/subscriptions/{id}/payments — which returns ALL charges (incl. failed,
+ * with no settlement wait), so any recurring charge a webhook never delivered is
+ * recovered here. Idempotent (dedup on cf_subpay_<id>), best-effort, and bounded by
+ * both `limit` and `deadlineMs`. Returns counts for logging.
+ *
+ * NOTE: decrypts connector secrets, so it only works where CONNECTOR_ENC_KEY matches
+ * (production). Non-fatal everywhere — a missing table (migration 031 not applied)
+ * or decrypt failure just returns zeros.
+ */
+export async function pollCashfreeSubscriptions(
+  supabase: SupabaseLike,
+  connector: Pick<ConnectorRow, "id" | "org_id" | "type" | "config">,
+  opts: { limit?: number; deadlineMs?: number } = {}
+): Promise<{ polled: number; inserted: number; updated: number }> {
+  if (connector.type !== "cashfree") return { polled: 0, inserted: 0, updated: 0 };
+  const limit = opts.limit ?? SUBSCRIPTION_POLL_BATCH;
+  const deadline = opts.deadlineMs ?? Date.now() + 30_000;
+
+  let client: CashfreeConnector;
+  try {
+    const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
+    if (!cfg.client_id || !cfg.client_secret) return { polled: 0, inserted: 0, updated: 0 };
+    client = new CashfreeConnector(cfg.client_id, cfg.client_secret);
+  } catch {
+    return { polled: 0, inserted: 0, updated: 0 };
+  }
+
+  let subs: Array<{ subscription_id: string; plan_name: string | null; customer_name: string | null; currency: string | null }>;
+  try {
+    const { data, error } = await supabase
+      .from("cashfree_subscriptions")
+      .select("subscription_id, plan_name, customer_name, currency")
+      .eq("connector_id", connector.id)
+      .order("last_polled_at", { ascending: true, nullsFirst: true })
+      .limit(limit);
+    if (error) return { polled: 0, inserted: 0, updated: 0 }; // table missing / not applied yet
+    subs = data ?? [];
+  } catch {
+    return { polled: 0, inserted: 0, updated: 0 };
+  }
+
+  let polled = 0, inserted = 0, updated = 0;
+  for (const s of subs) {
+    if (Date.now() > deadline) break;
+    const txns = await client.fetchSubscriptionPayments(s.subscription_id, {
+      planName: s.plan_name, customerName: s.customer_name, currency: s.currency,
+    });
+    if (txns.length > 0) {
+      const res = await persistTransactions(supabase, connector.org_id, connector.id, txns);
+      inserted += res.inserted;
+      updated += res.updated;
+      // Fill-only tag: rows that recon inserted BEFORE we knew they were recurring
+      // (subscription_id still null) get tagged now. toInsertRows sets it on new rows;
+      // this catches the pre-existing ones. Never overwrites (`is null`) → idempotent.
+      const extIds = txns.map((t) => t.external_id).filter(Boolean) as string[];
+      if (extIds.length > 0) {
+        await supabase
+          .from("transactions")
+          .update({ subscription_id: s.subscription_id })
+          .eq("org_id", connector.org_id)
+          .in("external_id", extIds)
+          .is("subscription_id", null);
+      }
+    }
+    await supabase
+      .from("cashfree_subscriptions")
+      .update({ last_polled_at: new Date().toISOString() })
+      .eq("connector_id", connector.id)
+      .eq("subscription_id", s.subscription_id);
+    polled++;
+  }
+  return { polled, inserted, updated };
 }
 
 /** Claim up to CLAIM_BATCH eligible jobs atomically (FOR UPDATE SKIP LOCKED). */

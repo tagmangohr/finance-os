@@ -59,6 +59,30 @@ export interface Database {
         Insert: Omit<Database["public"]["Tables"]["webhook_events"]["Row"], "id" | "received_at"> & { received_at?: string };
         Update: Partial<Database["public"]["Tables"]["webhook_events"]["Insert"]>;
       };
+      cashfree_subscriptions: {
+        Row: {
+          subscription_id: string;
+          connector_id: string;
+          org_id: string;
+          status: string | null;
+          plan_name: string | null;
+          plan_amount: number | null;
+          currency: string | null;
+          customer_name: string | null;
+          customer_email: string | null;
+          customer_phone: string | null;
+          first_charge_at: string | null;
+          next_charge_at: string | null;
+          last_event_type: string | null;
+          last_event_at: string | null;
+          last_polled_at: string | null;
+          raw: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["cashfree_subscriptions"]["Row"], "created_at" | "updated_at"> & { created_at?: string; updated_at?: string };
+        Update: Partial<Database["public"]["Tables"]["cashfree_subscriptions"]["Insert"]>;
+      };
       user_metric_prefs: {
         Row: {
           user_id: string;
@@ -91,6 +115,9 @@ export interface Database {
           status: "pending" | "completed" | "failed" | "refunded";
           transaction_date: string;
           transaction_at: string | null;
+          // Non-null only for recurring/subscription charges (the gateway subscription
+          // id). Never written by the recon/one-time refresh path, so it's durable.
+          subscription_id: string | null;
           metadata: Json;
           // Full unmodified source payload. `has_raw` is a generated column
           // (raw IS NOT NULL) — never written directly, only read.
@@ -98,10 +125,10 @@ export interface Database {
           has_raw: boolean;
           created_at: string;
         };
-        // New multi-currency columns + transaction_at + raw are optional on insert
-        // (nullable, filled by the sync layer) so existing inserters don't break.
-        // has_raw is generated → omitted from Insert entirely.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "raw" | "has_raw"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "raw">>;
+        // New multi-currency columns + transaction_at + raw + subscription_id are
+        // optional on insert (nullable, filled by the sync layer) so existing
+        // inserters don't break. has_raw is generated → omitted from Insert entirely.
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       entities: {

@@ -311,6 +311,10 @@ function toInsertRows(
     status: tx.status,
     transaction_date: tx.transaction_date,
     transaction_at: tx.transaction_at ?? null,
+    // Recurring marker: set on INSERT for subscription charges. Deliberately absent
+    // from toRefreshFields so the recon/one-time re-sync of the SAME cf_payment_id row
+    // never clears it — the recurring signal is durable.
+    subscription_id: tx.subscription_id ?? null,
     metadata: tx.metadata as import("@/lib/supabase/types").Json,
     // Full unmodified source payload → the `raw` jsonb column. Stored so any field
     // we don't surface today is a display-only change later, never a re-fetch.

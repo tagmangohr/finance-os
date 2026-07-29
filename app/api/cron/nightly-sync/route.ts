@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
-import { enqueueIncremental, drainSyncJobs } from "@/lib/connectors/jobs";
+import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -125,13 +125,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   // Kick the worker so draining starts immediately instead of waiting for the
-  // next per-minute process-sync-jobs tick.
+  // next per-minute process-sync-jobs tick. Then self-heal Cashfree recurring
+  // charges: poll each known subscription's payments (Layer 2 net) so any charge a
+  // webhook never delivered is recovered — least-recently-polled first, so the whole
+  // registry rotates over successive nights within the function budget.
+  const cashfreeConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "cashfree");
   const worker = randomUUID();
   after(async () => {
+    const sb = await createServiceClient();
     try {
-      await drainSyncJobs(await createServiceClient(), worker);
+      await drainSyncJobs(sb, worker);
     } catch (e) {
       console.error("[cron/nightly-sync] drain failed:", e);
+    }
+    for (const c of cashfreeConnectors) {
+      try {
+        const res = await pollCashfreeSubscriptions(sb, c, { deadlineMs: Date.now() + 20_000 });
+        if (res.polled) console.log(`[cron/nightly-sync] cashfree subs polled=${res.polled} inserted=${res.inserted} updated=${res.updated} (${c.id})`);
+      } catch (e) {
+        console.error(`[cron/nightly-sync] subscription poll failed (${c.id}):`, e);
+      }
     }
   });
 

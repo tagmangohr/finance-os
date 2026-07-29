@@ -1,7 +1,9 @@
 import {
   NormalizedTransaction,
   CashfreeReconEvent,
+  CashfreeSubscriptionApiPayment,
   normalizeCashfreeReconEvent,
+  normalizeCashfreeSubscriptionApiPayment,
 } from "@/lib/normalizer";
 
 const CASHFREE_BASE = "https://api.cashfree.com/pg";
@@ -108,5 +110,41 @@ export class CashfreeConnector {
       }
     }
     return [];
+  }
+
+  /**
+   * Fetch every payment for ONE subscription (GET /pg/subscriptions/{id}/payments).
+   * Unlike recon, this returns ALL charges (incl. failed/declined) immediately, with
+   * no settlement wait — it's how the poller self-heals recurring charges that the
+   * webhook never delivered. `ctx` carries subscription display fields for the row.
+   * Returns [] (never throws) on a per-subscription error so the poller keeps going.
+   */
+  async fetchSubscriptionPayments(
+    subscriptionId: string,
+    ctx: { planName?: string | null; customerName?: string | null; currency?: string | null } = {}
+  ): Promise<NormalizedTransaction[]> {
+    try {
+      const res = await fetch(
+        `${CASHFREE_BASE}/subscriptions/${encodeURIComponent(subscriptionId)}/payments`,
+        { method: "GET", headers: this.headers, next: { revalidate: 0 } }
+      );
+      if (!res.ok) {
+        // 404 = subscription no longer visible; other codes = transient. Either way,
+        // skip this one and let the next poll retry (idempotent).
+        return [];
+      }
+      const body = (await res.json()) as
+        | { data?: CashfreeSubscriptionApiPayment[] }
+        | CashfreeSubscriptionApiPayment[];
+      const payments = Array.isArray(body) ? body : body.data ?? [];
+      const out: NormalizedTransaction[] = [];
+      for (const pay of payments) {
+        const txn = normalizeCashfreeSubscriptionApiPayment(pay, { subscriptionId, ...ctx });
+        if (txn) out.push(txn);
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 }

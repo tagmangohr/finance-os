@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
-import { normalizeCashfreeWebhookEvent, type CashfreeWebhookPayload } from "@/lib/normalizer";
+import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, type CashfreeWebhookPayload } from "@/lib/normalizer";
 import type { Database } from "@/lib/supabase/types";
 
 export const maxDuration = 30;
@@ -104,13 +104,54 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // ── Subscription registry ──────────────────────────────────────────────────
+  // Cashfree has NO list-subscriptions API, so the only way we enumerate a
+  // subscription is when it pushes us a SUBSCRIPTION_* event. Record/refresh every
+  // one here (charge AND lifecycle events) so the nightly poller has the full set of
+  // subscription_ids to re-fetch. Best-effort: a registry failure (e.g. migration 031
+  // not yet applied) must never change what we return to Cashfree.
+  const subRec = extractCashfreeSubscription(payload);
+  if (subRec) {
+    try {
+      const nowIso = new Date().toISOString();
+      await supabase.from("cashfree_subscriptions").upsert(
+        {
+          subscription_id: subRec.subscription_id,
+          connector_id:    matched.id,
+          org_id:          matched.org_id,
+          status:          subRec.status,
+          plan_name:       subRec.plan_name,
+          plan_amount:     subRec.plan_amount,
+          currency:        subRec.currency,
+          customer_name:   subRec.customer_name,
+          customer_email:  subRec.customer_email,
+          customer_phone:  subRec.customer_phone,
+          next_charge_at:  subRec.next_charge_at,
+          last_event_type: subRec.event_type,
+          last_event_at:   nowIso,
+          raw:             subRec.raw as Database["public"]["Tables"]["cashfree_subscriptions"]["Row"]["raw"],
+          updated_at:      nowIso,
+        },
+        { onConflict: "subscription_id,connector_id" }
+      );
+    } catch (e) {
+      console.error("[cashfree webhook] subscription registry upsert failed (non-fatal):", e);
+    }
+  }
+
   const txn = normalizeCashfreeWebhookEvent(payload);
   if (!txn) {
+    // Lifecycle-only subscription events carry no money — but we DID persist their
+    // state to the registry above, so record that rather than a bare "ignored".
     await logWebhook(supabase, {
-      outcome: "ignored", signature_ok: true, event_type: payload?.type ?? null,
-      connector_id: matched.id, org_id: matched.org_id, payload: payload as unknown as Database["public"]["Tables"]["webhook_events"]["Row"]["payload"],
+      outcome: subRec ? "persisted" : "ignored", signature_ok: true, event_type: payload?.type ?? null,
+      connector_id: matched.id, org_id: matched.org_id,
+      payload: subRec ? null : (payload as unknown as Database["public"]["Tables"]["webhook_events"]["Row"]["payload"]),
     });
-    return NextResponse.json({ received: true, ignored: payload?.type ?? "unknown" }, { status: 200 });
+    return NextResponse.json(
+      subRec ? { received: true, subscription: subRec.subscription_id } : { received: true, ignored: payload?.type ?? "unknown" },
+      { status: 200 }
+    );
   }
 
   try {

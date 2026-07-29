@@ -84,9 +84,98 @@ function toEnvironment(env: string | null): Environment {
  * Notifications → set the Production (and Sandbox) URL to this endpoint, V2 format.
  * Create an `app_store` connector with config { bundle_id, app_apple_id }.
  */
+/**
+ * Handle a Fiesta relay notification: { notificationUUID, notificationType, subtype,
+ * transaction }, where `transaction` is Apple's already-decoded JWSTransactionDecodedPayload
+ * (identical shape to what our own verifier would produce, so normalizeAppStoreTransaction
+ * consumes it directly). Attaches to the single active `app_store` connector, stores the
+ * FULL relayed body as `raw`, and best-effort normalizes into a transaction row. No
+ * signature is verified here (open endpoint — Fiesta is the trusted relay).
+ */
+async function handleFiestaRelay(
+  supabase: SupabaseLike,
+  body: Record<string, unknown>
+): Promise<NextResponse> {
+  const notificationType = typeof body.notificationType === "string" ? body.notificationType : null;
+  const subtype = typeof body.subtype === "string" ? body.subtype : null;
+  const eventType = subtype ? `${notificationType}.${subtype}` : notificationType;
+  const transaction = (body.transaction ?? null) as AppStoreTransactionInfo | null;
+
+  // Open endpoint + one App Store connector → no bundle routing; take the active one.
+  const { data: connectors } = await supabase
+    .from("connectors")
+    .select("id, org_id")
+    .eq("type", "app_store")
+    .eq("status", "active")
+    .limit(1);
+  const matched = connectors?.[0] as { id: string; org_id: string } | undefined;
+  if (!matched) {
+    // No connector yet — keep the full body so we can replay it once one exists.
+    await logWebhook(supabase, {
+      outcome: "unmatched", signature_ok: false, event_type: eventType,
+      payload: body as unknown as Json,
+    });
+    return NextResponse.json({ received: true, unmatched: "no app_store connector" }, { status: 200 });
+  }
+
+  const txn = transaction
+    ? normalizeAppStoreTransaction(transaction, {
+        notificationType: notificationType ?? undefined,
+        subtype: subtype ?? undefined,
+      })
+    : null;
+
+  if (!txn) {
+    // Lifecycle-only (no money), or a shape we don't map yet. Store the FULL body so
+    // nothing is discarded and the mapping can be refined from real data later.
+    await logWebhook(supabase, {
+      outcome: "ignored", signature_ok: false, event_type: eventType,
+      connector_id: matched.id, org_id: matched.org_id, payload: body as unknown as Json,
+    });
+    return NextResponse.json({ received: true, ignored: eventType ?? "no_transaction" }, { status: 200 });
+  }
+
+  // Persist the full relayed body as raw (not just the transaction) so the
+  // notificationUUID/type/subtype context survives alongside the money row.
+  txn.raw = body;
+  try {
+    await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
+  } catch (err) {
+    await logWebhook(supabase, {
+      outcome: "persist_error", signature_ok: false, event_type: eventType,
+      connector_id: matched.id, org_id: matched.org_id, external_id: txn.external_id,
+      order_id: transaction?.originalTransactionId ?? null, amount: txn.amount, status: txn.status,
+      error: err instanceof Error ? err.message : String(err), payload: body as unknown as Json,
+    });
+    console.error(`[app-store relay] persist failed for ${eventType}:`, err);
+    return NextResponse.json({ error: "Persist failed" }, { status: 500 });
+  }
+
+  await logWebhook(supabase, {
+    outcome: "persisted", signature_ok: false, event_type: eventType,
+    connector_id: matched.id, org_id: matched.org_id, external_id: txn.external_id,
+    order_id: transaction?.originalTransactionId ?? null, amount: txn.amount, status: txn.status,
+  });
+  return NextResponse.json({ received: true }, { status: 200 });
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const rawBody = await req.text();
   const supabase = await createServiceClient();
+
+  // Two accepted shapes:
+  //  • Apple direct V2:  { signedPayload: "<JWS>" }  → verify + decode (below).
+  //  • Fiesta relay:     { notificationUUID, notificationType, subtype, transaction }
+  //    Fiesta receives Apple's notification, verifies the JWS itself, and forwards the
+  //    already-DECODED transaction here. There's no signedPayload to verify — the
+  //    endpoint is intentionally OPEN for this path (decision 2026-07-29): Fiesta is a
+  //    trusted relay and no auth was available. We store the full body verbatim and
+  //    best-effort normalize, so nothing is lost even before the mapping is perfected.
+  let parsed: Record<string, unknown> | null = null;
+  try { parsed = JSON.parse(rawBody) as Record<string, unknown>; } catch { parsed = null; }
+  if (parsed && !parsed.signedPayload && ("transaction" in parsed || "notificationType" in parsed)) {
+    return handleFiestaRelay(supabase, parsed);
+  }
 
   let signedPayload: string | undefined;
   try {

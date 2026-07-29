@@ -15,6 +15,10 @@ export type NormalizedTransaction = {
   status: "pending" | "completed" | "failed" | "refunded";
   transaction_date: string; // YYYY-MM-DD
   transaction_at?: string | null; // full UTC ISO timestamp (the precise transaction time)
+  // Non-null for recurring/subscription charges (the gateway subscription id). Written
+  // to the durable transactions.subscription_id column on INSERT; the recon/one-time
+  // refresh path never clears it, so the recurring signal survives re-syncs.
+  subscription_id?: string | null;
   metadata: Record<string, unknown>;
   // The COMPLETE, unmodified source payload for this row (the gateway object /
   // webhook body / CSV row we normalized from). Persisted verbatim to the `raw`
@@ -883,6 +887,31 @@ export type CashfreeWebhookPayload = {
       resolved_at?: string;
     };
     order_details?: { order_id?: string; cf_payment_id?: string | number; order_amount?: number; order_currency?: string };
+    // Recurring / subscription events (SUBSCRIPTION_* — see normalizeCashfreeSubscriptionEvent).
+    // Cashfree nests the subscription entity and, on charge events, the individual payment.
+    subscription?: {
+      subscription_id?: string;
+      subscription_reference_id?: string;   // some payloads name it this
+      subscription_status?: string;         // ACTIVE | CANCELLED | COMPLETED | BANK_APPROVAL_PENDING | ...
+      customer_name?: string | null;
+      customer_email?: string | null;
+      customer_phone?: string | null;
+      plan_name?: string | null;
+      plan_amount?: number | null;
+      subscription_amount?: number | null;
+      currency?: string | null;
+      first_charge_time?: string | null;
+      next_charge_time?: string | null;
+    };
+    subscription_payment?: {
+      cf_payment_id?: string | number;
+      payment_id?: string | number;
+      payment_amount?: number;
+      payment_currency?: string;
+      payment_status?: string;              // SUCCESS | FAILED | CANCELLED | PENDING
+      payment_time?: string;
+      failure_reason?: string | null;
+    };
   };
 };
 
@@ -987,7 +1016,164 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
     };
   }
 
+  if (type.startsWith("SUBSCRIPTION")) {
+    // Recurring charges. Lifecycle-only events (status change, auth, expiry reminder,
+    // notification initiated) carry no money and return null here — but the webhook
+    // route still upserts them into the subscription registry via
+    // extractCashfreeSubscription(). Only charge events become transactions.
+    return normalizeCashfreeSubscriptionPayment(p);
+  }
+
   return null; // other event types → ignored
+}
+
+/**
+ * Map a Cashfree SUBSCRIPTION_* webhook to a recurring-charge transaction, or null
+ * for lifecycle-only events (no payment in the payload). Money rows use
+ * source = "cashfree_subscription" and external_id "cf_subpay_<cf_payment_id>" so
+ * they dedup against the settlement-recon backfill and each other.
+ */
+export function normalizeCashfreeSubscriptionPayment(p: CashfreeWebhookPayload): NormalizedTransaction | null {
+  const type = (p.type ?? "").toUpperCase();
+  const d = p.data ?? {};
+  const sp = d.subscription_payment;
+  const sub = d.subscription ?? {};
+  // No payment object → lifecycle-only event (STATUS_CHANGED, AUTH_STATUS, …). Not a money row.
+  if (!sp) return null;
+  const payId = sp.cf_payment_id ?? sp.payment_id;
+  if (payId == null) return null;
+
+  const st = (sp.payment_status ?? "").toUpperCase();
+  const status: NormalizedTransaction["status"] =
+    st === "SUCCESS" ? "completed" : st === "PENDING" ? "pending" : "failed";
+  const subId = sub.subscription_id ?? sub.subscription_reference_id ?? null;
+
+  return {
+    // SAME identity as the one-time webhook + settlement recon for this cf_payment_id
+    // (source "cashfree", external_id "cf_pay_<id>") so the three paths dedup onto ONE
+    // row — never double-counting a recurring charge. The recurring signal lives in the
+    // durable `subscription_id` column, which the recon refresh never overwrites.
+    external_id: `cf_pay_${payId}`,
+    type: "credit",
+    amount: Number(sp.payment_amount ?? sub.subscription_amount ?? sub.plan_amount ?? 0),
+    currency: (sp.payment_currency ?? sub.currency ?? "INR").toUpperCase(),
+    category: "payment", // recurring revenue — same revenue category as one-time payments
+    counterparty_name: sub.customer_name ?? sub.customer_email ?? sub.customer_phone ?? null,
+    description: subId ? `Subscription payment · ${subId}` : "Subscription payment",
+    source: "cashfree",
+    status,
+    transaction_date: (sp.payment_time ?? p.event_time ?? "").slice(0, 10),
+    transaction_at: gatewayTimeToIso(sp.payment_time ?? p.event_time),
+    subscription_id: subId ? String(subId) : null,
+    metadata: {
+      event_type: type,
+      subscription_id: subId,
+      cf_payment_id: payId,
+      plan_name: sub.plan_name ?? null,
+      failure_reason: sp.failure_reason ?? null,
+      email: sub.customer_email ?? null,
+      phone: sub.customer_phone ?? null,
+    },
+    raw: p,
+  };
+}
+
+/**
+ * Extract the subscription registry record from ANY SUBSCRIPTION_* webhook (charge
+ * or lifecycle). Returns null when the payload carries no subscription_id. The
+ * webhook route upserts this into `cashfree_subscriptions` so the poller has the
+ * full set of subscription_ids to re-fetch (Cashfree has no list-subscriptions API).
+ */
+export type CashfreeSubscriptionRecord = {
+  subscription_id: string;
+  status: string | null;
+  plan_name: string | null;
+  plan_amount: number | null;
+  currency: string | null;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  next_charge_at: string | null;
+  event_type: string;
+  raw: unknown;
+};
+
+export function extractCashfreeSubscription(p: CashfreeWebhookPayload): CashfreeSubscriptionRecord | null {
+  const type = (p.type ?? "").toUpperCase();
+  if (!type.startsWith("SUBSCRIPTION")) return null;
+  const sub = p.data?.subscription;
+  const subId = sub?.subscription_id ?? sub?.subscription_reference_id;
+  if (!sub || !subId) return null;
+  return {
+    subscription_id: String(subId),
+    status: sub.subscription_status ?? null,
+    plan_name: sub.plan_name ?? null,
+    plan_amount: sub.plan_amount ?? sub.subscription_amount ?? null,
+    currency: sub.currency ?? null,
+    customer_name: sub.customer_name ?? null,
+    customer_email: sub.customer_email ?? null,
+    customer_phone: sub.customer_phone ?? null,
+    next_charge_at: gatewayTimeToIso(sub.next_charge_time) ?? null,
+    event_type: type,
+    raw: p,
+  };
+}
+
+/**
+ * Normalize ONE payment object from GET /pg/subscriptions/{id}/payments (the poller
+ * path — Layer 2's self-healing net). The API shape differs from the webhook, so we
+ * read several likely field names defensively and keep the full object as `raw`.
+ * Same external_id scheme as the webhook (cf_subpay_<cf_payment_id>) so the two paths
+ * dedup against each other. Returns null if there's no usable payment id.
+ */
+export type CashfreeSubscriptionApiPayment = {
+  cf_payment_id?: string | number;
+  payment_id?: string | number;
+  subscription_payment_id?: string | number;
+  payment_amount?: number;
+  amount?: number;
+  payment_currency?: string;
+  currency?: string;
+  payment_status?: string;   // SUCCESS | FAILED | PENDING | ...
+  status?: string;
+  payment_time?: string;
+  scheduled_on?: string;
+  failure_reason?: string | null;
+};
+
+export function normalizeCashfreeSubscriptionApiPayment(
+  pay: CashfreeSubscriptionApiPayment,
+  ctx: { subscriptionId: string; planName?: string | null; customerName?: string | null; currency?: string | null }
+): NormalizedTransaction | null {
+  const payId = pay.cf_payment_id ?? pay.payment_id ?? pay.subscription_payment_id;
+  if (payId == null) return null;
+  const st = (pay.payment_status ?? pay.status ?? "").toUpperCase();
+  const status: NormalizedTransaction["status"] =
+    st === "SUCCESS" || st === "PAID" ? "completed" : st === "PENDING" || st === "INITIALIZED" ? "pending" : "failed";
+  const whenIso = gatewayTimeToIso(pay.payment_time ?? pay.scheduled_on);
+  return {
+    // Same identity as recon (source "cashfree", cf_pay_<id>) — dedups, never double-counts.
+    external_id: `cf_pay_${payId}`,
+    type: "credit",
+    amount: Number(pay.payment_amount ?? pay.amount ?? 0),
+    currency: (pay.payment_currency ?? pay.currency ?? ctx.currency ?? "INR").toUpperCase(),
+    category: "payment",
+    counterparty_name: ctx.customerName ?? null,
+    description: `Subscription payment · ${ctx.subscriptionId}`,
+    source: "cashfree",
+    status,
+    transaction_date: (whenIso ?? new Date().toISOString()).slice(0, 10),
+    transaction_at: whenIso,
+    subscription_id: ctx.subscriptionId,
+    metadata: {
+      subscription_id: ctx.subscriptionId,
+      cf_payment_id: payId,
+      plan_name: ctx.planName ?? null,
+      failure_reason: pay.failure_reason ?? null,
+      via: "subscription_poll",
+    },
+    raw: pay,
+  };
 }
 
 // ─── Apple App Store normalizers ──────────────────────────────────────────────
