@@ -158,6 +158,39 @@ export interface Database {
         >;
         Update: Partial<Database["public"]["Tables"]["subscription_events"]["Row"]>;
       };
+      gateway_invoices: {
+        Row: {
+          id: string;
+          org_id: string;
+          connector_id: string | null;
+          gateway: string;
+          invoice_id: string;
+          subscription_id: string | null;
+          customer_gateway_id: string | null;
+          customer_name: string | null;
+          customer_email: string | null;
+          customer_phone: string | null;
+          status: string | null;
+          native_status: string | null;
+          billing_reason: string | null;
+          amount: number | null;
+          currency: string | null;
+          amount_base: number | null;
+          tax: number | null;
+          discount: number | null;
+          charge_external_id: string | null;
+          invoice_date: string | null;
+          period_start: string | null;
+          period_end: string | null;
+          raw: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: { org_id: string; gateway: string; invoice_id: string } & Partial<
+          Omit<Database["public"]["Tables"]["gateway_invoices"]["Row"], "org_id" | "gateway" | "invoice_id">
+        >;
+        Update: Partial<Database["public"]["Tables"]["gateway_invoices"]["Row"]>;
+      };
       user_metric_prefs: {
         Row: {
           user_id: string;

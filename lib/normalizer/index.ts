@@ -1288,6 +1288,12 @@ export function normalizeAppStoreTransaction(
     status,
     transaction_date: whenMs != null ? msToDateString(whenMs) : parseDateString(""),
     transaction_at: whenMs != null ? msToIso(whenMs) : null,
+    // Tag auto-renewable subscription charges with the subscription id (Apple's
+    // originalTransactionId is the stable subscription identifier, and matches the
+    // subscriptions table). One-time IAPs stay null. This is the durable
+    // "every subscription charge carries a subscription_id" invariant for App Store.
+    subscription_id:
+      txn.type && /subscription/i.test(txn.type) ? String(txn.originalTransactionId ?? txId) : null,
     // Foreign-currency rows leave amount_base unset — persistTransactions'
     // enrichRowsWithFx converts to INR via ECB (INR rows go 1:1 in toInsertRows).
     metadata: {
