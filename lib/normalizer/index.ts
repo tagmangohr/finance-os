@@ -1412,6 +1412,50 @@ export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): Normalize
   };
 }
 
+// ─── Mercury Bank normalizer ──────────────────────────────────────────────────
+// Read-only bank feed. Mercury `amount` is in DOLLARS (decimal), NEGATIVE for money
+// out (wires/ACH/card spend/fees → debit/expense) and positive for money in (credit).
+// USD only; amount_base (INR) is filled by the sync layer's FX enrichment.
+
+export type MercuryTransaction = {
+  id?: string;
+  amount?: number;                 // dollars; negative = outflow
+  currency?: string;               // usually absent → USD
+  counterpartyName?: string | null;
+  kind?: string;                   // externalTransfer | internalTransfer | outgoingPayment | fee | debitCardTransaction | …
+  status?: string;                 // pending | sent | cancelled | failed
+  createdAt?: string;
+  postedAt?: string | null;
+  note?: string | null;
+  bankDescription?: string | null;
+  externalMemo?: string | null;
+};
+
+export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: string): NormalizedTransaction | null {
+  if (!tx.id || tx.amount == null) return null;
+  const amt = Number(tx.amount);
+  const st = (tx.status ?? "").toLowerCase();
+  const status: NormalizedTransaction["status"] =
+    st === "sent" || st === "settled" ? "completed" : st === "pending" ? "pending" : "failed"; // cancelled/failed → failed
+  const when = tx.postedAt ?? tx.createdAt ?? null;
+  const whenIso = gatewayTimeToIso(when);
+  return {
+    external_id: `mercury_${tx.id}`,
+    type: amt >= 0 ? "credit" : "debit", // money out = debit/expense
+    amount: Math.abs(amt),
+    currency: (tx.currency ?? "USD").toUpperCase(),
+    category: tx.kind ?? null,
+    counterparty_name: tx.counterpartyName ?? null,
+    description: tx.bankDescription ?? tx.note ?? tx.externalMemo ?? null,
+    source: "mercury",
+    status,
+    transaction_date: (whenIso ?? new Date().toISOString()).slice(0, 10),
+    transaction_at: whenIso,
+    metadata: { kind: tx.kind ?? null, account_id: accountId ?? null, mercury_status: tx.status ?? null, note: tx.note ?? null },
+    raw: tx,
+  };
+}
+
 // ─── CSV / Excel normalizer ───────────────────────────────────────────────────
 
 export function normalizeCsvRow(

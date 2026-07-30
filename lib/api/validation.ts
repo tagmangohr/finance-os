@@ -17,6 +17,7 @@ export const CONNECTOR_TYPES = [
   "google_sheets",
   "excel",
   "app_store",
+  "mercury",
 ] as const;
 
 export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;
@@ -78,6 +79,9 @@ export function validateConnectorConfig(
     }
     case "cashfree":
       if (!get("client_id") || !get("client_secret")) return "Cashfree needs a Client ID and Client Secret.";
+      return null;
+    case "mercury":
+      if (!get("api_token")) return "Mercury needs an API Token (Mercury → Settings → Tokens & API). A read-only token is fine.";
       return null;
     case "payu":
       if (!get("key") || !get("salt")) return "PayU needs a Merchant Key and Salt.";

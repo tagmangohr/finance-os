@@ -22,7 +22,7 @@ export const maxDuration = 60;
 
 /** Gateway/file connectors that backfill from the FY start on first connect. Link
  *  connectors (Sheets/Excel) auto-sync via their own path, so they're excluded. */
-const BACKFILL_ON_CREATE = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz"];
+const BACKFILL_ON_CREATE = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "mercury"];
 
 // POST — create a new connector
 export async function POST(request: Request) {

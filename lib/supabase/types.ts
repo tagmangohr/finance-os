@@ -27,7 +27,7 @@ export interface Database {
         Row: {
           id: string;
           org_id: string;
-          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz" | "google_drive" | "onedrive" | "google_sheets" | "excel" | "app_store";
+          type: "razorpay" | "stripe" | "zoho" | "quickbooks" | "tally" | "csv" | "bank_statement" | "cashfree" | "payu" | "paytm" | "easebuzz" | "google_drive" | "onedrive" | "google_sheets" | "excel" | "app_store" | "mercury";
           name: string;
           status: "active" | "inactive" | "error";
           config: Json;

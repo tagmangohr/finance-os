@@ -180,6 +180,16 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     ],
   },
   {
+    type: "mercury",
+    name: "Mercury",
+    description: "Bank transactions & expenses (read-only)",
+    icon: <LetterIcon letters="Me" bg="#5266EB" />,
+    fields: [
+      { key: "api_token", label: "API Token", isPassword: true, placeholder: "secret-token:mercury_account_…" },
+      { key: "email",     label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
     type: "payu",
     name: "PayU",
     description: "Payments and transaction history",
@@ -291,6 +301,7 @@ const SYNC_ENDPOINTS: Partial<Record<Connector["type"], string>> = {
   payu:     "/api/connectors/payu",
   paytm:    "/api/connectors/paytm",
   easebuzz: "/api/connectors/easebuzz",
+  mercury:  "/api/connectors/mercury",
 };
 
 // Connectors whose volume requires the resumable queue (cursor-chunked) for BOTH

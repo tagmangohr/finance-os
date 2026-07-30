@@ -1,4 +1,5 @@
 import { CashfreeConnector } from "@/lib/connectors/cashfree";
+import { MercuryConnector } from "@/lib/connectors/mercury";
 import { EasebuzzConnector } from "@/lib/connectors/easebuzz";
 import { PaytmConnector } from "@/lib/connectors/paytm";
 import { PayUConnector } from "@/lib/connectors/payu";
@@ -190,6 +191,19 @@ async function fetchWithSubChunks(
   };
 }
 
+async function fetchMercury(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const { api_token: apiToken } = getConfig(connector);
+  if (!apiToken) throw new SyncConfigError("Connector is missing api_token in config");
+  const mercury = new MercuryConnector(apiToken);
+  // Mercury paginates each account's transactions itself over the window; call
+  // directly (not sub-chunked). Read-only bank feed → expenses + inflows.
+  return fetchSingleEndpoint("mercury", () => mercury.fetchTransactions(fromDate, toDate));
+}
+
 async function fetchConnectorTransactions(
   connector: ConnectorRow,
   fromDate: Date,
@@ -216,6 +230,9 @@ async function fetchConnectorTransactions(
       // so call it directly — one sequential, internally-retried call — NOT through
       // the parallel sub-chunker (which fired several recon calls at once).
       return fetchCashfree(connector, fromDate, toDate);
+    case "mercury":
+      // Read-only bank feed; paginates internally over the window. Direct call.
+      return fetchMercury(connector, fromDate, toDate);
     case "payu": {
       const { key, salt } = config;
       if (!key || !salt) {

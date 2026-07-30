@@ -14,7 +14,7 @@ export const maxDuration = 60;
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
 /** Connectors reconciled by the nightly job. */
-const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "google_sheets", "excel"];
+const SYNCABLE_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "mercury", "google_sheets", "excel"];
 
 /**
  * GET /api/cron/nightly-sync — runs at 00:30 IST (19:00 UTC, cron "0 19 * * *").
