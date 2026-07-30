@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
+import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -158,6 +159,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (res.fetched) console.log(`[cron/nightly-sync] ${c.type} subscriptions synced=${res.fetched} (${c.id})`);
       } catch (e) {
         console.error(`[cron/nightly-sync] ${c.type} subscription sync failed (${c.id}):`, e);
+      }
+      try {
+        const inv = await syncGatewayInvoices(sb, c, { fromMs: fyStartMs, deadlineMs: Date.now() + 20_000 });
+        if (inv.fetched) console.log(`[cron/nightly-sync] ${c.type} invoices synced=${inv.fetched} (${c.id})`);
+      } catch (e) {
+        console.error(`[cron/nightly-sync] ${c.type} invoice sync failed (${c.id}):`, e);
+      }
+    }
+    // Reconcile: tag any subscription charges now bridgeable via invoices. Fill-only,
+    // idempotent — guarantees the "every subscription charge carries subscription_id"
+    // invariant stays true as new invoices/charges arrive (no drift).
+    if (subApiConnectors.length) {
+      try {
+        const tagged = await tagSubscriptionCharges(sb);
+        if (tagged) console.log(`[cron/nightly-sync] tagged ${tagged} subscription charges from invoices`);
+      } catch (e) {
+        console.error("[cron/nightly-sync] tag reconcile failed:", e);
       }
     }
   });
