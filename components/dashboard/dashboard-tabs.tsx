@@ -12,6 +12,7 @@ const TABS = [
   { href: "/dashboard/revenue",      slug: "revenue",      label: "Revenue",      exact: false },
   { href: "/dashboard/cashflow",     slug: "cashflow",     label: "Cash Flow",    exact: false },
   { href: "/dashboard/collections",  slug: "collections",  label: "Collections",  exact: false },
+  { href: "/dashboard/subscriptions", slug: "subscriptions", label: "Subscriptions", exact: false },
   { href: "/dashboard/intelligence", slug: "intelligence", label: "Intelligence", exact: false },
 ];
 
