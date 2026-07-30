@@ -4,6 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, type CashfreeWebhookPayload } from "@/lib/normalizer";
+import { cashfreeSubscriptionAdapter } from "@/lib/subscriptions/adapters/cashfree";
+import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import type { Database } from "@/lib/supabase/types";
 
 export const maxDuration = 30;
@@ -139,6 +141,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     } catch (e) {
       console.error("[cashfree webhook] subscription registry upsert failed (non-fatal):", e);
     }
+  }
+
+  // Unified cross-gateway subscription model (subscriptions + subscription_events).
+  // Additive alongside the legacy cashfree_subscriptions registry; non-fatal.
+  try {
+    const subResult = cashfreeSubscriptionAdapter(payload);
+    if (subResult.subscription || subResult.events.length) {
+      await persistSubscriptionResult(supabase, matched.org_id, matched.id, subResult);
+    }
+  } catch (e) {
+    console.error("[cashfree webhook] unified subscription persist failed (non-fatal):", e);
   }
 
   const txn = normalizeCashfreeWebhookEvent(payload);

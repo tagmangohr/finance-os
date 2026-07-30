@@ -4,6 +4,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { APPLE_ROOT_CERTIFICATES } from "@/lib/apple/root-ca";
 import { normalizeAppStoreTransaction, type AppStoreTransactionInfo } from "@/lib/normalizer";
+import { appStoreSubscriptionAdapter } from "@/lib/subscriptions/adapters/app-store";
+import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import type { Database, Json } from "@/lib/supabase/types";
 
 export const runtime = "nodejs"; // Apple lib needs Node crypto + the cert store
@@ -116,6 +118,15 @@ async function handleFiestaRelay(
       payload: body as unknown as Json,
     });
     return NextResponse.json({ received: true, unmatched: "no app_store connector" }, { status: 200 });
+  }
+
+  // Update the unified subscription model (lifecycle + charge), derived from the
+  // notification stream. Runs for ALL sub notifications incl. money-less lifecycle
+  // (EXPIRED, DID_CHANGE_RENEWAL_STATUS, …). Non-fatal — persist swallows its own errors.
+  try {
+    await persistSubscriptionResult(supabase, matched.org_id, matched.id, appStoreSubscriptionAdapter(body));
+  } catch (e) {
+    console.error("[app-store relay] subscription persist failed (non-fatal):", e);
   }
 
   const txn = transaction

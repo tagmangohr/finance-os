@@ -83,6 +83,81 @@ export interface Database {
         Insert: Omit<Database["public"]["Tables"]["cashfree_subscriptions"]["Row"], "created_at" | "updated_at"> & { created_at?: string; updated_at?: string };
         Update: Partial<Database["public"]["Tables"]["cashfree_subscriptions"]["Insert"]>;
       };
+      subscriptions: {
+        Row: {
+          id: string;
+          org_id: string;
+          connector_id: string | null;
+          gateway: string;
+          subscription_id: string;
+          customer_name: string | null;
+          customer_email: string | null;
+          customer_phone: string | null;
+          customer_gateway_id: string | null;
+          plan_id: string | null;
+          plan_name: string | null;
+          plan_amount: number | null;
+          currency: string | null;
+          amount_base: number | null;
+          billing_interval: string | null;
+          interval_count: number | null;
+          status: string | null;
+          native_status: string | null;
+          auto_renew: boolean | null;
+          cancel_at_period_end: boolean | null;
+          cancel_reason: string | null;
+          started_at: string | null;
+          trial_start: string | null;
+          trial_end: string | null;
+          current_period_start: string | null;
+          current_period_end: string | null;
+          next_charge_at: string | null;
+          cancel_requested_at: string | null;
+          ended_at: string | null;
+          total_cycles: number | null;
+          paid_count: number | null;
+          remaining_count: number | null;
+          payment_method: string | null;
+          mandate_status: string | null;
+          card_last4: string | null;
+          card_expiry: string | null;
+          first_seen_at: string;
+          last_event_type: string | null;
+          last_event_at: string | null;
+          last_synced_at: string | null;
+          raw: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        // Only the natural key is required; every other field is optional (nullable,
+        // filled progressively as events/pulls enrich the row).
+        Insert: { org_id: string; gateway: string; subscription_id: string } & Partial<
+          Omit<Database["public"]["Tables"]["subscriptions"]["Row"], "org_id" | "gateway" | "subscription_id">
+        >;
+        Update: Partial<Database["public"]["Tables"]["subscriptions"]["Row"]>;
+      };
+      subscription_events: {
+        Row: {
+          id: string;
+          org_id: string;
+          gateway: string;
+          subscription_id: string;
+          event_type: string;
+          native_event_type: string | null;
+          event_at: string;
+          amount: number | null;
+          currency: string | null;
+          amount_base: number | null;
+          transaction_external_id: string | null;
+          event_ref: string | null;
+          raw: Json | null;
+          created_at: string;
+        };
+        Insert: { org_id: string; gateway: string; subscription_id: string; event_type: string; event_at: string } & Partial<
+          Omit<Database["public"]["Tables"]["subscription_events"]["Row"], "org_id" | "gateway" | "subscription_id" | "event_type" | "event_at">
+        >;
+        Update: Partial<Database["public"]["Tables"]["subscription_events"]["Row"]>;
+      };
       user_metric_prefs: {
         Row: {
           user_id: string;
