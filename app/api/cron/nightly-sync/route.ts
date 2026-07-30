@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
+import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -130,6 +131,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // webhook never delivered is recovered — least-recently-polled first, so the whole
   // registry rotates over successive nights within the function budget.
   const cashfreeConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "cashfree");
+  // Stripe/Razorpay expose listable subscription APIs → sync the whole current FY each
+  // night (idempotent upserts). This both backfills and keeps the subscriptions table
+  // fresh. Bounded by a deadline so it never overruns the function budget.
+  const subApiConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "stripe" || c.type === "razorpay");
+  const fyStartMs = new Date("2026-04-01T00:00:00+05:30").getTime();
   const worker = randomUUID();
   after(async () => {
     const sb = await createServiceClient();
@@ -144,6 +150,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (res.polled) console.log(`[cron/nightly-sync] cashfree subs polled=${res.polled} inserted=${res.inserted} updated=${res.updated} (${c.id})`);
       } catch (e) {
         console.error(`[cron/nightly-sync] subscription poll failed (${c.id}):`, e);
+      }
+    }
+    for (const c of subApiConnectors) {
+      try {
+        const res = await syncGatewaySubscriptions(sb, c, { fromMs: fyStartMs, deadlineMs: Date.now() + 20_000 });
+        if (res.fetched) console.log(`[cron/nightly-sync] ${c.type} subscriptions synced=${res.fetched} (${c.id})`);
+      } catch (e) {
+        console.error(`[cron/nightly-sync] ${c.type} subscription sync failed (${c.id}):`, e);
       }
     }
   });
