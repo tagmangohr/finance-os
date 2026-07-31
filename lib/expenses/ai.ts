@@ -35,7 +35,8 @@ type Example = { counterparty: string | null; description: string | null; slug: 
 export async function aiCategorize(
   txns: AiTxn[],
   cats: LedgerCategory[],
-  examples: Example[]
+  examples: Example[],
+  onBatch?: (batch: Map<string, { slug: string; confidence: number }>) => Promise<void>
 ): Promise<Map<string, { slug: string; confidence: number }>> {
   const out = new Map<string, { slug: string; confidence: number }>();
   if (!aiAvailable() || txns.length === 0) return out;
@@ -83,14 +84,20 @@ export async function aiCategorize(
       const block = resp.content.find((b) => b.type === "text");
       if (!block || block.type !== "text") continue;
       const parsed = extractJsonArray(block.text);
+      const batchMap = new Map<string, { slug: string; confidence: number }>();
       for (const row of parsed) {
         const id = String(row?.id ?? "");
         const slug = String(row?.slug ?? "");
         const confidence = Number(row?.confidence);
         if (id && validSlugs.has(slug)) {
-          out.set(id, { slug, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5 });
+          const v = { slug, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5 };
+          out.set(id, v);
+          batchMap.set(id, v);
         }
       }
+      // Persist this batch immediately (if a sink is provided) so progress is
+      // durable even if the function's time budget cuts the run short.
+      if (onBatch && batchMap.size) await onBatch(batchMap);
     } catch {
       // A failed batch (bad key, rate limit, parse error) just leaves that chunk
       // for manual review — never aborts the whole run.

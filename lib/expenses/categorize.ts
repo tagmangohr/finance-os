@@ -52,7 +52,7 @@ function accountTypeDefault(r: BankRow): string | null {
 export async function categorizeBankTransactions(
   orgId: string,
   supabase: SupabaseClient,
-  opts: { useAI?: boolean } = {}
+  opts: { useAI?: boolean; maxAi?: number } = {}
 ): Promise<CategorizeResult> {
   const cats = await getCategories(orgId, supabase);
   const tMap = treatmentMap(cats);
@@ -118,7 +118,10 @@ export async function categorizeBankTransactions(
       slug: e.category as string,
     }));
 
-    const aiTxns: AiTxn[] = remaining.map((r) => ({
+    // Bound the AI work per invocation so a large backlog can't blow the function
+    // budget; repeated runs (button / nightly / webhook) chip away the rest.
+    const slice = remaining.slice(0, opts.maxAi ?? 5000);
+    const aiTxns: AiTxn[] = slice.map((r) => ({
       id: r.id,
       counterparty: r.counterparty_name,
       description: r.description,
@@ -127,18 +130,20 @@ export async function categorizeBankTransactions(
       amount: r.amount,
     }));
 
-    const aiMap = await aiCategorize(aiTxns, cats, examples);
-    const aiBySlug = new Map<string, { ids: string[]; conf: number[] }>();
-    for (const [id, { slug, confidence }] of aiMap) {
-      const e = aiBySlug.get(slug) ?? { ids: [], conf: [] };
-      e.ids.push(id); e.conf.push(confidence);
-      aiBySlug.set(slug, e);
-    }
-    for (const [slug, { ids, conf }] of aiBySlug) {
-      const avg = conf.reduce((s, c) => s + c, 0) / (conf.length || 1);
-      await applyCategory(supabase, orgId, ids, slug, tMap.get(slug) ?? "uncategorized", "ai", avg);
-      result.aiApplied += ids.length;
-    }
+    // Persist each AI batch as it returns (durable if the run is cut short).
+    await aiCategorize(aiTxns, cats, examples, async (batch) => {
+      const bySlug = new Map<string, { ids: string[]; conf: number[] }>();
+      for (const [id, { slug, confidence }] of batch) {
+        const e = bySlug.get(slug) ?? { ids: [], conf: [] };
+        e.ids.push(id); e.conf.push(confidence);
+        bySlug.set(slug, e);
+      }
+      for (const [slug, { ids, conf }] of bySlug) {
+        const avg = conf.reduce((s, c) => s + c, 0) / (conf.length || 1);
+        await applyCategory(supabase, orgId, ids, slug, tMap.get(slug) ?? "uncategorized", "ai", avg);
+        result.aiApplied += ids.length;
+      }
+    });
   }
 
   result.remaining = rows.length - result.systemApplied - result.ruleApplied - result.aiApplied;

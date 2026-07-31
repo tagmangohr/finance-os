@@ -5,7 +5,10 @@ import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Large first-time backlogs go through AI in batches; give the function room.
+// Per-batch persistence means even a cutoff keeps progress, but 300s lets a
+// click clear a few-thousand-row backlog in one go.
+export const maxDuration = 300;
 
 /**
  * POST /api/expenses/categorize — run the two-layer categorizer over this org's
