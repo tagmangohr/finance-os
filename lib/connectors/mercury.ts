@@ -28,11 +28,24 @@ export class MercuryConnector {
   }
 
   /** List all accounts with their kind + balances (for balance tracking + kind
-   *  tagging). `kind` = checking|savings|treasury|investment|credit; `type` =
-   *  mercury|external|recipient. */
+   *  tagging). Deposit accounts (checking/savings/treasury/investment) come from
+   *  /accounts; the IO credit-card account is exposed SEPARATELY on /credit (it
+   *  is NOT in /accounts) — merged here and tagged kind='credit'. Its per-account
+   *  transactions use the same /account/{id}/transactions endpoint. `type` =
+   *  mercury|external|recipient. The /credit call is best-effort (404 for orgs
+   *  without a card → just the deposit accounts). */
   async fetchAccounts(): Promise<MercuryAccount[]> {
-    const { accounts } = await this.getJson<{ accounts?: MercuryAccount[] }>(`${MERCURY_BASE}/accounts`);
-    return accounts ?? [];
+    const [deposit, credit] = await Promise.all([
+      this.getJson<{ accounts?: MercuryAccount[] }>(`${MERCURY_BASE}/accounts`).catch(() => ({ accounts: [] as MercuryAccount[] })),
+      this.getJson<{ accounts?: MercuryAccount[] }>(`${MERCURY_BASE}/credit`).catch(() => ({ accounts: [] as MercuryAccount[] })),
+    ]);
+    const creditAccounts = (credit.accounts ?? []).map((a) => ({
+      ...a,
+      kind: a.kind ?? "credit",                 // /credit objects carry no `kind`
+      name: a.name ?? a.nickname ?? "Mercury Credit Card",
+      type: a.type ?? "mercury",
+    }));
+    return [...(deposit.accounts ?? []), ...creditAccounts];
   }
 
   /** Fetch all transactions across all accounts within [fromDate, toDate].

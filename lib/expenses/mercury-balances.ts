@@ -5,8 +5,11 @@ import { getInrRates } from "@/lib/fx/rates";
 
 type ConnectorLike = { id: string; org_id: string; config: Record<string, unknown> | null };
 
-// Kinds that count as available cash; credit is a liability (subtracted).
-const CASH_KINDS = new Set(["checking", "savings", "treasury"]);
+// Kinds that count toward the cash position. Balances are signed: deposit
+// accounts are positive (asset), the credit account is negative (amount owed),
+// so a plain signed sum gives "checking+savings+treasury − card owed". Investment
+// is excluded (per the runway definition).
+const CASH_KINDS = new Set(["checking", "savings", "treasury", "credit"]);
 
 /**
  * Refresh the stored per-account balances for a Mercury connector from the live
@@ -86,8 +89,9 @@ export async function getMercuryCashPosition(orgId: string, supabase: SupabaseCl
     const kind = (r.kind ?? "unknown").toLowerCase();
     const v = Number(r.current_balance_base ?? 0);
     byKind[kind] = (byKind[kind] ?? 0) + v;
+    // Signed sum: credit balances are already negative (owed), so adding them
+    // nets the card debt out of available cash.
     if (CASH_KINDS.has(kind)) cashBase += v;
-    else if (kind === "credit") cashBase -= v; // outstanding card balance is a liability
   }
   return { cashBase, hasData: rows.length > 0, byKind };
 }
