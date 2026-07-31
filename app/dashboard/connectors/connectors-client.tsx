@@ -184,9 +184,11 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     name: "Mercury",
     description: "Bank transactions & expenses (read-only)",
     icon: <LetterIcon letters="Me" bg="#5266EB" />,
+    webhookPath: "/api/webhooks/mercury",
     fields: [
-      { key: "api_token", label: "API Token", isPassword: true, placeholder: "secret-token:mercury_account_…" },
-      { key: "email",     label: "Account Email", placeholder: "you@company.com", isOptional: true },
+      { key: "api_token",      label: "API Token", isPassword: true, placeholder: "secret-token:mercury_account_…" },
+      { key: "webhook_secret", label: "Webhook Signing Secret", isPassword: true, isOptional: true, placeholder: "from Mercury after creating the webhook" },
+      { key: "email",          label: "Account Email", placeholder: "you@company.com", isOptional: true },
     ],
   },
   {

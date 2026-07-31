@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from '@/lib/finance/transaction-status';
 import { baseAmt } from '@/lib/utils';
 import { selectAll } from '@/lib/supabase/paginate';
+import { getMercuryCashPosition } from '@/lib/expenses/mercury-balances';
 import type { RunwayResult } from './types';
 
 export async function calculateRunway(
@@ -78,6 +79,16 @@ export async function calculateRunway(
       .reduce((sum, t) => sum + baseAmt(t), 0);
     cashBalance = Math.max(0, totalCredits - totalDebits);
   }
+
+  // Prefer the TRUE cash position from stored Mercury balances when available
+  // (checking + savings + treasury − card owed). Only readable via a service
+  // client (RLS); on the user-client path this returns no data and we keep the
+  // transaction-derived proxy above. Note: Mercury-only — a separate INR bank
+  // where PGs settle isn't counted until it's connected.
+  try {
+    const merc = await getMercuryCashPosition(orgId, supabase);
+    if (merc.hasData) cashBalance = Math.max(0, merc.cashBase);
+  } catch { /* keep proxy */ }
 
   // Average monthly burn from the last 90 days of real operating-expense debits.
   const debits = debits90.filter(countsAsBurn);

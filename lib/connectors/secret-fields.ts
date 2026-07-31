@@ -8,7 +8,7 @@
  */
 
 /** Config keys whose value is a secret credential. */
-export const SECRET_CONFIG_KEYS = ["key_secret", "secret_key", "client_secret", "salt", "merchant_key", "api_token"] as const;
+export const SECRET_CONFIG_KEYS = ["key_secret", "secret_key", "client_secret", "salt", "merchant_key", "api_token", "webhook_secret"] as const;
 const SECRET_SET = new Set<string>(SECRET_CONFIG_KEYS);
 
 export function isSecretConfigKey(key: string): boolean {

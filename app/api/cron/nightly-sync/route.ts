@@ -5,6 +5,7 @@ import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
+import { refreshMercuryBalances } from "@/lib/expenses/mercury-balances";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -183,12 +184,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         console.error("[cron/nightly-sync] tag reconcile failed:", e);
       }
     }
+    // Refresh Mercury balances (true cash position) for each bank connector.
+    for (const c of (connectors as ConnectorRow[]).filter((c) => c.type === "mercury")) {
+      try {
+        const n = await refreshMercuryBalances(sb, { id: c.id, org_id: c.org_id, config: c.config as Record<string, unknown> | null });
+        if (n) console.log(`[cron/nightly-sync] mercury balances refreshed=${n} (${c.id})`);
+      } catch (e) {
+        console.error(`[cron/nightly-sync] mercury balance refresh failed (${c.id}):`, e);
+      }
+    }
     // Auto-categorize newly-synced bank transactions (rules + AI if configured).
     // Fill-only, so it only touches rows the last run didn't classify.
     for (const orgId of bankOrgIds) {
       try {
         const res = await categorizeBankTransactions(orgId, sb);
-        if (res.scanned) console.log(`[cron/nightly-sync] bank categorize org=${orgId} scanned=${res.scanned} rule=${res.ruleApplied} ai=${res.aiApplied} remaining=${res.remaining}`);
+        if (res.scanned) console.log(`[cron/nightly-sync] bank categorize org=${orgId} scanned=${res.scanned} system=${res.systemApplied} rule=${res.ruleApplied} ai=${res.aiApplied} remaining=${res.remaining}`);
       } catch (e) {
         console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
       }

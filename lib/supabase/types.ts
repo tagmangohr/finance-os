@@ -228,6 +228,9 @@ export interface Database {
           pnl_treatment: "expense" | "income" | "excluded" | "uncategorized" | null;
           // Provenance of the assigned category (null until categorized).
           category_source: "manual" | "rule" | "ai" | "system" | null;
+          // Bank account kind for bank-ledger rows (checking/savings/treasury/
+          // investment/credit/external); null for payments-ledger rows.
+          account_type: string | null;
           transaction_date: string;
           transaction_at: string | null;
           // Non-null only for recurring/subscription charges (the gateway subscription
@@ -243,8 +246,26 @@ export interface Database {
         // New multi-currency columns + transaction_at + raw + subscription_id are
         // optional on insert (nullable, filled by the sync layer) so existing
         // inserters don't break. has_raw is generated → omitted from Insert entirely.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source">>;
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
+      };
+      bank_account_balances: {
+        Row: {
+          id: string;
+          org_id: string;
+          connector_id: string;
+          account_id: string;
+          account_name: string | null;
+          kind: string | null;
+          currency: string;
+          current_balance: number | null;
+          available_balance: number | null;
+          current_balance_base: number | null;
+          raw: Json | null;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["bank_account_balances"]["Row"], "id" | "updated_at" | "currency"> & Partial<Pick<Database["public"]["Tables"]["bank_account_balances"]["Row"], "id" | "updated_at" | "currency">>;
+        Update: Partial<Database["public"]["Tables"]["bank_account_balances"]["Insert"]>;
       };
       entities: {
         Row: {

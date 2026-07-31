@@ -19,6 +19,7 @@ export type BankTxn = {
   pnl_treatment: "expense" | "income" | "excluded" | "uncategorized" | null;
   category_source: "manual" | "rule" | "ai" | "system" | null;
   category_confidence: number | null;
+  account_type: string | null;
   status: string;
   external_id: string | null;
   metadata: Record<string, unknown> | null;
@@ -58,7 +59,7 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
       supabase
         .from("transactions")
         .select(
-          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, status, external_id, metadata"
+          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, status, external_id, metadata"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")

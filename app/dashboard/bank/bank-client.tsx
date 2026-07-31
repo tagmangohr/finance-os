@@ -96,8 +96,8 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         setMsg(
           j.scanned === 0
             ? "Everything is already categorized."
-            : `Categorized ${j.ruleApplied + j.aiApplied} of ${j.scanned}` +
-              (j.aiUsed ? ` (${j.ruleApplied} by rules, ${j.aiApplied} by AI)` : ` by rules`) +
+            : `Categorized ${(j.systemApplied ?? 0) + j.ruleApplied + j.aiApplied} of ${j.scanned}` +
+              ` (${(j.systemApplied ?? 0) + j.ruleApplied} by rules${j.aiUsed ? `, ${j.aiApplied} by AI` : ""})` +
               (j.remaining > 0 ? ` — ${j.remaining} left for manual review${j.aiUsed ? "" : " (set ANTHROPIC_API_KEY to auto-classify the rest)"}.` : "."),
         );
         router.refresh();
@@ -257,7 +257,10 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(t.transaction_date)}</td>
-                  <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
+                  <td className="max-w-[180px] truncate">
+                    {t.counterparty_name ?? "—"}
+                    {t.account_type && <span className="ml-1 text-[9px] uppercase tracking-wide text-muted-foreground/60">{t.account_type}</span>}
+                  </td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
                   <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
                     {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}

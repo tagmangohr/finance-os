@@ -324,6 +324,7 @@ function toInsertRows(
     // Ledger: bank-feed connectors tag 'bank' (drives the revenue firewall +
     // categorization ownership); everything else is 'payments' (PG money).
     ledger: tx.ledger ?? "payments",
+    account_type: tx.account_type ?? null,
     counterparty_id: null,
     counterparty_name: tx.counterparty_name,
     description: tx.description,

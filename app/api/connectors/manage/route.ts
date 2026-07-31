@@ -106,6 +106,10 @@ export async function POST(request: Request) {
             // populated on first connect (rules now; AI if a key is configured).
             if (data.type === "mercury") {
               try {
+                const { refreshMercuryBalances } = await import("@/lib/expenses/mercury-balances");
+                await refreshMercuryBalances(svc2, { id: data.id, org_id: data.org_id, config: data.config as Record<string, unknown> | null });
+              } catch (e) { console.error("[connectors/manage] initial mercury balance refresh failed:", e); }
+              try {
                 const { categorizeBankTransactions } = await import("@/lib/expenses/categorize");
                 await categorizeBankTransactions(data.org_id, svc2);
               } catch (e) { console.error("[connectors/manage] initial bank categorize failed:", e); }

@@ -12,16 +12,34 @@ type BankRow = {
   source: string | null;
   type: "credit" | "debit";
   amount: number;
+  account_type: string | null;
   metadata: Record<string, unknown> | null;
 };
 
 export type CategorizeResult = {
   scanned: number;
+  systemApplied: number;
   ruleApplied: number;
   aiApplied: number;
   remaining: number;
   aiUsed: boolean;
 };
+
+/**
+ * Structural, account-type-driven default that beats vendor rules/AI — prevents
+ * double-counting and mis-classification of non-operating flows:
+ *   • credit-account CREDIT = a bill payment/refund into the card → excluded
+ *     (card_payment). The card's DEBIT line-items remain the real expense.
+ *   • treasury / investment account rows = principal moves → excluded
+ *     (internal_transfer). Interest can be recategorized manually.
+ * Returns a slug or null (null → fall through to rules/AI).
+ */
+function accountTypeDefault(r: BankRow): string | null {
+  const at = (r.account_type ?? "").toLowerCase();
+  if (at === "credit" && r.type === "credit") return "card_payment";
+  if (at === "treasury" || at === "investment") return "internal_transfer";
+  return null;
+}
 
 /**
  * Two-layer categorization for an org's UNCATEGORIZED bank transactions
@@ -44,7 +62,7 @@ export async function categorizeBankTransactions(
   const rows = await selectAll<BankRow>((from, to) =>
     supabase
       .from("transactions")
-      .select("id, counterparty_name, description, source, type, amount, metadata")
+      .select("id, counterparty_name, description, source, type, amount, account_type, metadata")
       .eq("org_id", orgId)
       .eq("ledger", "bank")
       .is("category", null)
@@ -52,21 +70,30 @@ export async function categorizeBankTransactions(
       .range(from, to)
   );
 
-  const result: CategorizeResult = { scanned: rows.length, ruleApplied: 0, aiApplied: 0, remaining: 0, aiUsed: false };
+  const result: CategorizeResult = { scanned: rows.length, systemApplied: 0, ruleApplied: 0, aiApplied: 0, remaining: 0, aiUsed: false };
   if (rows.length === 0) return result;
 
-  // ── Layer 1: deterministic rules ──
+  const pushId = (m: Map<string, string[]>, slug: string, id: string) => {
+    let arr = m.get(slug);
+    if (!arr) { arr = []; m.set(slug, arr); }
+    arr.push(id);
+  };
+
+  // ── Layer 0: structural account-type defaults (win over vendor rules) ──
+  const systemBySlug = new Map<string, string[]>();
+  // ── Layer 1: deterministic vendor rules ──
   const ruleBySlug = new Map<string, string[]>();
   const remaining: BankRow[] = [];
   for (const r of rows) {
+    const def = accountTypeDefault(r);
+    if (def && validSlugs.has(def)) { pushId(systemBySlug, def, r.id); continue; }
     const slug = matchRule(r, rules);
-    if (slug && validSlugs.has(slug)) {
-      let arr = ruleBySlug.get(slug);
-      if (!arr) { arr = []; ruleBySlug.set(slug, arr); }
-      arr.push(r.id);
-    } else {
-      remaining.push(r);
-    }
+    if (slug && validSlugs.has(slug)) pushId(ruleBySlug, slug, r.id);
+    else remaining.push(r);
+  }
+  for (const [slug, ids] of systemBySlug) {
+    await applyCategory(supabase, orgId, ids, slug, tMap.get(slug) ?? "uncategorized", "system", null);
+    result.systemApplied += ids.length;
   }
   for (const [slug, ids] of ruleBySlug) {
     await applyCategory(supabase, orgId, ids, slug, tMap.get(slug) ?? "uncategorized", "rule", null);
@@ -114,7 +141,7 @@ export async function categorizeBankTransactions(
     }
   }
 
-  result.remaining = rows.length - result.ruleApplied - result.aiApplied;
+  result.remaining = rows.length - result.systemApplied - result.ruleApplied - result.aiApplied;
   return result;
 }
 

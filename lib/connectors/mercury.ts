@@ -27,16 +27,25 @@ export class MercuryConnector {
     return (await res.json()) as T;
   }
 
-  /** Fetch all transactions across all accounts within [fromDate, toDate]. */
+  /** List all accounts with their kind + balances (for balance tracking + kind
+   *  tagging). `kind` = checking|savings|treasury|investment|credit; `type` =
+   *  mercury|external|recipient. */
+  async fetchAccounts(): Promise<MercuryAccount[]> {
+    const { accounts } = await this.getJson<{ accounts?: MercuryAccount[] }>(`${MERCURY_BASE}/accounts`);
+    return accounts ?? [];
+  }
+
+  /** Fetch all transactions across all accounts within [fromDate, toDate].
+   *  Each row is tagged with its account's `kind` (checking/credit/treasury/…). */
   async fetchTransactions(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
-    const { accounts } = await this.getJson<{ accounts?: Array<{ id: string; name?: string }> }>(`${MERCURY_BASE}/accounts`);
+    const accounts = await this.fetchAccounts();
     const startMs = fromDate.getTime();
     const endMs = toDate.getTime();
     const start = fromDate.toISOString().slice(0, 10);
     const end = toDate.toISOString().slice(0, 10);
     const out: NormalizedTransaction[] = [];
 
-    for (const acc of accounts ?? []) {
+    for (const acc of accounts) {
       for (let offset = 0; ; offset += PAGE) {
         const u = new URL(`${MERCURY_BASE}/account/${acc.id}/transactions`);
         u.searchParams.set("limit", String(PAGE));
@@ -50,7 +59,7 @@ export class MercuryConnector {
           // start/end are inclusive-loose, so a window job never leaks out-of-range rows.
           const whenMs = new Date((t.postedAt ?? t.createdAt ?? "") as string).getTime();
           if (Number.isFinite(whenMs) && (whenMs < startMs || whenMs > endMs)) continue;
-          const n = normalizeMercuryTransaction(t, acc.id);
+          const n = normalizeMercuryTransaction(t, acc.id, acc.kind ?? null);
           if (n) out.push(n);
         }
         if (rows.length < PAGE) break;
@@ -59,3 +68,15 @@ export class MercuryConnector {
     return out;
   }
 }
+
+export type MercuryAccount = {
+  id: string;
+  name?: string;
+  nickname?: string | null;
+  kind?: string | null;       // checking | savings | treasury | investment | credit
+  type?: string | null;       // mercury | external | recipient
+  status?: string | null;
+  currency?: string | null;
+  currentBalance?: number | null;
+  availableBalance?: number | null;
+};

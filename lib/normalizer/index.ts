@@ -23,6 +23,9 @@ export type NormalizedTransaction = {
   // connectors (Mercury) set 'bank' so the revenue firewall excludes their
   // inflows and the categorization layer owns their category/treatment.
   ledger?: "payments" | "bank";
+  // Bank account kind (checking/savings/treasury/investment/credit/external) for
+  // bank-ledger rows — drives account-type filtering + default P&L treatment.
+  account_type?: string | null;
   metadata: Record<string, unknown>;
   // The COMPLETE, unmodified source payload for this row (the gateway object /
   // webhook body / CSV row we normalized from). Persisted verbatim to the `raw`
@@ -1435,7 +1438,7 @@ export type MercuryTransaction = {
   externalMemo?: string | null;
 };
 
-export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: string): NormalizedTransaction | null {
+export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: string, accountKind?: string | null): NormalizedTransaction | null {
   if (!tx.id || tx.amount == null) return null;
   const amt = Number(tx.amount);
   const st = (tx.status ?? "").toLowerCase();
@@ -1453,13 +1456,14 @@ export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: 
     // Mercury kind is kept in metadata for the categorizer + display.
     category: null,
     ledger: "bank",
+    account_type: accountKind ? accountKind.toLowerCase() : null,
     counterparty_name: tx.counterpartyName ?? null,
     description: tx.bankDescription ?? tx.note ?? tx.externalMemo ?? null,
     source: "mercury",
     status,
     transaction_date: (whenIso ?? new Date().toISOString()).slice(0, 10),
     transaction_at: whenIso,
-    metadata: { kind: tx.kind ?? null, account_id: accountId ?? null, mercury_status: tx.status ?? null, note: tx.note ?? null },
+    metadata: { kind: tx.kind ?? null, account_id: accountId ?? null, account_kind: accountKind ?? null, mercury_status: tx.status ?? null, note: tx.note ?? null },
     raw: tx,
   };
 }
