@@ -322,9 +322,11 @@ export async function getCashFlowDetails(orgId: string) {
   const classify = (tx: CfRow): "inflow" | "outflow" | null => {
     if (isTransferSource(tx.source ?? undefined)) return null;
     if (tx.ledger === "bank") {
-      if (tx.type === "credit" && tx.pnl_treatment === "income") return "inflow";
-      if (tx.type === "debit" && tx.pnl_treatment === "expense") return "outflow";
-      return null; // excluded / uncategorized bank rows never move cash-flow totals
+      // Only income/expense rows are real cash flow; excluded/uncategorized never
+      // move totals. Direction decides the bucket, so a reversal credit (expense)
+      // is a cash inflow and its original spend debit is the outflow.
+      if (tx.pnl_treatment !== "income" && tx.pnl_treatment !== "expense") return null;
+      return tx.type === "credit" ? "inflow" : "outflow";
     }
     if (tx.type === "credit") return tx.category === "settlement" ? null : "inflow";
     return "outflow";

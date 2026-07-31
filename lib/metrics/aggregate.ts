@@ -193,6 +193,9 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
           }
           totals.lifetimeInflow += b;
         }
+      } else if (r.pnl_treatment === "expense") {
+        // Bank expense reversal/refund (credit) nets OFF the expense.
+        m.expense! -= b; totals.lifetimeOutflow -= b;
       }
     } else {
       // Expense side. Bank debits count only when treatment='expense' (guaranteed

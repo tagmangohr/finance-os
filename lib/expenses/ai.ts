@@ -52,6 +52,7 @@ export async function aiCategorize(
     `Categories (use the slug exactly):\n${taxonomy}\n\n` +
     `Guidance:\n` +
     `- A debit (money out) is almost always an expense; a credit (money in) is income or excluded.\n` +
+    `- A credit that is a REFUND/REVERSAL from a vendor you normally pay (money coming back) should go to that vendor's expense category (or "expense_reversal") — it nets against the expense, it is NOT income.\n` +
     `- Payouts/settlements FROM a payment gateway (Stripe, Razorpay, Cashfree, PayU) are "pg_settlement" — money already counted as revenue.\n` +
     `- Internal transfers, owner draws, loan movements and capital are "excluded" (cash moved, not P&L).\n` +
     `- If genuinely unsure, use "uncategorized" with low confidence rather than guessing.\n` +

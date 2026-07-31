@@ -94,12 +94,16 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
     const treatment = t.pnl_treatment ?? "uncategorized";
 
     if (treatment === "expense") {
-      totals.expenses += amt; m.expenses += amt;
+      // Direction-aware: debit = spend (+), credit = reversal/refund (−).
+      const signed = t.type === "debit" ? amt : -amt;
+      totals.expenses += signed; m.expenses += signed;
       const slug = t.category ?? "uncategorized";
       const c = byCat.get(slug) ?? { label: labelBySlug.get(slug) ?? slug, treatment, amount: 0, count: 0 };
-      c.amount += amt; c.count += 1; byCat.set(slug, c);
+      c.amount += signed; c.count += 1; byCat.set(slug, c);
     } else if (treatment === "income") {
-      totals.otherIncome += amt; m.otherIncome += amt;
+      // credit = income (+), debit = clawback (−).
+      const signed = t.type === "credit" ? amt : -amt;
+      totals.otherIncome += signed; m.otherIncome += signed;
     } else if (treatment === "excluded") {
       totals.excluded += amt;
     } else {
@@ -120,6 +124,7 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
 
   const byCategory = Array.from(byCat.entries())
     .map(([category, v]) => ({ category, label: v.label, treatment: v.treatment, amount: v.amount, count: v.count }))
+    .filter((c) => Math.abs(c.amount) > 0.5) // drop fully-reversed (net ~0) categories
     .sort((a, b) => b.amount - a.amount);
 
   return {

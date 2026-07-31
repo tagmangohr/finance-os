@@ -90,11 +90,27 @@ export async function calculateRunway(
     if (merc.hasData) cashBalance = Math.max(0, merc.cashBase);
   } catch { /* keep proxy */ }
 
-  // Average monthly burn from the last 90 days of real operating-expense debits.
+  // Average monthly burn from the last 90 days of real operating-expense debits,
+  // net of bank expense reversals/refunds (credits in an expense category) in the
+  // same window — a reversed payment isn't burn.
   const debits = debits90.filter(countsAsBurn);
   const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
+  const reversals90 = await selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
+    supabase
+      .from('transactions')
+      .select('amount, amount_base')
+      .eq('org_id', orgId)
+      .eq('type', 'credit')
+      .eq('ledger', 'bank')
+      .eq('pnl_treatment', 'expense')
+      .in('status', POSTED_TRANSACTION_STATUSES)
+      .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
+      .lte('transaction_date', todayStr)
+      .range(from, to)
+  );
+  const totalReversals90d = reversals90.reduce((sum, t) => sum + baseAmt(t), 0);
   // 90 days ≈ 3 months
-  const avgMonthlyBurn = totalDebits90d / 3;
+  const avgMonthlyBurn = Math.max(0, totalDebits90d - totalReversals90d) / 3;
 
   const burnRate = avgMonthlyBurn;
   const runwayDays =
