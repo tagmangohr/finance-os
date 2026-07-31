@@ -28,6 +28,12 @@ const SOURCE_STYLE: Record<string, string> = {
   rule: "bg-violet-500/15 text-violet-600",
   ai: "bg-fuchsia-500/15 text-fuchsia-600",
 };
+const STATUS_STYLE: Record<string, string> = {
+  completed: "bg-emerald-500/15 text-emerald-600",
+  pending: "bg-amber-500/15 text-amber-600",
+  failed: "bg-rose-500/15 text-rose-600",
+  refunded: "bg-sky-500/15 text-sky-600",
+};
 
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
@@ -37,6 +43,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const { totals, categories, byCategory, monthly, runway } = data;
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "pending" | "failed" | "refunded">("all");
   const [page, setPage] = useState(0);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
@@ -56,12 +63,13 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
     return data.transactions.filter((r) => {
+      if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (filter === "review" && !needsReview(r)) return false;
       if (filter !== "all" && filter !== "review" && (r.pnl_treatment ?? "uncategorized") !== filter) return false;
       if (!t) return true;
       return [r.counterparty_name, r.description, r.category, r.external_id].some((v) => s(v).toLowerCase().includes(t));
     });
-  }, [data.transactions, q, filter]);
+  }, [data.transactions, q, filter, statusFilter]);
 
   const pageRows = filtered.slice(page * PAGE, page * PAGE + PAGE);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
@@ -237,6 +245,13 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               <option value="excluded">Excluded</option>
               <option value="review">Needs review</option>
             </select>
+            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+              <option value="all">Any status</option>
+              <option value="completed">Completed</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+              <option value="refunded">Refunded</option>
+            </select>
           </div>
         }
       >
@@ -247,13 +262,14 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               <th className="font-medium">Counterparty</th>
               <th className="font-medium">Description</th>
               <th className="font-medium text-right">Amount</th>
+              <th className="font-medium">Status</th>
               <th className="font-medium">Category</th>
               <th className="font-medium">P&L</th>
               <th className="font-medium">By</th>
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(t.transaction_date)}</td>
@@ -265,6 +281,11 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                   <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
                     {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}
                     {t.currency !== "INR" && <span className="text-muted-foreground/60"> · {formatCurrency(Number(t.amount), t.currency)}</span>}
+                  </td>
+                  <td>
+                    <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLE[t.status] ?? "bg-neutral-500/10 text-neutral-500")}>
+                      {t.status}
+                    </span>
                   </td>
                   <td>
                     <select
