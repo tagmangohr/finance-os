@@ -174,6 +174,7 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
     // Bank rows that aren't real income/expense (PG settlements, transfers,
     // owner draws, uncategorized) move no metric.
     if (isBank && r.pnl_treatment !== "expense" && r.pnl_treatment !== "income") continue;
+    const posted = r.status === "completed" || r.status === "refunded"; // failed/pending never hit P&L
     const key = r.transaction_date.slice(0, 7);
     const b = base(r);
     const m = byKey.get(key) ?? { gross: 0, refunds: 0, net: 0, expense: 0, txns: 0, customers: 0 };
@@ -193,16 +194,16 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
           }
           totals.lifetimeInflow += b;
         }
-      } else if (r.pnl_treatment === "expense") {
+      } else if (r.pnl_treatment === "expense" && posted) {
         // Bank expense reversal/refund (credit) nets OFF the expense.
         m.expense! -= b; totals.lifetimeOutflow -= b;
       }
     } else {
-      // Expense side. Bank debits count only when treatment='expense' (guaranteed
-      // by the guard above); PG debits keep the refund/dispute split.
-      if (isBank) { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; }
+      // Expense side (POSTED only — failed/pending never count). Bank debits count
+      // when treatment='expense'; PG debits keep the refund/dispute split.
+      if (isBank) { if (posted) { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; } }
       else if (cat === "refund") m.refunds! += b;
-      else if (cat !== "dispute") { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; }
+      else if (cat !== "dispute" && posted) { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; }
     }
     m.net = m.gross! - m.refunds!;
     byKey.set(key, m);

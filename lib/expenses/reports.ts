@@ -88,6 +88,9 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
   const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.length };
 
   for (const t of transactions) {
+    // Only POSTED transactions hit the P&L — failed/pending are shown in the table
+    // (fetched above) but never counted as expense/income/excluded.
+    if (t.status !== "completed" && t.status !== "refunded") continue;
     const amt = baseAmt(t);
     const key = t.transaction_date.slice(0, 7);
     const m = monthly.get(key) ?? { expenses: 0, otherIncome: 0 };
