@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
+import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -136,6 +137,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // night (idempotent upserts). This both backfills and keeps the subscriptions table
   // fresh. Bounded by a deadline so it never overruns the function budget.
   const subApiConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "stripe" || c.type === "razorpay");
+  // Distinct orgs with a bank feed → auto-categorize freshly-synced bank rows.
+  const bankOrgIds = Array.from(
+    new Set((connectors as ConnectorRow[]).filter((c) => c.type === "mercury").map((c) => c.org_id))
+  );
   const fyStartMs = new Date("2026-04-01T00:00:00+05:30").getTime();
   const worker = randomUUID();
   after(async () => {
@@ -176,6 +181,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (tagged) console.log(`[cron/nightly-sync] tagged ${tagged} subscription charges from invoices`);
       } catch (e) {
         console.error("[cron/nightly-sync] tag reconcile failed:", e);
+      }
+    }
+    // Auto-categorize newly-synced bank transactions (rules + AI if configured).
+    // Fill-only, so it only touches rows the last run didn't classify.
+    for (const orgId of bankOrgIds) {
+      try {
+        const res = await categorizeBankTransactions(orgId, sb);
+        if (res.scanned) console.log(`[cron/nightly-sync] bank categorize org=${orgId} scanned=${res.scanned} rule=${res.ruleApplied} ai=${res.aiApplied} remaining=${res.remaining}`);
+      } catch (e) {
+        console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
       }
     }
   });

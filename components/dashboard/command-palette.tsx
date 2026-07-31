@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, DollarSign, Brain, Plug, Table2, Sparkles, ArrowRight } from "lucide-react";
+import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, DollarSign, Brain, Plug, Table2, Landmark, Sparkles, ArrowRight } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard",             label: "War Room",      Icon: LayoutDashboard, hint: "⌘1" },
@@ -11,7 +11,8 @@ const NAV_ITEMS = [
   { href: "/dashboard/collections", label: "Collections",   Icon: DollarSign,      hint: "⌘4" },
   { href: "/dashboard/intelligence",label: "Intelligence",  Icon: Brain,           hint: "⌘5" },
   { href: "/dashboard/connectors",  label: "Connectors",    Icon: Plug,            hint: "⌘6" },
-  { href: "/dashboard/data",        label: "Raw Data",      Icon: Table2,          hint: "⌘7" },
+  { href: "/dashboard/data",        label: "Payments",      Icon: Table2,          hint: "⌘7" },
+  { href: "/dashboard/bank",        label: "Bank",          Icon: Landmark,        hint: "⌘8" },
 ];
 
 const AI_PROMPTS = [

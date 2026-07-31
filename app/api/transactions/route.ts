@@ -43,7 +43,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // Raw Data is gated by the "data" page permission — block restricted members
   // from pulling transactions via the API directly.
   if (!(await hasPageAccessForOrg(orgId, "data"))) {
-    return NextResponse.json({ error: "Forbidden — no access to Raw Data" }, { status: 403 });
+    return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
   }
 
   let query = auth.supabase
@@ -56,7 +56,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
        connectors!inner(name, type)`,
       { count: "exact" }
     )
-    .eq("org_id", auth.org.id);
+    .eq("org_id", auth.org.id)
+    // Firewall: the Payments explorer shows PG/gateway money only. Bank-ledger
+    // rows (Mercury) live in the admin-gated Bank tab, never here.
+    .neq("ledger", "bank");
 
   if (connectorId) query = query.eq("connector_id", connectorId);
   if (source)      query = query.eq("source", source);

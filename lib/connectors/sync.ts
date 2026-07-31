@@ -321,6 +321,9 @@ function toInsertRows(
     fx_rate: tx.fx_rate ?? (tx.currency === BASE_CURRENCY ? 1 : null),
     category: tx.category,
     category_confidence: null,
+    // Ledger: bank-feed connectors tag 'bank' (drives the revenue firewall +
+    // categorization ownership); everything else is 'payments' (PG money).
+    ledger: tx.ledger ?? "payments",
     counterparty_id: null,
     counterparty_name: tx.counterparty_name,
     description: tx.description,
@@ -348,7 +351,10 @@ function toRefreshFields(row: TransactionInsert): TransactionUpdate {
     amount_base: row.amount_base,
     base_currency: row.base_currency,
     fx_rate: row.fx_rate,
-    category: row.category,
+    // NOTE: `category` is deliberately NOT refreshed. It's insert-owned for PG
+    // rows (stable per external_id) and categorizer-owned for bank rows — a
+    // re-sync must never clobber a manual/AI/rule categorization. Same durable
+    // posture as subscription_id/ledger.
     counterparty_name: row.counterparty_name,
     description: row.description,
     source: row.source,
@@ -378,7 +384,7 @@ function hasTransactionChanged(
     (existing.amount_base == null) !== (next.amount_base == null) ||
     (existing.amount_base != null && next.amount_base != null &&
       Number(existing.amount_base) !== Number(next.amount_base)) ||
-    existing.category !== next.category ||
+    // category intentionally excluded — it's durable (see toRefreshFields).
     existing.counterparty_name !== next.counterparty_name ||
     existing.description !== next.description ||
     existing.source !== next.source ||

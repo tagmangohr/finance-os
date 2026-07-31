@@ -19,6 +19,10 @@ export type NormalizedTransaction = {
   // to the durable transactions.subscription_id column on INSERT; the recon/one-time
   // refresh path never clears it, so the recurring signal survives re-syncs.
   subscription_id?: string | null;
+  // Ledger discriminator. Omitted → 'payments' (PG/gateway money). Bank-feed
+  // connectors (Mercury) set 'bank' so the revenue firewall excludes their
+  // inflows and the categorization layer owns their category/treatment.
+  ledger?: "payments" | "bank";
   metadata: Record<string, unknown>;
   // The COMPLETE, unmodified source payload for this row (the gateway object /
   // webhook body / CSV row we normalized from). Persisted verbatim to the `raw`
@@ -1444,7 +1448,11 @@ export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: 
     type: amt >= 0 ? "credit" : "debit", // money out = debit/expense
     amount: Math.abs(amt),
     currency: (tx.currency ?? "USD").toUpperCase(),
-    category: tx.kind ?? null,
+    // Bank rows start UNCATEGORIZED — the categorization engine (rules + AI) owns
+    // `category`/`pnl_treatment`, and re-sync must never clobber it. The raw
+    // Mercury kind is kept in metadata for the categorizer + display.
+    category: null,
+    ledger: "bank",
     counterparty_name: tx.counterpartyName ?? null,
     description: tx.bankDescription ?? tx.note ?? tx.externalMemo ?? null,
     source: "mercury",

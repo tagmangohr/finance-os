@@ -127,6 +127,7 @@ async function fromViews(orgId: string, supabase: SupabaseClient): Promise<Metri
 type Row = {
   transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null;
   status: string; category: string | null; source: string | null; counterparty_name: string | null;
+  ledger: "payments" | "bank"; pnl_treatment: string | null;
 };
 
 const isTransfer = (source: string | null) => !!source && /(settlement|payout)/i.test(source);
@@ -143,7 +144,7 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
   for (let offset = 0; ; offset += PAGE) {
     const { data, error } = await supabase
       .from("transactions")
-      .select("transaction_date, type, amount, amount_base, status, category, source, counterparty_name")
+      .select("transaction_date, type, amount, amount_base, status, category, source, counterparty_name, ledger, pnl_treatment")
       .eq("org_id", orgId)
       .gte("transaction_date", from)
       .lte("transaction_date", todayStr)   // guard corrupt future dates
@@ -169,31 +170,43 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
   for (const r of rows) {
     const cat = r.category ?? "";
     if (cat === "settlement" || isTransfer(r.source)) continue;
+    const isBank = r.ledger === "bank";
+    // Bank rows that aren't real income/expense (PG settlements, transfers,
+    // owner draws, uncategorized) move no metric.
+    if (isBank && r.pnl_treatment !== "expense" && r.pnl_treatment !== "income") continue;
     const key = r.transaction_date.slice(0, 7);
     const b = base(r);
     const m = byKey.get(key) ?? { gross: 0, refunds: 0, net: 0, expense: 0, txns: 0, customers: 0 };
 
     if (r.type === "credit") {
-      if (r.status === "completed" || r.status === "refunded") m.gross! += b;
-      if (r.status === "refunded") m.refunds! += b;
-      if (r.status === "completed") {
-        m.txns! += 1;
-        const label = (r.counterparty_name ?? "").toLowerCase();
-        if (label) {
-          const set = custByMonth.get(key) ?? new Set<string>();
-          set.add(label); custByMonth.set(key, set);
+      // Revenue firewall: only PG (payments-ledger) credits are revenue. Bank
+      // 'income' credits are tracked in the Bank tab, not in PG revenue metrics.
+      if (!isBank) {
+        if (r.status === "completed" || r.status === "refunded") m.gross! += b;
+        if (r.status === "refunded") m.refunds! += b;
+        if (r.status === "completed") {
+          m.txns! += 1;
+          const label = (r.counterparty_name ?? "").toLowerCase();
+          if (label) {
+            const set = custByMonth.get(key) ?? new Set<string>();
+            set.add(label); custByMonth.set(key, set);
+          }
+          totals.lifetimeInflow += b;
         }
-        totals.lifetimeInflow += b;
       }
     } else {
-      if (cat === "refund") m.refunds! += b;
+      // Expense side. Bank debits count only when treatment='expense' (guaranteed
+      // by the guard above); PG debits keep the refund/dispute split.
+      if (isBank) { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; }
+      else if (cat === "refund") m.refunds! += b;
       else if (cat !== "dispute") { m.expense! += b; totals.lifetimeOutflow += b; expenseSeen += b; }
     }
     m.net = m.gross! - m.refunds!;
     byKey.set(key, m);
 
-    // 90-day payment-health window
-    if (r.transaction_date >= win90) {
+    // 90-day payment-health window — PG payments only (bank rows already skipped
+    // unless income/expense, and neither belongs in PG payment health).
+    if (r.transaction_date >= win90 && !isBank) {
       if (r.type === "credit") {
         if (r.status === "completed") { health.completed += 1; health.netCompletedVolume += b; custTxns90 += 1; custNet90 += b; const l = (r.counterparty_name ?? "").toLowerCase(); if (l) custSet90.add(l); }
         else if (r.status === "failed") health.failed += 1;

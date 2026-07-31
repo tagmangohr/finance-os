@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  TrendingUp, LayoutDashboard, Plug, Table2, LogOut, User, Users,
+  TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,11 @@ import { OrgSwitcher, type SwitcherOrg } from "@/components/dashboard/org-switch
 const workspaceNav = [
   { href: "/dashboard",            slug: "dashboard",  label: "Dashboard",  Icon: LayoutDashboard, exact: true,  hint: "⌘1" },
   { href: "/dashboard/connectors", slug: "connectors", label: "Connectors", Icon: Plug,            exact: false, hint: "⌘2" },
-  { href: "/dashboard/data",       slug: "data",       label: "Raw Data",   Icon: Table2,          exact: false, hint: "⌘3" },
+  { href: "/dashboard/data",       slug: "data",       label: "Payments",   Icon: Table2,          exact: false, hint: "⌘3" },
+  // Bank ledger + expense categorization. slug "bank" is not in any restricted
+  // member's page_access, so it shows for owners/admins only (see the pageAccess
+  // filter below) — matching the admin/finance gate on the Bank page itself.
+  { href: "/dashboard/bank",       slug: "bank",       label: "Bank",       Icon: Landmark,        exact: false, hint: "⌘4" },
 ];
 
 const settingsNav = [

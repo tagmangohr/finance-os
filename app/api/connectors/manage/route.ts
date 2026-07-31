@@ -99,8 +99,17 @@ export async function POST(request: Request) {
         if (windows > 0) {
           const worker = randomUUID();
           after(async () => {
-            try { await drainSyncJobs(await createServiceClient(), worker); }
+            const svc2 = await createServiceClient();
+            try { await drainSyncJobs(svc2, worker); }
             catch (e) { console.error("[connectors/manage] initial drain failed:", e); }
+            // Bank feed just backfilled → auto-categorize so the Bank tab is
+            // populated on first connect (rules now; AI if a key is configured).
+            if (data.type === "mercury") {
+              try {
+                const { categorizeBankTransactions } = await import("@/lib/expenses/categorize");
+                await categorizeBankTransactions(data.org_id, svc2);
+              } catch (e) { console.error("[connectors/manage] initial bank categorize failed:", e); }
+            }
           });
         }
       } catch (e) {

@@ -22,10 +22,10 @@ export async function calculateRunway(
       .order('snapshot_date', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    selectAll<{ amount: number; amount_base: number | null; transaction_date: string; source: string | null }>((from, to) =>
+    selectAll<{ amount: number; amount_base: number | null; transaction_date: string; source: string | null; ledger: 'payments' | 'bank'; pnl_treatment: string | null }>((from, to) =>
       supabase
         .from('transactions')
-        .select('amount, amount_base, transaction_date, source')
+        .select('amount, amount_base, transaction_date, source, ledger, pnl_treatment')
         .eq('org_id', orgId)
         .eq('type', 'debit')
         .in('status', POSTED_TRANSACTION_STATUSES)
@@ -34,6 +34,13 @@ export async function calculateRunway(
         .range(from, to)
     ),
   ]);
+
+  // A debit is real burn only if it's an operating expense: bank debits must be
+  // categorized treatment='expense' (transfers/owner-draws/uncategorized don't
+  // count); PG-ledger debits keep the transfer-source exclusion (payouts aren't
+  // spend).
+  const countsAsBurn = (t: { ledger: 'payments' | 'bank'; pnl_treatment: string | null; source: string | null }) =>
+    t.ledger === 'bank' ? t.pnl_treatment === 'expense' : !isTransferSource(t.source ?? undefined);
 
   // Compute cash balance: prefer snapshot, fall back to credits - debits
   let cashBalance = 0;
@@ -57,6 +64,7 @@ export async function calculateRunway(
         .select('amount, amount_base')
         .eq('org_id', orgId)
         .eq('type', 'credit')
+        .eq('ledger', 'payments')      // PG collections only — bank inflows aren't new money here
         .not('category', 'eq', 'settlement')
         .in('status', POSTED_TRANSACTION_STATUSES)
         .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
@@ -66,16 +74,13 @@ export async function calculateRunway(
 
     const totalCredits = credits90.reduce((sum, t) => sum + baseAmt(t), 0);
     const totalDebits = debits90
-      .filter((t) => !isTransferSource(t.source ?? undefined))
+      .filter(countsAsBurn)
       .reduce((sum, t) => sum + baseAmt(t), 0);
     cashBalance = Math.max(0, totalCredits - totalDebits);
   }
 
-  // Compute average monthly burn from last 90 days of debits — excluding bank
-  // transfers (payouts/settlements move charge money to the bank, not spend).
-  const debits = debits90.filter(
-    (t) => !isTransferSource(t.source ?? undefined)
-  );
+  // Average monthly burn from the last 90 days of real operating-expense debits.
+  const debits = debits90.filter(countsAsBurn);
   const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
   // 90 days ≈ 3 months
   const avgMonthlyBurn = totalDebits90d / 3;

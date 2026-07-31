@@ -44,7 +44,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const auth = await requireOrgAccess(orgId);
   if (isAuthFailure(auth)) return auth.error;
   if (!(await hasPageAccessForOrg(orgId, "data"))) {
-    return NextResponse.json({ error: "Forbidden — no access to Raw Data" }, { status: 403 });
+    return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
   }
 
   // Two filtered queries built fresh per page. Stable order is REQUIRED for

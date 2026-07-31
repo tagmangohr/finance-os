@@ -212,6 +212,7 @@ export async function getRevenueDetails(orgId: string) {
         .select("transaction_date, amount, amount_base, currency, counterparty_name")
         .eq("org_id", orgId)
         .eq("type", "credit")
+        .eq("ledger", "payments")              // revenue firewall — bank inflows are never revenue
         .not("category", "eq", "settlement")   // exclude settlement transfers
         .in("status", POSTED_TRANSACTION_STATUSES)
         .gte("transaction_date", from365)
@@ -286,10 +287,10 @@ export async function getCashFlowDetails(orgId: string) {
   // All three run in parallel; the transaction fetch is paginated so a busy 90-day
   // window (>1000 rows) isn't truncated to its oldest slice.
   const [transactions, runwayMetrics, categoryResult] = await Promise.all([
-    selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; counterparty_name: string | null; source: string | null }>((f, t) =>
+    selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; counterparty_name: string | null; source: string | null; ledger: "payments" | "bank"; pnl_treatment: string | null }>((f, t) =>
       supabase
         .from("transactions")
-        .select("transaction_date, type, amount, amount_base, category, counterparty_name, source")
+        .select("transaction_date, type, amount, amount_base, category, counterparty_name, source, ledger, pnl_treatment")
         .eq("org_id", orgId)
         .in("status", POSTED_TRANSACTION_STATUSES)
         .gte("transaction_date", cfFrom)
@@ -309,16 +310,34 @@ export async function getCashFlowDetails(orgId: string) {
   const burnRate    = runwayMetrics.burn_rate;
   const cashBalance = runwayMetrics.cash_balance;
 
+  // Classify a row into inflow / outflow / excluded (null), unifying the PG and
+  // bank ledgers under one rule so cash flow never double-counts:
+  //   • PG payouts/settlements (transfer source, or credit category 'settlement')
+  //     → excluded (money already recorded as the underlying charges).
+  //   • Bank ledger → driven by its P&L treatment: income = inflow, expense =
+  //     outflow, everything else (PG-settlement inflows, transfers, owner draws,
+  //     uncategorized) = excluded. This is the double-count firewall for the bank.
+  //   • PG payments → credit = inflow, debit (refunds etc.) = outflow, as before.
+  type CfRow = (typeof transactions)[number];
+  const classify = (tx: CfRow): "inflow" | "outflow" | null => {
+    if (isTransferSource(tx.source ?? undefined)) return null;
+    if (tx.ledger === "bank") {
+      if (tx.type === "credit" && tx.pnl_treatment === "income") return "inflow";
+      if (tx.type === "debit" && tx.pnl_treatment === "expense") return "outflow";
+      return null; // excluded / uncategorized bank rows never move cash-flow totals
+    }
+    if (tx.type === "credit") return tx.category === "settlement" ? null : "inflow";
+    return "outflow";
+  };
+
   // Daily cash flow.
-  // Exclude settlements (category = 'settlement') from inflows — they are Razorpay's
-  // delayed bank transfer of already-collected payments, not new money.
   const txByDate = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
-    if (isTransferSource((tx as { source?: string }).source)) continue;
-    if (tx.type === "credit" && tx.category === "settlement") continue;
+    const bucket = classify(tx);
+    if (!bucket) continue;
     const date = tx.transaction_date.split("T")[0];
     const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += baseAmt(tx);
+    if (bucket === "inflow") existing.inflow += baseAmt(tx);
     else existing.outflow += baseAmt(tx);
     txByDate.set(date, existing);
   }
@@ -337,14 +356,14 @@ export async function getCashFlowDetails(orgId: string) {
     return { date, inflow: day.inflow, outflow: day.outflow, balance: runningBalance };
   });
 
-  // Monthly aggregation — same settlement exclusion rule.
+  // Monthly aggregation — same classification rule.
   const monthMap = new Map<string, { inflow: number; outflow: number }>();
   for (const tx of transactions) {
-    if (isTransferSource((tx as { source?: string }).source)) continue;
-    if (tx.type === "credit" && tx.category === "settlement") continue;
+    const bucket = classify(tx);
+    if (!bucket) continue;
     const m = tx.transaction_date.split("T")[0].slice(0, 7);
     const existing = monthMap.get(m) ?? { inflow: 0, outflow: 0 };
-    if (tx.type === "credit") existing.inflow += baseAmt(tx);
+    if (bucket === "inflow") existing.inflow += baseAmt(tx);
     else existing.outflow += baseAmt(tx);
     monthMap.set(m, existing);
   }

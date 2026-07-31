@@ -1,0 +1,92 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { CategoryRule } from "./types";
+
+/** Escape SQL LIKE wildcards so an (i)like match on a literal string is exact
+ *  (a counterparty like "A_B" or "50% Off Co" must not act as a wildcard). */
+export function likeEscape(v: string): string {
+  return v.replace(/([\\%_])/g, "\\$1");
+}
+
+/**
+ * Deterministic categorization layer: counterparty/description/source → category.
+ * System rules (org_id NULL, e.g. PG-settlement detection) + this org's remembered
+ * rules. Must be called with the SERVICE client (category_rules is service-only).
+ */
+export async function getRules(orgId: string, supabase: SupabaseClient): Promise<CategoryRule[]> {
+  const { data } = await supabase
+    .from("category_rules")
+    .select("id, org_id, match_field, match_type, match_value, category_slug, priority, source")
+    .or(`org_id.is.null,org_id.eq.${orgId}`)
+    .order("priority", { ascending: true });
+  return (data ?? []) as CategoryRule[];
+}
+
+type MatchableTxn = {
+  counterparty_name: string | null;
+  description: string | null;
+  source: string | null;
+};
+
+/**
+ * First matching rule wins. Ordered by priority asc, then org-specific before
+ * system at equal priority (a company's own rule overrides a generic seed).
+ */
+export function matchRule(txn: MatchableTxn, rules: CategoryRule[]): string | null {
+  const sorted = [...rules].sort(
+    (a, b) => a.priority - b.priority || (b.org_id ? 1 : 0) - (a.org_id ? 1 : 0)
+  );
+  for (const r of sorted) {
+    const field =
+      r.match_field === "counterparty" ? txn.counterparty_name
+      : r.match_field === "description" ? txn.description
+      : txn.source;
+    if (!field) continue;
+    const hay = field.toLowerCase();
+    const needle = r.match_value.toLowerCase();
+    const hit = r.match_type === "exact" ? hay === needle : hay.includes(needle);
+    if (hit) return r.category_slug;
+  }
+  return null;
+}
+
+/**
+ * Persist a manual categorization as a durable counterparty rule so the SAME
+ * counterparty auto-applies next time (the "memory" that makes categorization
+ * sticky). Upsert-by-hand because the uniqueness guard is an expression index
+ * (lower(match_value)), which PostgREST's onConflict can't target.
+ */
+export async function rememberCounterpartyRule(
+  orgId: string,
+  counterparty: string,
+  slug: string,
+  supabase: SupabaseClient
+): Promise<void> {
+  const value = counterparty.trim();
+  if (!value) return;
+
+  const { data: existing } = await supabase
+    .from("category_rules")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("match_field", "counterparty")
+    .eq("match_type", "exact")
+    .ilike("match_value", likeEscape(value)) // exact, case-insensitive (wildcards escaped)
+    .maybeSingle();
+
+  if (existing?.id) {
+    await supabase
+      .from("category_rules")
+      .update({ category_slug: slug, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+  } else {
+    await supabase.from("category_rules").insert({
+      org_id: orgId,
+      match_field: "counterparty",
+      match_type: "exact",
+      match_value: value,
+      category_slug: slug,
+      priority: 50, // between system PG rules (10-20) and the default (100)
+      source: "manual",
+    });
+  }
+}

@@ -22,7 +22,8 @@ export async function calculateRevenue(
       .select('amount, amount_base, transaction_date')
       .eq('org_id', orgId)
       .eq('type', 'credit')
-      .not('category', 'eq', 'settlement')   // exclude settlement transfers — already counted as payments
+      .eq('ledger', 'payments')               // revenue firewall — bank inflows are never revenue
+      .not('category', 'eq', 'settlement')    // exclude settlement transfers — already counted as payments
       .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', fmt(startDate))
       .lte('transaction_date', fmt(today))   // guard corrupt future dates

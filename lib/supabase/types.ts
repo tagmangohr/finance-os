@@ -221,6 +221,13 @@ export interface Database {
           description: string | null;
           source: string;
           status: "pending" | "completed" | "failed" | "refunded";
+          // Ledger discriminator: 'payments' = PG/gateway money (default),
+          // 'bank' = bank-feed money (Mercury). Drives the revenue firewall.
+          ledger: "payments" | "bank";
+          // How a bank txn hits the P&L (null for payments-ledger rows).
+          pnl_treatment: "expense" | "income" | "excluded" | "uncategorized" | null;
+          // Provenance of the assigned category (null until categorized).
+          category_source: "manual" | "rule" | "ai" | "system" | null;
           transaction_date: string;
           transaction_at: string | null;
           // Non-null only for recurring/subscription charges (the gateway subscription
@@ -236,7 +243,7 @@ export interface Database {
         // New multi-currency columns + transaction_at + raw + subscription_id are
         // optional on insert (nullable, filled by the sync layer) so existing
         // inserters don't break. has_raw is generated → omitted from Insert entirely.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw">>;
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       entities: {

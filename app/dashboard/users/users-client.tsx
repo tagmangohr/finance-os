@@ -18,7 +18,7 @@ export const PAGE_OPTIONS = [
   { value: "collections",  label: "Collections" },
   { value: "intelligence", label: "Intelligence" },
   { value: "connectors",   label: "Connectors" },
-  { value: "data",         label: "Raw Data" },
+  { value: "data",         label: "Payments" },
 ] as const;
 
 export type Role = "admin" | "manager" | "viewer";
