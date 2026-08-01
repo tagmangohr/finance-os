@@ -8,8 +8,11 @@ import { razorpaySubscriptionAdapter } from "./adapters/razorpay";
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Pick<Database["public"]["Tables"]["connectors"]["Row"], "id" | "org_id" | "type" | "config">;
 
-type SyncOpts = { fromMs: number; deadlineMs: number };
-type SyncResult = { fetched: number };
+// `cursor` makes the sync RESUMABLE across worker passes (for large historical
+// backfills): pass the previous pass's returned cursor to continue. Return
+// hasMore=true + a cursor when the deadline cut the run short.
+type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null };
+type SyncResult = { fetched: number; cursor: string | null; hasMore: boolean };
 
 /**
  * Backfill/refresh Stripe subscriptions via the listable Subscriptions API. Expands
@@ -19,9 +22,9 @@ type SyncResult = { fetched: number };
  */
 export async function syncStripeSubscriptions(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<SyncResult> {
   const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
-  if (!cfg.secret_key) return { fetched: 0 };
+  if (!cfg.secret_key) return { fetched: 0, cursor: null, hasMore: false };
   const fromSec = Math.floor(opts.fromMs / 1000);
-  let startingAfter: string | null = null;
+  let startingAfter: string | null = opts.cursor ?? null;
   let fetched = 0;
   do {
     const url = new URL("https://api.stripe.com/v1/subscriptions");
@@ -40,7 +43,7 @@ export async function syncStripeSubscriptions(supabase: ServiceClient, connector
     for (const s of rows) { await persistSubscriptionResult(supabase, connector.org_id, connector.id, stripeSubscriptionAdapter(s)); fetched++; }
     startingAfter = j.has_more && rows.length ? rows[rows.length - 1].id : null;
   } while (startingAfter && Date.now() < opts.deadlineMs);
-  return { fetched };
+  return { fetched, cursor: startingAfter, hasMore: startingAfter !== null };
 }
 
 /**
@@ -50,7 +53,7 @@ export async function syncStripeSubscriptions(supabase: ServiceClient, connector
  */
 export async function syncRazorpaySubscriptions(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<SyncResult> {
   const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
-  if (!cfg.key_id || !cfg.key_secret) return { fetched: 0 };
+  if (!cfg.key_id || !cfg.key_secret) return { fetched: 0, cursor: null, hasMore: false };
   const auth = "Basic " + Buffer.from(`${cfg.key_id}:${cfg.key_secret}`).toString("base64");
   const base = "https://api.razorpay.com/v1";
   const planCache = new Map<string, unknown>();
@@ -59,28 +62,28 @@ export async function syncRazorpaySubscriptions(supabase: ServiceClient, connect
   const getPlan = async (id?: string) => { if (!id) return null; if (planCache.has(id)) return planCache.get(id); const p = await fetchJson(`/plans/${id}`); planCache.set(id, p); return p; };
   const getCust = async (id?: string) => { if (!id) return null; if (custCache.has(id)) return custCache.get(id); const c = await fetchJson(`/customers/${id}`); custCache.set(id, c); return c; };
 
-  let skip = 0, fetched = 0;
+  let skip = Number(opts.cursor ?? 0) || 0, fetched = 0, hasMore = true;
   while (Date.now() < opts.deadlineMs) {
     const j = (await fetchJson(`/subscriptions?count=100&skip=${skip}`)) as { items?: Array<Record<string, unknown>> } | null;
     const items = j?.items ?? [];
-    if (!items.length) break;
+    if (!items.length) { hasMore = false; break; }
     for (const sub of items) {
       const startAt = sub.start_at as number | undefined;
-      if (startAt != null && startAt * 1000 < opts.fromMs) continue; // outside FY
+      if (startAt != null && startAt * 1000 < opts.fromMs) continue; // outside window
       const plan = (await getPlan(sub.plan_id as string | undefined)) as { item?: unknown; period?: string; interval?: number } | null;
       const customer = (await getCust(sub.customer_id as string | undefined)) as { name?: string; email?: string; contact?: string } | null;
       await persistSubscriptionResult(supabase, connector.org_id, connector.id, razorpaySubscriptionAdapter(sub as never, { plan: plan as never, customer: customer as never }));
       fetched++;
     }
-    if (items.length < 100) break;
     skip += 100;
+    if (items.length < 100) { hasMore = false; break; }
   }
-  return { fetched };
+  return { fetched, cursor: hasMore ? String(skip) : null, hasMore };
 }
 
 /** Dispatch to the right gateway sync. No-op for gateways without a pull API. */
 export async function syncGatewaySubscriptions(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<SyncResult> {
   if (connector.type === "stripe") return syncStripeSubscriptions(supabase, connector, opts);
   if (connector.type === "razorpay") return syncRazorpaySubscriptions(supabase, connector, opts);
-  return { fetched: 0 };
+  return { fetched: 0, cursor: null, hasMore: false };
 }

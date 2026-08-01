@@ -5,7 +5,8 @@ import type { Database, Json } from "@/lib/supabase/types";
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Pick<Database["public"]["Tables"]["connectors"]["Row"], "id" | "org_id" | "type" | "config">;
 type InvoiceRow = Database["public"]["Tables"]["gateway_invoices"]["Insert"];
-type SyncOpts = { fromMs: number; deadlineMs: number };
+type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null };
+type InvSyncResult = { fetched: number; cursor: string | null; hasMore: boolean };
 
 const iso = (sec?: number | null): string | null => (sec != null ? new Date(sec * 1000).toISOString() : null);
 
@@ -20,11 +21,11 @@ async function upsertInvoices(supabase: ServiceClient, rows: InvoiceRow[]): Prom
  * `charge` (→ transactions.external_id), `subscription`, `billing_reason`
  * (subscription_create = new / subscription_cycle = renewal), tax and customer.
  */
-export async function syncStripeInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<{ fetched: number }> {
+export async function syncStripeInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<InvSyncResult> {
   const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
-  if (!cfg.secret_key) return { fetched: 0 };
+  if (!cfg.secret_key) return { fetched: 0, cursor: null, hasMore: false };
   const fromSec = Math.floor(opts.fromMs / 1000);
-  let after: string | null = null, fetched = 0;
+  let after: string | null = opts.cursor ?? null, fetched = 0;
   do {
     const u = new URL("https://api.stripe.com/v1/invoices");
     u.searchParams.set("limit", "100");
@@ -63,22 +64,22 @@ export async function syncStripeInvoices(supabase: ServiceClient, connector: Con
     fetched += out.length;
     after = j.has_more && rows.length ? (rows[rows.length - 1].id as string) : null;
   } while (after && Date.now() < opts.deadlineMs);
-  return { fetched };
+  return { fetched, cursor: after, hasMore: after !== null };
 }
 
 /** Sync Razorpay invoices. invoice.payment_id → transactions.external_id (pay_…);
  *  invoice.subscription_id → the subscription. */
-export async function syncRazorpayInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<{ fetched: number }> {
+export async function syncRazorpayInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<InvSyncResult> {
   const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
-  if (!cfg.key_id || !cfg.key_secret) return { fetched: 0 };
+  if (!cfg.key_id || !cfg.key_secret) return { fetched: 0, cursor: null, hasMore: false };
   const auth = "Basic " + Buffer.from(`${cfg.key_id}:${cfg.key_secret}`).toString("base64");
-  let skip = 0, fetched = 0;
+  let skip = Number(opts.cursor ?? 0) || 0, fetched = 0, hasMore = true;
   while (Date.now() < opts.deadlineMs) {
     const res = await fetch(`https://api.razorpay.com/v1/invoices?count=100&skip=${skip}`, { headers: { Authorization: auth }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[invoices/razorpay] ${res.status}`); break; }
     const j = (await res.json()) as { items?: Array<Record<string, unknown>> };
     const items = j.items ?? [];
-    if (!items.length) break;
+    if (!items.length) { hasMore = false; break; }
     const out: InvoiceRow[] = items
       .filter((inv) => (inv.created_at as number | undefined) == null || (inv.created_at as number) * 1000 >= opts.fromMs)
       .map((inv) => {
@@ -100,16 +101,16 @@ export async function syncRazorpayInvoices(supabase: ServiceClient, connector: C
       });
     await upsertInvoices(supabase, out);
     fetched += out.length;
-    if (items.length < 100) break;
     skip += 100;
+    if (items.length < 100) { hasMore = false; break; }
   }
-  return { fetched };
+  return { fetched, cursor: hasMore ? String(skip) : null, hasMore };
 }
 
-export async function syncGatewayInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<{ fetched: number }> {
+export async function syncGatewayInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<InvSyncResult> {
   if (connector.type === "stripe") return syncStripeInvoices(supabase, connector, opts);
   if (connector.type === "razorpay") return syncRazorpayInvoices(supabase, connector, opts);
-  return { fetched: 0 };
+  return { fetched: 0, cursor: null, hasMore: false };
 }
 
 /** Tag subscription charges in `transactions` from gateway_invoices, in one indexed

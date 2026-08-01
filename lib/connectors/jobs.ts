@@ -5,6 +5,8 @@ import { StripeConnector } from "@/lib/connectors/stripe";
 import { RazorpayConnector } from "@/lib/connectors/razorpay";
 import { CashfreeConnector } from "@/lib/connectors/cashfree";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
+import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
+import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
@@ -350,6 +352,51 @@ async function processResumableChunk(
   }
 }
 
+/**
+ * Resumable historical SUBSCRIPTION + INVOICE backfill (job.type = 'subs').
+ * Phases tracked in job.stream: 'subs' → 'invoices' → 'tag'. Each pass fetches a
+ * bounded, cursor-paginated slice (so a large history spanning tens of thousands
+ * of rows completes across many worker passes instead of timing out), persists
+ * the cursor, and re-queues. The final 'tag' phase bridges charges→subscriptions
+ * (subscription_id on transactions). Idempotent throughout. Stripe + Razorpay
+ * only (Cashfree has no list API). advance_checkpoint is ignored (dimension data).
+ */
+async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
+  const phase = (job.stream as "subs" | "invoices" | "tag" | null) ?? "subs";
+  const fromMs = new Date(job.window_from).getTime();
+  const deadlineMs = Date.now() + CHUNK_FETCH_MS;
+  const requeue = (extra: Record<string, unknown>) =>
+    supabase.from("sync_jobs").update({
+      attempts: 0, locked_at: null, locked_by: null, status: "pending",
+      run_after: new Date().toISOString(), updated_at: new Date().toISOString(), ...extra,
+    }).eq("id", job.id);
+  try {
+    if (phase === "subs") {
+      const r = await syncGatewaySubscriptions(supabase, connector, { fromMs, deadlineMs, cursor: job.cursor });
+      const processed = (job.processed ?? 0) + r.fetched;
+      if (r.hasMore) { await requeue({ processed, stream: "subs", cursor: r.cursor }); return "progress"; }
+      await requeue({ processed, stream: "invoices", cursor: null }); return "progress";
+    }
+    if (phase === "invoices") {
+      const r = await syncGatewayInvoices(supabase, connector, { fromMs, deadlineMs, cursor: job.cursor });
+      const processed = (job.processed ?? 0) + r.fetched;
+      if (r.hasMore) { await requeue({ processed, stream: "invoices", cursor: r.cursor }); return "progress"; }
+      await requeue({ processed, stream: "tag", cursor: null }); return "progress";
+    }
+    // phase 'tag' — bridge charges → subscriptions, then finish.
+    await tagSubscriptionCharges(supabase);
+    await supabase.from("sync_jobs").update({
+      status: "done", cursor: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
+    }).eq("id", job.id);
+    return "done";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const permanent = err instanceof SyncConfigError;
+    await finishJob(supabase, job, { ok: false, error: message, permanent });
+    return job.attempts >= job.max_attempts || permanent ? "failed" : "progress";
+  }
+}
+
 /** Process one legacy (whole-window) job for a low-volume connector. */
 async function processLegacyJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
   try {
@@ -422,6 +469,7 @@ export async function drainSyncJobs(
           await finishJob(supabase, job, { ok: false, error: "Connector no longer exists", permanent: true });
           return "failed";
         }
+        if (job.type === "subs") return processSubsBackfill(supabase, job, connector);
         return isResumable(connector.type)
           ? processResumableChunk(supabase, job, connector)
           : processLegacyJob(supabase, job, connector);
