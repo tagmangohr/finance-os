@@ -7,6 +7,7 @@ import {
   normalizeStripeCharge,
   normalizeStripePayout,
   normalizeStripeDispute,
+  isTagMangoCharge,
 } from "@/lib/normalizer";
 
 export class StripeConnector {
@@ -91,6 +92,7 @@ export class StripeConnector {
       const page = await this.stripe.charges.list(params);
 
       for (const charge of page.data) {
+        if (isTagMangoCharge(charge as unknown as StripeCharge)) continue; // exclude shared-account TagMango
         results.push(normalizeStripeCharge(charge as unknown as StripeCharge));
       }
 
@@ -173,6 +175,7 @@ export class StripeConnector {
           : await this.stripe.disputes.list(params as Stripe.DisputeListParams);
 
       for (const item of page.data) {
+        if (stream === "charges" && isTagMangoCharge(item as unknown as StripeCharge)) continue; // exclude TagMango
         results.push(
           stream === "charges"
             ? normalizeStripeCharge(item as unknown as StripeCharge)
@@ -257,7 +260,10 @@ export class StripeConnector {
         let txn: NormalizedTransaction | null = null;
         if (DISPUTE.has(ev.type)) txn = normalizeStripeDispute(obj as unknown as StripeDispute);
         else if (PAYOUT.has(ev.type)) txn = normalizeStripePayout(obj as unknown as StripePayout);
-        else if (CHARGE.has(ev.type)) txn = normalizeStripeCharge(obj as unknown as StripeCharge);
+        else if (CHARGE.has(ev.type)) {
+          const c = obj as unknown as StripeCharge;
+          if (!isTagMangoCharge(c)) txn = normalizeStripeCharge(c); // skip TagMango charge events
+        }
         if (txn?.external_id) byId.set(txn.external_id, txn);
       } catch {
         // A single malformed object must not abort the whole delta.

@@ -152,6 +152,10 @@ export type StripeCharge = {
   failure_code: string | null;
   failure_message: string | null;
   paid: boolean;
+  // Statement descriptor — on a shared Stripe account this identifies the brand
+  // (e.g. "AI_FIESTA" vs "TAGMANGO INC"). Used to keep only Fiesta charges.
+  statement_descriptor?: string | null;
+  calculated_statement_descriptor?: string | null;
   // Expanded balance transaction — Stripe's settled figure in the ACCOUNT's
   // settlement currency (INR for an Indian account), with the exchange rate it
   // used. This is the authoritative INR-equivalent for a foreign-currency charge.
@@ -572,10 +576,24 @@ export function normalizeStripeCharge(
       fee, // processing fee in charge currency; converted to INR at aggregation
       email: charge.billing_details?.email ?? (typeof charge.customer === "object" ? charge.customer?.email : null) ?? null,
       phone: charge.billing_details?.phone ?? null,
+      statement_descriptor: charge.calculated_statement_descriptor ?? charge.statement_descriptor ?? null,
       stripe_metadata: charge.metadata,
     },
     raw: charge,
   };
+}
+
+/**
+ * On a Stripe account shared across brands, the statement descriptor identifies
+ * the brand. TagMango charges (descriptor "TAGMANGO INC") must be excluded from
+ * Fiesta's books — everything else on the account (AI_FIESTA, FIESTA LABS, or
+ * blank) is Fiesta's. Applied to both the backfill and the events feed.
+ */
+export function isTagMangoCharge(
+  charge: { statement_descriptor?: string | null; calculated_statement_descriptor?: string | null }
+): boolean {
+  const d = `${charge.calculated_statement_descriptor ?? ""} ${charge.statement_descriptor ?? ""}`.toUpperCase();
+  return d.includes("TAGMANGO");
 }
 
 export function normalizeStripePayout(

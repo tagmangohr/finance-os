@@ -6,6 +6,7 @@ import {
   normalizeStripeCharge,
   normalizeStripePayout,
   normalizeStripeDispute,
+  isTagMangoCharge,
   type NormalizedTransaction,
   type StripeCharge,
   type StripePayout,
@@ -66,7 +67,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const txns: NormalizedTransaction[] = [];
   if (DISPUTE_EVENTS.has(event.type)) txns.push(normalizeStripeDispute(obj as StripeDispute));
   else if (PAYOUT_EVENTS.has(event.type)) txns.push(normalizeStripePayout(obj as StripePayout));
-  else if (CHARGE_EVENTS.has(event.type)) txns.push(normalizeStripeCharge(obj as StripeCharge));
+  else if (CHARGE_EVENTS.has(event.type)) {
+    const c = obj as StripeCharge;
+    if (!isTagMangoCharge(c)) txns.push(normalizeStripeCharge(c)); // exclude shared-account TagMango charges
+  }
 
   if (txns.length === 0) {
     return NextResponse.json({ received: true, ignored: event.type }, { status: 200 });
