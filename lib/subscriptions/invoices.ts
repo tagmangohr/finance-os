@@ -5,7 +5,7 @@ import type { Database, Json } from "@/lib/supabase/types";
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Pick<Database["public"]["Tables"]["connectors"]["Row"], "id" | "org_id" | "type" | "config">;
 type InvoiceRow = Database["public"]["Tables"]["gateway_invoices"]["Insert"];
-type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null };
+type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null; toMs?: number };
 type InvSyncResult = { fetched: number; cursor: string | null; hasMore: boolean };
 
 const iso = (sec?: number | null): string | null => (sec != null ? new Date(sec * 1000).toISOString() : null);
@@ -30,6 +30,7 @@ export async function syncStripeInvoices(supabase: ServiceClient, connector: Con
     const u = new URL("https://api.stripe.com/v1/invoices");
     u.searchParams.set("limit", "100");
     u.searchParams.set("created[gte]", String(fromSec));
+    if (opts.toMs) u.searchParams.set("created[lt]", String(Math.floor(opts.toMs / 1000)));
     if (after) u.searchParams.set("starting_after", after);
     const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${cfg.secret_key}` }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[invoices/stripe] ${res.status}: ${(await res.text()).slice(0, 160)}`); break; }
@@ -81,7 +82,13 @@ export async function syncRazorpayInvoices(supabase: ServiceClient, connector: C
     const items = j.items ?? [];
     if (!items.length) { hasMore = false; break; }
     const out: InvoiceRow[] = items
-      .filter((inv) => (inv.created_at as number | undefined) == null || (inv.created_at as number) * 1000 >= opts.fromMs)
+      .filter((inv) => {
+        const c = inv.created_at as number | undefined;
+        if (c == null) return true;
+        if (c * 1000 < opts.fromMs) return false;
+        if (opts.toMs && c * 1000 >= opts.toMs) return false;
+        return true;
+      })
       .map((inv) => {
         const cd = (inv.customer_details ?? {}) as { name?: string; email?: string; contact?: string };
         const cur = (inv.currency as string | undefined)?.toUpperCase() ?? null;

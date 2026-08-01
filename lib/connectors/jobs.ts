@@ -364,6 +364,7 @@ async function processResumableChunk(
 async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
   const phase = (job.stream as "subs" | "invoices" | "tag" | null) ?? "subs";
   const fromMs = new Date(job.window_from).getTime();
+  const toMs = new Date(job.window_to).getTime(); // upper bound → skip already-synced current-FY rows
   const deadlineMs = Date.now() + CHUNK_FETCH_MS;
   const requeue = (extra: Record<string, unknown>) =>
     supabase.from("sync_jobs").update({
@@ -372,13 +373,13 @@ async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, conn
     }).eq("id", job.id);
   try {
     if (phase === "subs") {
-      const r = await syncGatewaySubscriptions(supabase, connector, { fromMs, deadlineMs, cursor: job.cursor });
+      const r = await syncGatewaySubscriptions(supabase, connector, { fromMs, toMs, deadlineMs, cursor: job.cursor });
       const processed = (job.processed ?? 0) + r.fetched;
       if (r.hasMore) { await requeue({ processed, stream: "subs", cursor: r.cursor }); return "progress"; }
       await requeue({ processed, stream: "invoices", cursor: null }); return "progress";
     }
     if (phase === "invoices") {
-      const r = await syncGatewayInvoices(supabase, connector, { fromMs, deadlineMs, cursor: job.cursor });
+      const r = await syncGatewayInvoices(supabase, connector, { fromMs, toMs, deadlineMs, cursor: job.cursor });
       const processed = (job.processed ?? 0) + r.fetched;
       if (r.hasMore) { await requeue({ processed, stream: "invoices", cursor: r.cursor }); return "progress"; }
       await requeue({ processed, stream: "tag", cursor: null }); return "progress";

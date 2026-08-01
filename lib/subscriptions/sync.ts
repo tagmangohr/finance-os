@@ -11,7 +11,9 @@ type ConnectorRow = Pick<Database["public"]["Tables"]["connectors"]["Row"], "id"
 // `cursor` makes the sync RESUMABLE across worker passes (for large historical
 // backfills): pass the previous pass's returned cursor to continue. Return
 // hasMore=true + a cursor when the deadline cut the run short.
-type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null };
+// `toMs` upper-bounds a historical backfill (created < toMs) so it doesn't
+// re-scan already-synced current-FY rows. Omitted = no upper bound (nightly).
+type SyncOpts = { fromMs: number; deadlineMs: number; cursor?: string | null; toMs?: number };
 type SyncResult = { fetched: number; cursor: string | null; hasMore: boolean };
 
 /**
@@ -31,6 +33,7 @@ export async function syncStripeSubscriptions(supabase: ServiceClient, connector
     url.searchParams.set("status", "all");
     url.searchParams.set("limit", "100");
     url.searchParams.set("created[gte]", String(fromSec));
+    if (opts.toMs) url.searchParams.set("created[lt]", String(Math.floor(opts.toMs / 1000)));
     // Expand customer only. items[].price is included by default; product would be a
     // 5th expand level (exceeds Stripe's max-4 limit and 400s the whole request), so
     // plan_name falls back to price.nickname / product id (enrich names separately).
@@ -70,6 +73,7 @@ export async function syncRazorpaySubscriptions(supabase: ServiceClient, connect
     for (const sub of items) {
       const startAt = sub.start_at as number | undefined;
       if (startAt != null && startAt * 1000 < opts.fromMs) continue; // outside window
+      if (opts.toMs && startAt != null && startAt * 1000 >= opts.toMs) continue; // above upper bound
       const plan = (await getPlan(sub.plan_id as string | undefined)) as { item?: unknown; period?: string; interval?: number } | null;
       const customer = (await getCust(sub.customer_id as string | undefined)) as { name?: string; email?: string; contact?: string } | null;
       await persistSubscriptionResult(supabase, connector.org_id, connector.id, razorpaySubscriptionAdapter(sub as never, { plan: plan as never, customer: customer as never }));
