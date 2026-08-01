@@ -362,7 +362,10 @@ async function processResumableChunk(
  * only (Cashfree has no list API). advance_checkpoint is ignored (dimension data).
  */
 async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
-  const phase = (job.stream as "subs" | "invoices" | "tag" | null) ?? "subs";
+  // Order: invoices → tag → subs. Invoices persist in fast batches and (via tag)
+  // give every historical charge its subscription_id — the high-value output — so
+  // they run first; the slower per-row subscription-table enrichment trails.
+  const phase = (job.stream as "invoices" | "tag" | "subs" | null) ?? "invoices";
   const fromMs = new Date(job.window_from).getTime();
   const toMs = new Date(job.window_to).getTime(); // upper bound → skip already-synced current-FY rows
   const deadlineMs = Date.now() + CHUNK_FETCH_MS;
@@ -372,22 +375,23 @@ async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, conn
       run_after: new Date().toISOString(), updated_at: new Date().toISOString(), ...extra,
     }).eq("id", job.id);
   try {
-    if (phase === "subs") {
-      const r = await syncGatewaySubscriptions(supabase, connector, { fromMs, toMs, deadlineMs, cursor: job.cursor });
-      const processed = (job.processed ?? 0) + r.fetched;
-      if (r.hasMore) { await requeue({ processed, stream: "subs", cursor: r.cursor }); return "progress"; }
-      await requeue({ processed, stream: "invoices", cursor: null }); return "progress";
-    }
     if (phase === "invoices") {
       const r = await syncGatewayInvoices(supabase, connector, { fromMs, toMs, deadlineMs, cursor: job.cursor });
       const processed = (job.processed ?? 0) + r.fetched;
       if (r.hasMore) { await requeue({ processed, stream: "invoices", cursor: r.cursor }); return "progress"; }
       await requeue({ processed, stream: "tag", cursor: null }); return "progress";
     }
-    // phase 'tag' — bridge charges → subscriptions, then finish.
-    await tagSubscriptionCharges(supabase);
+    if (phase === "tag") {
+      // Bridge charges → subscriptions now that historical invoices are in.
+      await tagSubscriptionCharges(supabase);
+      await requeue({ stream: "subs", cursor: null }); return "progress";
+    }
+    // phase 'subs' — enrich the subscriptions table (slower, per-row persist).
+    const r = await syncGatewaySubscriptions(supabase, connector, { fromMs, toMs, deadlineMs, cursor: job.cursor });
+    const processed = (job.processed ?? 0) + r.fetched;
+    if (r.hasMore) { await requeue({ processed, stream: "subs", cursor: r.cursor }); return "progress"; }
     await supabase.from("sync_jobs").update({
-      status: "done", cursor: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
+      status: "done", cursor: null, result: { processed }, updated_at: new Date().toISOString(),
     }).eq("id", job.id);
     return "done";
   } catch (err) {
