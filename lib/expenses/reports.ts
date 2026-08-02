@@ -40,7 +40,7 @@ export type BankOverview = {
   };
   byCategory: { category: string; label: string; treatment: string; amount: number; count: number }[];
   runway: { cashBalance: number; burnRate: number; runwayDays: number };
-  fyStart: string;
+  period: { from: string; to: string };
 };
 
 /**
@@ -49,9 +49,15 @@ export type BankOverview = {
  * readable). The reconciled P&L nets categorized bank expenses against PG
  * collections (from the revenue rollup) + non-PG "other income".
  */
-export async function getBankOverview(orgId: string, supabase: SupabaseClient): Promise<BankOverview> {
-  const fyStart = fyStartISO(new Date());
+export async function getBankOverview(
+  orgId: string,
+  supabase: SupabaseClient,
+  opts?: { from?: string; to?: string }
+): Promise<BankOverview> {
   const today = new Date().toISOString().slice(0, 10);
+  // Default range = current financial year; overridable via the date-range picker.
+  const periodFrom = opts?.from || fyStartISO(new Date());
+  const periodTo = opts?.to || today;
 
   const [categories, transactions, collectionsByMonth, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
@@ -63,8 +69,8 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
-        .gte("transaction_date", fyStart)
-        .lte("transaction_date", today)
+        .gte("transaction_date", periodFrom)
+        .lte("transaction_date", periodTo)
         .order("transaction_date", { ascending: false })
         .range(from, to)
     ),
@@ -80,7 +86,7 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
   const collMap = new Map<string, number>();
   for (const r of (collectionsByMonth.data ?? []) as { month: string; gross_revenue: number }[]) {
     const key = String(r.month).slice(0, 7);
-    if (key >= fyStart.slice(0, 7)) collMap.set(key, Number(r.gross_revenue ?? 0));
+    if (key >= periodFrom.slice(0, 7) && key <= periodTo.slice(0, 7)) collMap.set(key, Number(r.gross_revenue ?? 0));
   }
 
   const monthly = new Map<string, { expenses: number; otherIncome: number }>();
@@ -137,6 +143,6 @@ export async function getBankOverview(orgId: string, supabase: SupabaseClient): 
     totals,
     byCategory,
     runway: { cashBalance: runwayRes.cash_balance, burnRate: runwayRes.burn_rate, runwayDays: runwayRes.runway_days },
-    fyStart,
+    period: { from: periodFrom, to: periodTo },
   };
 }

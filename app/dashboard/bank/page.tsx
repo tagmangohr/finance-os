@@ -13,14 +13,19 @@ import { BankClient } from "./bank-client";
  * service-role only — so only owners/admins (pageAccess === null) may view. The
  * "Bank" sidebar item is likewise hidden for restricted members.
  */
-export default async function BankPage() {
+export default async function BankPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const { org, pageAccess } = await getActiveOrg();
   if (!org) redirect("/auth/login");
   if (pageAccess !== null) redirect("/dashboard"); // owners/admins only
 
+  // Date-range from the URL (?from=YYYY-MM-DD&to=YYYY-MM-DD); default = current FY.
+  const sp = await searchParams;
+  const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const range = { from: isDate(sp.from) ? sp.from : undefined, to: isDate(sp.to) ? sp.to : undefined };
+
   const sb = await createServiceClient();
   const [data, connectorCount] = await Promise.all([
-    getBankOverview(org.id, sb),
+    getBankOverview(org.id, sb, range),
     sb.from("connectors").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("type", "mercury"),
   ]);
 

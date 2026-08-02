@@ -38,7 +38,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
   const sb = await createServiceClient();
   const labels = labelMap(await getCategories(org.id, sb));
-  const fyStart = fyStartISO(new Date());
+  // Honor the Bank tab's date range (?from/?to); default = current FY.
+  const isDate = (v: string | null): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const fp = req.nextUrl.searchParams.get("from");
+  const tp = req.nextUrl.searchParams.get("to");
+  const periodFrom = isDate(fp) ? fp : fyStartISO(new Date());
+  const periodTo = isDate(tp) ? tp : new Date().toISOString().slice(0, 10);
 
   const rows: Record<string, unknown>[] = [];
   for (let from = 0; ; from += 1000) {
@@ -47,7 +52,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .select("transaction_date, type, amount, currency, amount_base, counterparty_name, account_type, description, category, pnl_treatment, category_source, category_confidence, status, external_id")
       .eq("org_id", org.id)
       .eq("ledger", "bank")
-      .gte("transaction_date", fyStart)
+      .gte("transaction_date", periodFrom)
+      .lte("transaction_date", periodTo)
       .order("transaction_date", { ascending: false })
       .range(from, from + 999);
     if (treatment === "uncategorized") q = q.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized");

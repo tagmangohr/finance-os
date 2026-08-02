@@ -44,6 +44,35 @@ const acctLabel = (k: string | null) => (k ? ACCOUNT_LABEL[k.toLowerCase()] ?? (
 const IST_DATE = { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" } as const;
 const IST_TIME = { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true } as const;
 
+/** Date-range picker — updates ?from/?to so the server re-fetches the whole tab
+ *  (cards + P&L + transactions) for the chosen window. Default = current FY. */
+function DateRangePicker({ period }: { period: { from: string; to: string } }) {
+  const router = useRouter();
+  const [from, setFrom] = useState(period.from);
+  const [to, setTo] = useState(period.to);
+  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const fyY = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1; // FY starts April
+  const go = (f: string, t: string) => router.push(`/dashboard/bank?from=${f}&to=${t}`);
+  const presets: [string, string, string][] = [
+    ["This FY", `${fyY}-04-01`, today],
+    ["Last FY", `${fyY - 1}-04-01`, `${fyY}-03-31`],
+    ["90d", new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10), today],
+    ["All", "2020-01-01", today],
+  ];
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1 outline-none" />
+      <span className="text-muted-foreground">→</span>
+      <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1 outline-none" />
+      <button onClick={() => go(from, to)} className="rounded-lg bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90">Apply</button>
+      {presets.map(([label, f, t]) => (
+        <button key={label} onClick={() => go(f, t)} className="rounded-lg border border-border px-2 py-1 text-muted-foreground hover:border-border/60">{label}</button>
+      ))}
+    </div>
+  );
+}
+
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
 
@@ -155,11 +184,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
   return (
     <div className="space-y-3 max-w-[1400px]">
-      {/* Header actions */}
+      {/* Header — date range + actions */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground px-1">
-          Bank ledger · current FY · {totals.txnCount.toLocaleString("en-IN")} transactions
-        </p>
+        <DateRangePicker key={`${data.period.from}_${data.period.to}`} period={data.period} />
         <div className="flex items-center gap-2">
           <button
             onClick={runCategorize}
@@ -169,10 +196,13 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             <Wand2 className={cn("size-3.5", categorizing && "animate-pulse")} />
             {categorizing ? "Categorizing…" : "Auto-categorize"}
           </button>
-          <a href="/api/bank/export?treatment=all&format=csv" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />CSV</a>
-          <a href="/api/bank/export?treatment=all&format=xlsx" className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />Excel</a>
+          <a href={`/api/bank/export?treatment=all&format=csv&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />CSV</a>
+          <a href={`/api/bank/export?treatment=all&format=xlsx&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />Excel</a>
         </div>
       </div>
+      <p className="text-[11px] text-muted-foreground px-1">
+        Bank ledger · {data.period.from} → {data.period.to} · {totals.txnCount.toLocaleString("en-IN")} transactions
+      </p>
 
       {msg && (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground flex items-center gap-2">
@@ -182,9 +212,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
       {/* Reconciled P&L */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
-        <MetricCard title="Net P&L (FY)" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses" />
+        <MetricCard title="Net P&L" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses" />
         <MetricCard title="Collections (PG)" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="From payment gateways" />
-        <MetricCard title="Expenses (FY)" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" />
+        <MetricCard title="Expenses" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" />
         <MetricCard title="Other income" value={inr(totals.otherIncome, true)} icon={<ArrowUpRight className="size-4" />} accentColor="#10b981" subtitle="Non-PG receipts (invoices, interest)" />
       </div>
 
@@ -197,7 +227,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
       <div className="grid lg:grid-cols-2 gap-3 animate-enter-1">
         {/* Expenses by category */}
-        <SectionCard title="Expenses by category" subtitle="Current FY, categorized outflows">
+        <SectionCard title="Expenses by category" subtitle="Categorized outflows in range">
           {byCategory.length === 0 ? (
             <p className="text-xs text-muted-foreground py-6 text-center">No categorized expenses yet — run auto-categorize or classify transactions below.</p>
           ) : (
@@ -282,6 +312,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
           <table className="w-full text-xs">
             <thead><tr className="text-left text-muted-foreground border-b border-border/50">
               <th className="py-1.5 font-medium">Date</th>
+              <th className="font-medium">Time (IST)</th>
               <th className="font-medium">Counterparty</th>
               <th className="font-medium">Account</th>
               <th className="font-medium">Description</th>
@@ -294,13 +325,11 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={11} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
-                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">
-                    <div>{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</div>
-                    {t.transaction_at && <div className="text-[10px] text-muted-foreground/50">{new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME)} IST</div>}
-                  </td>
+                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
+                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME) : "—"}</td>
                   <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
                   <td className="whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
