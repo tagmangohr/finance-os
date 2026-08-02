@@ -39,6 +39,10 @@ const ACCOUNT_LABEL: Record<string, string> = {
   investment: "Investment", credit: "Credit Card", external: "External",
 };
 const acctLabel = (k: string | null) => (k ? ACCOUNT_LABEL[k.toLowerCase()] ?? (k[0].toUpperCase() + k.slice(1)) : "—");
+// Transaction time is stored as a precise UTC timestamp (transaction_at); render
+// it in IST (the reporting timezone) — date from the timestamp so it never drifts.
+const IST_DATE = { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" } as const;
+const IST_TIME = { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true } as const;
 
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
@@ -293,7 +297,10 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                 <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
-                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(t.transaction_date)}</td>
+                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">
+                    <div>{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</div>
+                    {t.transaction_at && <div className="text-[10px] text-muted-foreground/50">{new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME)} IST</div>}
+                  </td>
                   <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
                   <td className="whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
@@ -344,11 +351,21 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         </div>
 
         {pageCount > 1 && (
-          <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
-            <span>Page {page + 1} of {pageCount}</span>
-            <div className="flex gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 text-xs text-muted-foreground">
+            <span>{filtered.length.toLocaleString("en-IN")} rows · page {page + 1} of {pageCount}</span>
+            <div className="flex items-center gap-1">
+              <button disabled={page === 0} onClick={() => setPage(0)} className="rounded border border-border px-2 py-1 disabled:opacity-40">« First</button>
               <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Prev</button>
+              <span className="flex items-center gap-1 px-1">
+                Go to
+                <input
+                  type="number" min={1} max={pageCount} value={page + 1}
+                  onChange={(e) => { const v = Number(e.target.value); if (Number.isFinite(v) && v >= 1) setPage(Math.min(pageCount, Math.max(1, Math.floor(v))) - 1); }}
+                  className="w-14 rounded border border-border bg-background px-1 py-0.5 text-center outline-none"
+                />
+              </span>
               <button disabled={page >= pageCount - 1} onClick={() => setPage((p) => p + 1)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Next</button>
+              <button disabled={page >= pageCount - 1} onClick={() => setPage(pageCount - 1)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Last »</button>
             </div>
           </div>
         )}
