@@ -34,6 +34,11 @@ const STATUS_STYLE: Record<string, string> = {
   failed: "bg-rose-500/15 text-rose-600",
   refunded: "bg-sky-500/15 text-sky-600",
 };
+const ACCOUNT_LABEL: Record<string, string> = {
+  checking: "Checking", savings: "Savings", treasury: "Treasury",
+  investment: "Investment", credit: "Credit Card", external: "External",
+};
+const acctLabel = (k: string | null) => (k ? ACCOUNT_LABEL[k.toLowerCase()] ?? (k[0].toUpperCase() + k.slice(1)) : "—");
 
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
@@ -44,7 +49,14 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "pending" | "failed" | "refunded">("all");
+  const [accountFilter, setAccountFilter] = useState<string>("all");
   const [page, setPage] = useState(0);
+
+  // Distinct Mercury account types present, for the Account filter.
+  const accountTypes = useMemo(
+    () => Array.from(new Set(data.transactions.map((t) => t.account_type).filter((x): x is string => !!x))).sort(),
+    [data.transactions]
+  );
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -64,12 +76,13 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
     const t = q.trim().toLowerCase();
     return data.transactions.filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
+      if (accountFilter !== "all" && r.account_type !== accountFilter) return false;
       if (filter === "review" && !needsReview(r)) return false;
       if (filter !== "all" && filter !== "review" && (r.pnl_treatment ?? "uncategorized") !== filter) return false;
       if (!t) return true;
       return [r.counterparty_name, r.description, r.category, r.external_id].some((v) => s(v).toLowerCase().includes(t));
     });
-  }, [data.transactions, q, filter, statusFilter]);
+  }, [data.transactions, q, filter, statusFilter, accountFilter]);
 
   const pageRows = filtered.slice(page * PAGE, page * PAGE + PAGE);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
@@ -252,6 +265,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               <option value="failed">Failed</option>
               <option value="refunded">Refunded</option>
             </select>
+            {accountTypes.length > 1 && (
+              <select value={accountFilter} onChange={(e) => { setAccountFilter(e.target.value); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+                <option value="all">All accounts</option>
+                {accountTypes.map((a) => <option key={a} value={a}>{acctLabel(a)}</option>)}
+              </select>
+            )}
           </div>
         }
       >
@@ -260,8 +279,10 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             <thead><tr className="text-left text-muted-foreground border-b border-border/50">
               <th className="py-1.5 font-medium">Date</th>
               <th className="font-medium">Counterparty</th>
+              <th className="font-medium">Account</th>
               <th className="font-medium">Description</th>
               <th className="font-medium text-right">Amount</th>
+              <th className="font-medium text-right">USD</th>
               <th className="font-medium">Status</th>
               <th className="font-medium">Category</th>
               <th className="font-medium">P&L</th>
@@ -269,18 +290,18 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={8} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={10} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(t.transaction_date)}</td>
-                  <td className="max-w-[180px] truncate">
-                    {t.counterparty_name ?? "—"}
-                    {t.account_type && <span className="ml-1 text-[9px] uppercase tracking-wide text-muted-foreground/60">{t.account_type}</span>}
-                  </td>
+                  <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
+                  <td className="whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
                   <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
                     {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}
-                    {t.currency !== "INR" && <span className="text-muted-foreground/60"> · {formatCurrency(Number(t.amount), t.currency)}</span>}
+                  </td>
+                  <td className="text-right tabular-nums whitespace-nowrap text-muted-foreground">
+                    {t.currency !== "INR" ? `${t.type === "credit" ? "+" : "−"}${formatCurrency(Number(t.amount), t.currency)}` : "—"}
                   </td>
                   <td>
                     <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLE[t.status] ?? "bg-neutral-500/10 text-neutral-500")}>
