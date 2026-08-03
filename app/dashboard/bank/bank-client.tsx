@@ -114,6 +114,11 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       if (filter !== "all" && filter !== "review" && (r.pnl_treatment ?? "uncategorized") !== filter) return false;
       if (!t) return true;
       return [r.counterparty_name, r.description, r.category, r.external_id].some((v) => s(v).toLowerCase().includes(t));
+    }).sort((a, b) => {
+      // Newest first by precise timestamp; fall back to date when transaction_at is null.
+      const ta = a.transaction_at ? Date.parse(a.transaction_at) : Date.parse(a.transaction_date);
+      const tb = b.transaction_at ? Date.parse(b.transaction_at) : Date.parse(b.transaction_date);
+      return tb - ta;
     });
   }, [data.transactions, q, filter, statusFilter, accountFilter]);
 

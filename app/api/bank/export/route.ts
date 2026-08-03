@@ -54,7 +54,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .eq("ledger", "bank")
       .gte("transaction_date", periodFrom)
       .lte("transaction_date", periodTo)
+      .order("transaction_at", { ascending: false, nullsFirst: false })
       .order("transaction_date", { ascending: false })
+      .order("id", { ascending: false })
       .range(from, from + 999);
     if (treatment === "uncategorized") q = q.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized");
     else if (treatment !== "all") q = q.eq("pnl_treatment", treatment);

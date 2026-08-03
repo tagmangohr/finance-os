@@ -71,7 +71,11 @@ export async function getBankOverview(
         .eq("ledger", "bank")
         .gte("transaction_date", periodFrom)
         .lte("transaction_date", periodTo)
+        // Sort by the precise timestamp so same-day rows are ordered by time,
+        // not arbitrarily. transaction_date is the tiebreaker for null timestamps.
+        .order("transaction_at", { ascending: false, nullsFirst: false })
         .order("transaction_date", { ascending: false })
+        .order("id", { ascending: false })
         .range(from, to)
     ),
     // PG collections per month (gross revenue) from the firewalled rollup view.
