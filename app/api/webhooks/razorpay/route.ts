@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
+import { upsertRazorpayInvoice } from "@/lib/subscriptions/invoices";
 import { razorpaySubscriptionAdapter } from "@/lib/subscriptions/adapters/razorpay";
 import type { NormalizedSubscriptionEvent } from "@/lib/subscriptions/types";
 import {
@@ -46,7 +47,7 @@ const peekType = (raw: string): string | null => {
 /**
  * POST /api/webhooks/razorpay — real-time ingestion of Razorpay events.
  *
- * Handles payments, refunds, disputes, settlements AND subscriptions
+ * Handles payments, refunds, disputes, settlements, invoices AND subscriptions
  * (subscription.activated/charged/cancelled/…). Subscription charges land as a
  * transaction tagged with subscription_id (no double-count) plus a lifecycle/charge
  * event; the subscription snapshot is upserted (merge, non-null). Every inbound event
@@ -55,7 +56,7 @@ const peekType = (raw: string): string | null => {
  *
  * Setup (per Razorpay account): dashboard webhook → this URL, secret =
  * RAZORPAY_WEBHOOK_SECRET (env), subscribed to payment.*, refund.*,
- * payment.dispute.*, settlement.* and subscription.* events.
+ * payment.dispute.*, settlement.*, invoice.* and subscription.* events.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createServiceClient();
@@ -131,6 +132,35 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ error: "Persist failed" }, { status: 500 });
     }
     await logWebhook(supabase, { outcome: "persisted", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id, external_id: txn?.external_id ?? sub.id, amount: txn?.amount ?? null, status: txn?.status ?? null });
+    return NextResponse.json({ received: true }, { status: 200 });
+  }
+
+  // ── Invoice events (invoice.paid / invoice.partially_paid / …) ───────────────
+  // Razorpay fires invoice.paid alongside payment.captured for subscription cycles
+  // and one-off invoices. The payment is also captured via payment.*, but handling
+  // it here (a) persists the invoice object in real time for the charge↔subscription
+  // bridge and (b) tags the charge with its subscription immediately. Idempotent:
+  // the invoice upserts on (gateway,invoice_id) and the payment dedups on pay_ id.
+  if (type.startsWith("invoice.")) {
+    const inv = payload.invoice?.entity as (Record<string, unknown> & { id?: string; subscription_id?: string | null }) | undefined;
+    if (!inv?.id) {
+      await logWebhook(supabase, { outcome: "ignored", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id });
+      return NextResponse.json({ received: true, ignored: type }, { status: 200 });
+    }
+    let txn: NormalizedTransaction | null = null;
+    const pay = payload.payment?.entity as RazorpayPayment | undefined;
+    if (pay) {
+      txn = normalizeRazorpayPayment(pay);
+      if (inv.subscription_id) txn.subscription_id = inv.subscription_id; // tag renewal (no double-count; dedup on pay_ id)
+    }
+    try {
+      await upsertRazorpayInvoice(supabase, matched.org_id, matched.id, inv);
+      if (txn) await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
+    } catch (err) {
+      await logWebhook(supabase, { outcome: "persist_error", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id, error: err instanceof Error ? err.message : String(err) });
+      return NextResponse.json({ error: "Persist failed" }, { status: 500 });
+    }
+    await logWebhook(supabase, { outcome: "persisted", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id, external_id: txn?.external_id ?? inv.id, amount: txn?.amount ?? null, status: txn?.status ?? null });
     return NextResponse.json({ received: true }, { status: 200 });
   }
 

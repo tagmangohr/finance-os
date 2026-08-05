@@ -16,6 +16,32 @@ async function upsertInvoices(supabase: ServiceClient, rows: InvoiceRow[]): Prom
   if (error) console.error("[invoices] upsert failed:", error.message);
 }
 
+/** Map one Razorpay invoice entity → a gateway_invoices row. Shared by the batch
+ *  sync and the real-time `invoice.paid` webhook so the mapping never diverges. */
+export function razorpayInvoiceRow(inv: Record<string, unknown>, orgId: string, connectorId: string): InvoiceRow {
+  const cd = (inv.customer_details ?? {}) as { name?: string; email?: string; contact?: string };
+  const cur = (inv.currency as string | undefined)?.toUpperCase() ?? null;
+  const amt = inv.amount_paid != null ? (inv.amount_paid as number) / 100 : null;
+  return {
+    org_id: orgId, connector_id: connectorId, gateway: "razorpay", invoice_id: inv.id as string,
+    subscription_id: (inv.subscription_id as string | null) ?? null,
+    charge_external_id: (inv.payment_id as string | null) ?? null,
+    customer_gateway_id: (inv.customer_id as string | null) ?? null,
+    customer_name: cd.name ?? null, customer_email: cd.email ?? null, customer_phone: cd.contact ?? null,
+    status: (inv.status as string | null) ?? null, native_status: (inv.status as string | null) ?? null,
+    amount: amt, currency: cur, amount_base: cur === "INR" ? amt : null,
+    tax: inv.tax_amount != null ? (inv.tax_amount as number) / 100 : null,
+    invoice_date: iso(inv.issued_at as number | null) ?? iso(inv.created_at as number | null),
+    raw: inv as Json,
+  };
+}
+
+/** Upsert a single Razorpay invoice entity (real-time webhook path). */
+export async function upsertRazorpayInvoice(supabase: ServiceClient, orgId: string, connectorId: string, inv: Record<string, unknown>): Promise<void> {
+  if (!inv?.id) return;
+  await upsertInvoices(supabase, [razorpayInvoiceRow(inv, orgId, connectorId)]);
+}
+
 /**
  * Sync Stripe invoices (the charge↔subscription bridge). Each invoice carries
  * `charge` (→ transactions.external_id), `subscription`, `billing_reason`
@@ -89,23 +115,7 @@ export async function syncRazorpayInvoices(supabase: ServiceClient, connector: C
         if (opts.toMs && c * 1000 >= opts.toMs) return false;
         return true;
       })
-      .map((inv) => {
-        const cd = (inv.customer_details ?? {}) as { name?: string; email?: string; contact?: string };
-        const cur = (inv.currency as string | undefined)?.toUpperCase() ?? null;
-        const amt = inv.amount_paid != null ? (inv.amount_paid as number) / 100 : null;
-        return {
-          org_id: connector.org_id, connector_id: connector.id, gateway: "razorpay", invoice_id: inv.id as string,
-          subscription_id: (inv.subscription_id as string | null) ?? null,
-          charge_external_id: (inv.payment_id as string | null) ?? null,
-          customer_gateway_id: (inv.customer_id as string | null) ?? null,
-          customer_name: cd.name ?? null, customer_email: cd.email ?? null, customer_phone: cd.contact ?? null,
-          status: (inv.status as string | null) ?? null, native_status: (inv.status as string | null) ?? null,
-          amount: amt, currency: cur, amount_base: cur === "INR" ? amt : null,
-          tax: inv.tax_amount != null ? (inv.tax_amount as number) / 100 : null,
-          invoice_date: iso(inv.issued_at as number | null) ?? iso(inv.created_at as number | null),
-          raw: inv as Json,
-        };
-      });
+      .map((inv) => razorpayInvoiceRow(inv, connector.org_id, connector.id));
     await upsertInvoices(supabase, out);
     fetched += out.length;
     skip += 100;
