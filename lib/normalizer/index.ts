@@ -26,6 +26,9 @@ export type NormalizedTransaction = {
   // Bank account kind (checking/savings/treasury/investment/credit/external) for
   // bank-ledger rows — drives account-type filtering + default P&L treatment.
   account_type?: string | null;
+  // Credit-card detail for card swipes (Mercury): last-4 + cardholder email.
+  card_last4?: string | null;
+  card_holder?: string | null;
   metadata: Record<string, unknown>;
   // The COMPLETE, unmodified source payload for this row (the gateway object /
   // webhook body / CSV row we normalized from). Persisted verbatim to the `raw`
@@ -1454,6 +1457,9 @@ export type MercuryTransaction = {
   note?: string | null;
   bankDescription?: string | null;
   externalMemo?: string | null;
+  cardId?: string | null;
+  // Present on real card swipes: card last-4 + cardholder email.
+  details?: { creditCardInfo?: { id?: string; email?: string | null; paymentMethod?: string | null } | null } | null;
 };
 
 export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: string, accountKind?: string | null): NormalizedTransaction | null {
@@ -1464,6 +1470,9 @@ export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: 
     st === "sent" || st === "settled" ? "completed" : st === "pending" ? "pending" : "failed"; // cancelled/failed → failed
   const when = tx.postedAt ?? tx.createdAt ?? null;
   const whenIso = gatewayTimeToIso(when);
+  // Card detail is only present on real card swipes (not bill-pays / fee lines).
+  const cc = tx.details?.creditCardInfo ?? null;
+  const cardLast4 = cc?.paymentMethod ? (cc.paymentMethod.match(/(\d{4})\s*$/)?.[1] ?? null) : null;
   return {
     external_id: `mercury_${tx.id}`,
     type: amt >= 0 ? "credit" : "debit", // money out = debit/expense
@@ -1475,6 +1484,8 @@ export function normalizeMercuryTransaction(tx: MercuryTransaction, accountId?: 
     category: null,
     ledger: "bank",
     account_type: accountKind ? accountKind.toLowerCase() : null,
+    card_last4: cardLast4,
+    card_holder: cc?.email ?? null,
     counterparty_name: tx.counterpartyName ?? null,
     description: tx.bankDescription ?? tx.note ?? tx.externalMemo ?? null,
     source: "mercury",

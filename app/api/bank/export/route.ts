@@ -15,6 +15,8 @@ const COLS: Array<{ key: string; label: string }> = [
   { key: "amount_base", label: "Amount (INR)" },
   { key: "counterparty_name", label: "Counterparty" },
   { key: "account_type", label: "Account" },
+  { key: "card_last4", label: "Card" },
+  { key: "card_holder", label: "Cardholder" },
   { key: "description", label: "Description" },
   { key: "category_label", label: "Category" },
   { key: "pnl_treatment", label: "P&L Treatment" },
@@ -49,7 +51,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   for (let from = 0; ; from += 1000) {
     let q = sb
       .from("transactions")
-      .select("transaction_date, type, amount, currency, amount_base, counterparty_name, account_type, description, category, pnl_treatment, category_source, category_confidence, status, external_id")
+      .select("transaction_date, type, amount, currency, amount_base, counterparty_name, account_type, card_last4, card_holder, description, category, pnl_treatment, category_source, category_confidence, status, external_id")
       .eq("org_id", org.id)
       .eq("ledger", "bank")
       .gte("transaction_date", periodFrom)

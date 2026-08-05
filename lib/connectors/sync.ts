@@ -325,6 +325,8 @@ function toInsertRows(
     // categorization ownership); everything else is 'payments' (PG money).
     ledger: tx.ledger ?? "payments",
     account_type: tx.account_type ?? null,
+    card_last4: tx.card_last4 ?? null,
+    card_holder: tx.card_holder ?? null,
     counterparty_id: null,
     counterparty_name: tx.counterparty_name,
     description: tx.description,

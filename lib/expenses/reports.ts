@@ -20,6 +20,8 @@ export type BankTxn = {
   category_source: "manual" | "rule" | "ai" | "system" | null;
   category_confidence: number | null;
   account_type: string | null;
+  card_last4: string | null;
+  card_holder: string | null;
   status: string;
   external_id: string | null;
   metadata: Record<string, unknown> | null;
@@ -39,6 +41,7 @@ export type BankOverview = {
     txnCount: number;
   };
   byCategory: { category: string; label: string; treatment: string; amount: number; count: number }[];
+  byCard: { last4: string; holder: string | null; amount: number; count: number }[];
   runway: { cashBalance: number; burnRate: number; runwayDays: number };
   period: { from: string; to: string };
 };
@@ -65,7 +68,7 @@ export async function getBankOverview(
       supabase
         .from("transactions")
         .select(
-          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, status, external_id, metadata"
+          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id, metadata"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
@@ -95,6 +98,7 @@ export async function getBankOverview(
 
   const monthly = new Map<string, { expenses: number; otherIncome: number }>();
   const byCat = new Map<string, { label: string; treatment: string; amount: number; count: number }>();
+  const byCardMap = new Map<string, { holder: string | null; amount: number; count: number }>();
   const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.length };
 
   for (const t of transactions) {
@@ -102,6 +106,15 @@ export async function getBankOverview(
     // (fetched above) but never counted as expense/income/excluded.
     if (t.status !== "completed" && t.status !== "refunded") continue;
     const amt = baseAmt(t);
+
+    // Per-card spend (net of refunds): any posted row that carries a card.
+    if (t.card_last4) {
+      const signed = t.type === "debit" ? amt : -amt;
+      const c = byCardMap.get(t.card_last4) ?? { holder: t.card_holder, amount: 0, count: 0 };
+      c.amount += signed; c.count += 1;
+      if (!c.holder && t.card_holder) c.holder = t.card_holder;
+      byCardMap.set(t.card_last4, c);
+    }
     const key = t.transaction_date.slice(0, 7);
     const m = monthly.get(key) ?? { expenses: 0, otherIncome: 0 };
     const treatment = t.pnl_treatment ?? "uncategorized";
@@ -140,9 +153,14 @@ export async function getBankOverview(
     .filter((c) => Math.abs(c.amount) > 0.5) // drop fully-reversed (net ~0) categories
     .sort((a, b) => b.amount - a.amount);
 
+  const byCard = Array.from(byCardMap.entries())
+    .map(([last4, v]) => ({ last4, holder: v.holder, amount: v.amount, count: v.count }))
+    .sort((a, b) => b.amount - a.amount);
+
   return {
     transactions,
     categories,
+    byCard,
     monthly: monthlySeries,
     totals,
     byCategory,

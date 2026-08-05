@@ -78,16 +78,22 @@ const PAGE = 50;
 
 export function BankClient({ data, hasBankConnector }: { data: BankOverview; hasBankConnector: boolean }) {
   const router = useRouter();
-  const { totals, categories, byCategory, monthly, runway } = data;
+  const { totals, categories, byCategory, byCard, monthly, runway } = data;
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "pending" | "failed" | "refunded">("all");
   const [accountFilter, setAccountFilter] = useState<string>("all");
+  const [cardFilter, setCardFilter] = useState<string>("all");
   const [page, setPage] = useState(0);
 
   // Distinct Mercury account types present, for the Account filter.
   const accountTypes = useMemo(
     () => Array.from(new Set(data.transactions.map((t) => t.account_type).filter((x): x is string => !!x))).sort(),
+    [data.transactions]
+  );
+  // Distinct cards present (last4), for the Card filter.
+  const cards = useMemo(
+    () => Array.from(new Set(data.transactions.map((t) => t.card_last4).filter((x): x is string => !!x))).sort(),
     [data.transactions]
   );
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -110,17 +116,18 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
     return data.transactions.filter((r) => {
       if (statusFilter !== "all" && r.status !== statusFilter) return false;
       if (accountFilter !== "all" && r.account_type !== accountFilter) return false;
+      if (cardFilter !== "all" && r.card_last4 !== cardFilter) return false;
       if (filter === "review" && !needsReview(r)) return false;
       if (filter !== "all" && filter !== "review" && (r.pnl_treatment ?? "uncategorized") !== filter) return false;
       if (!t) return true;
-      return [r.counterparty_name, r.description, r.category, r.external_id].some((v) => s(v).toLowerCase().includes(t));
+      return [r.counterparty_name, r.description, r.category, r.external_id, r.card_last4, r.card_holder].some((v) => s(v).toLowerCase().includes(t));
     }).sort((a, b) => {
       // Newest first by precise timestamp; fall back to date when transaction_at is null.
       const ta = a.transaction_at ? Date.parse(a.transaction_at) : Date.parse(a.transaction_date);
       const tb = b.transaction_at ? Date.parse(b.transaction_at) : Date.parse(b.transaction_date);
       return tb - ta;
     });
-  }, [data.transactions, q, filter, statusFilter, accountFilter]);
+  }, [data.transactions, q, filter, statusFilter, accountFilter, cardFilter]);
 
   const pageRows = filtered.slice(page * PAGE, page * PAGE + PAGE);
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
@@ -186,6 +193,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   }
 
   const maxCat = Math.max(1, ...byCategory.map((c) => c.amount));
+  const maxCard = Math.max(1, ...byCard.map((c) => Math.abs(c.amount)));
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -280,6 +288,31 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         </SectionCard>
       </div>
 
+      {/* Spend by card */}
+      {byCard.length > 0 && (
+        <SectionCard title="Spend by card" subtitle="Net card spend (swipes − refunds) in range · click to filter">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1.5">
+            {byCard.map((c) => (
+              <button
+                key={c.last4}
+                onClick={() => { setCardFilter(c.last4); setPage(0); }}
+                className={cn("flex items-center gap-2 text-xs rounded-md px-1.5 py-1 text-left hover:bg-muted/50", cardFilter === c.last4 && "bg-muted")}
+              >
+                <div className="w-36 shrink-0 truncate">
+                  <span className="tabular-nums">•• {c.last4}</span>
+                  {c.holder && <span className="text-muted-foreground"> · {c.holder.split("@")[0]}</span>}
+                </div>
+                <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full rounded-full bg-sky-500/70" style={{ width: `${(Math.abs(c.amount) / maxCard) * 100}%` }} />
+                </div>
+                <div className="w-20 text-right tabular-nums">{inr(c.amount, true)}</div>
+                <div className="w-8 text-right tabular-nums text-muted-foreground">{c.count}</div>
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
       {/* Transactions */}
       <SectionCard
         title="Transactions"
@@ -310,6 +343,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                 {accountTypes.map((a) => <option key={a} value={a}>{acctLabel(a)}</option>)}
               </select>
             )}
+            {cards.length > 0 && (
+              <select value={cardFilter} onChange={(e) => { setCardFilter(e.target.value); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+                <option value="all">All cards</option>
+                {cards.map((c) => <option key={c} value={c}>{`•• ${c}`}</option>)}
+              </select>
+            )}
           </div>
         }
       >
@@ -320,6 +359,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               <th className="font-medium">Time (IST)</th>
               <th className="font-medium">Counterparty</th>
               <th className="font-medium">Account</th>
+              <th className="font-medium">Card</th>
               <th className="font-medium">Description</th>
               <th className="font-medium text-right">Amount</th>
               <th className="font-medium text-right">USD</th>
@@ -330,13 +370,18 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={11} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={12} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME) : "—"}</td>
                   <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
                   <td className="whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
+                  <td className="whitespace-nowrap text-muted-foreground">
+                    {t.card_last4 ? (
+                      <span title={t.card_holder ?? undefined}>•• {t.card_last4}{t.card_holder ? ` · ${t.card_holder.split("@")[0]}` : ""}</span>
+                    ) : "—"}
+                  </td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
                   <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
                     {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}

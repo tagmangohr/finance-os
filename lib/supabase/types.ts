@@ -231,6 +231,9 @@ export interface Database {
           // Bank account kind for bank-ledger rows (checking/savings/treasury/
           // investment/credit/external); null for payments-ledger rows.
           account_type: string | null;
+          // Credit-card detail for card swipes (Mercury); null for non-card rows.
+          card_last4: string | null;
+          card_holder: string | null;
           transaction_date: string;
           transaction_at: string | null;
           // Non-null only for recurring/subscription charges (the gateway subscription
@@ -246,7 +249,7 @@ export interface Database {
         // New multi-currency columns + transaction_at + raw + subscription_id are
         // optional on insert (nullable, filled by the sync layer) so existing
         // inserters don't break. has_raw is generated → omitted from Insert entirely.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type">>;
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       bank_account_balances: {
