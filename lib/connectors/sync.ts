@@ -10,6 +10,7 @@ import {
   type ExistingTransactionByExternalId,
 } from "@/lib/db/dedup";
 import type { NormalizedTransaction } from "@/lib/normalizer";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 import { categorizeSource } from "@/lib/finance/transaction-status";
 import { BASE_CURRENCY } from "@/lib/utils";
 import { enrichRowsWithFx } from "@/lib/fx/rates";
@@ -486,6 +487,14 @@ export async function persistTransactions(
     );
   } catch (err) {
     console.error("[persist] refund customer enrichment failed (non-fatal):", err);
+  }
+
+  // Bust cached org aggregates when data actually changed, so the dashboard
+  // reflects a sync/webhook immediately even with a long cache TTL. revalidateTag
+  // is request-scoped and persistTransactions always runs inside a route handler;
+  // guard anyway so a non-request caller can never break the persist.
+  if (out.inserted > 0 || out.updated > 0) {
+    try { invalidateOrg(orgId); } catch { /* not in a request scope — ignore */ }
   }
 
   return out;

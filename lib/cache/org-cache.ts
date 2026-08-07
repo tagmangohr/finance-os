@@ -16,9 +16,11 @@ import { unstable_cache, revalidateTag } from "next/cache";
  */
 export const orgTag = (orgId: string): string => `org-data:${orgId}`;
 
-/** Default TTL for cached org aggregates (seconds). Short enough that a missed
- *  invalidation self-heals quickly; long enough that rapid tab-switching is instant. */
-export const ORG_CACHE_TTL = 180;
+/** Default TTL for cached org aggregates (seconds). Long, because every write path
+ *  (sync/webhook via persistTransactions, category edits) busts the org tag
+ *  explicitly — so the TTL is only a self-healing backstop, not the freshness
+ *  mechanism. A long TTL keeps navigation instant and cold re-fetches rare. */
+export const ORG_CACHE_TTL = 3600;
 
 /**
  * Wrap an org-scoped, service-client data loader in a per-org cache.
