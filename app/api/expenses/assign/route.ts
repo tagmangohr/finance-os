@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getCategories, treatmentMap } from "@/lib/expenses/categories";
 import { applyCategory } from "@/lib/expenses/categorize";
 import { rememberCounterpartyRule, likeEscape } from "@/lib/expenses/rules";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,6 +71,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       }
     }
   }
+
+  // Bust cached org aggregates so the P&L / category charts reflect the edit now.
+  invalidateOrg(org.id);
 
   return NextResponse.json({ ok: true, assigned: ids.length, remembered, backfilled });
 }

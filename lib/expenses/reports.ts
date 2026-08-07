@@ -2,6 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "@/lib/supabase/paginate";
 import { baseAmt, fyStartISO } from "@/lib/utils";
 import { calculateRunway } from "@/lib/intelligence/runway";
+import { createServiceClient } from "@/lib/supabase/server";
+import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { getCategories } from "./categories";
 import type { LedgerCategory } from "./types";
 
@@ -168,3 +170,16 @@ export async function getBankOverview(
     period: { from: periodFrom, to: periodTo },
   };
 }
+
+/**
+ * Cached, service-client Bank overview keyed by org + date range. Use this from
+ * the Bank page (invalidated on category edits + short TTL) instead of calling
+ * getBankOverview directly, so repeat navigation is instant.
+ */
+export const getBankOverviewCached = cachedOrgLoader(
+  async (orgId: string, opts?: { from?: string; to?: string }): Promise<BankOverview> => {
+    const supabase = await createServiceClient();
+    return getBankOverview(orgId, supabase, opts);
+  },
+  ["bank-overview"]
+);

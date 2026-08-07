@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { redirect } from "next/navigation";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
-import { getBankOverview } from "@/lib/expenses/reports";
+import { getBankOverviewCached } from "@/lib/expenses/reports";
 import { BankClient } from "./bank-client";
 
 /**
@@ -25,7 +25,7 @@ export default async function BankPage({ searchParams }: { searchParams: Promise
 
   const sb = await createServiceClient();
   const [data, connectorCount] = await Promise.all([
-    getBankOverview(org.id, sb, range),
+    getBankOverviewCached(org.id, range),
     sb.from("connectors").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("type", "mercury"),
   ]);
 

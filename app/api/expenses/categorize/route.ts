@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export async function POST(): Promise<NextResponse> {
   try {
     const sb = await createServiceClient();
     const result = await categorizeBankTransactions(org.id, sb);
+    invalidateOrg(org.id); // refresh cached P&L / category aggregates
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     return NextResponse.json(

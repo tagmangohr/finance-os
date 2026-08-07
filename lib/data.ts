@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { baseAmt } from "@/lib/utils";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
@@ -69,31 +70,36 @@ export async function getOrgWithUser(): Promise<{ orgId: string; orgName: string
   return { orgId: org.id, orgName: org.name, userEmail: user.email ?? "" };
 }
 
+const EMPTY_SUMMARY: DashboardSummary = {
+  snapshot: null,
+  previousSnapshot: null,
+  alerts: [],
+  topDebtors: [],
+  revenueByMonth: [],
+  cashFlowData: [],
+  categoryBreakdown: [],
+  mrr: 0,
+  arr: 0,
+  burnRate: 0,
+  cashBalance: 0,
+  runwayDays: 0,
+  mrrGrowth: 0,
+  burnChange: 0,
+  metricData: EMPTY_METRIC_DATA,
+  hasData: false,
+};
+
 export async function getFinancialSummary(): Promise<DashboardSummary> {
+  // orgId resolution reads cookies → must happen OUTSIDE the cache boundary.
   const orgId = await getOrgId();
+  if (!orgId) return EMPTY_SUMMARY;
+  return financialSummaryCached(orgId);
+}
 
-  if (!orgId) {
-    return {
-      snapshot: null,
-      previousSnapshot: null,
-      alerts: [],
-      topDebtors: [],
-      revenueByMonth: [],
-      cashFlowData: [],
-      categoryBreakdown: [],
-      mrr: 0,
-      arr: 0,
-      burnRate: 0,
-      cashBalance: 0,
-      runwayDays: 0,
-      mrrGrowth: 0,
-      burnChange: 0,
-      metricData: EMPTY_METRIC_DATA,
-      hasData: false,
-    };
-  }
-
-  const supabase = await createClient();
+// Cached, service-client body (org-scoped aggregate; identical for all members).
+const financialSummaryCached = cachedOrgLoader(
+  async (orgId: string): Promise<DashboardSummary> => {
+  const supabase = await createServiceClient();
 
   const [
     snapshotResult,
@@ -196,10 +202,12 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
     metricData,
     hasData: monthly.some((m) => m.gross > 0) || cashBalance > 0,
   };
-}
+  },
+  ["financial-summary"]
+);
 
-export async function getRevenueDetails(orgId: string) {
-  const supabase = await createClient();
+export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
+  const supabase = await createServiceClient();
 
   const today = new Date().toISOString().split("T")[0];
   const from365 = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -276,10 +284,10 @@ export async function getRevenueDetails(orgId: string) {
     momGrowth:  revenueMetrics.mom_growth,
     yoyGrowth:  revenueMetrics.yoy_growth,
   };
-}
+}, ["revenue-details"]);
 
-export async function getCashFlowDetails(orgId: string) {
-  const supabase = await createClient();
+export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
+  const supabase = await createServiceClient();
 
   const cfToday = new Date().toISOString().split("T")[0];
   const cfFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
@@ -393,7 +401,7 @@ export async function getCashFlowDetails(orgId: string) {
   }));
 
   return { cashFlowData, monthlyData, forecasts, burnRate, cashBalance, categoryBreakdown };
-}
+}, ["cashflow-details"]);
 
 export async function getCollectionsData(orgId: string) {
   const supabase = await createClient();
