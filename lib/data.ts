@@ -3,7 +3,6 @@ import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { baseAmt } from "@/lib/utils";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
-import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { getMetricData } from "@/lib/metrics/aggregate";
 import { EMPTY_METRIC_DATA, type MetricData } from "@/lib/metrics/types";
@@ -209,25 +208,20 @@ const financialSummaryCached = cachedOrgLoader(
 export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
   const supabase = await createServiceClient();
 
-  const today = new Date().toISOString().split("T")[0];
-  const from365 = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-
-  const [revRows, customersResult, revenueMetrics] = await Promise.all([
-    // Paginated — full year of revenue, not just the first 1000 rows.
-    selectAll<{ transaction_date: string; amount: number; amount_base: number | null; currency: string; counterparty_name: string | null }>((f, t) =>
-      supabase
-        .from("transactions")
-        .select("transaction_date, amount, amount_base, currency, counterparty_name")
-        .eq("org_id", orgId)
-        .eq("type", "credit")
-        .eq("ledger", "payments")              // revenue firewall — bank inflows are never revenue
-        .not("category", "eq", "settlement")   // exclude settlement transfers
-        .in("status", POSTED_TRANSACTION_STATUSES)
-        .gte("transaction_date", from365)
-        .lte("transaction_date", today)        // guard corrupt future dates
-        .order("transaction_date", { ascending: true })
-        .range(f, t)
-    ),
+  // Read pre-aggregated rollups instead of draining a year of raw rows. Both views
+  // use the canonical, NULL-SAFE revenue firewall (credit + payments + posted,
+  // excluding settlement/payout) — so this matches the dashboard exactly and no
+  // longer drops the ~75k null-category PG rows the old raw query silently lost.
+  const [monthlyRes, currencyRes, customersResult] = await Promise.all([
+    supabase
+      .from("vw_metrics_monthly" as never)
+      .select("month, gross_revenue")
+      .eq("org_id" as never, orgId)
+      .order("month" as never, { ascending: true }),
+    supabase
+      .from("vw_revenue_by_currency" as never)
+      .select("currency, original, inr")
+      .eq("org_id" as never, orgId),
     supabase
       .from("entities")
       .select("*")
@@ -235,42 +229,32 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
       .eq("type", "customer")
       .order("total_revenue", { ascending: false })
       .limit(20),
-    // Live MRR/ARR/growth computed from transactions — no snapshot dependency
-    calculateRevenue(orgId, supabase),
   ]);
 
-  // Aggregate by month for the chart (in base currency).
-  const monthMap = new Map<string, number>();
-  for (const tx of revRows) {
-    const m = tx.transaction_date.split("T")[0].slice(0, 7);
-    monthMap.set(m, (monthMap.get(m) ?? 0) + baseAmt(tx));
-  }
-  const revenueByMonth = Array.from(monthMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, amount]) => ({ month, amount }));
+  const monthlyRows = (monthlyRes.data ?? []) as unknown as { month: string; gross_revenue: number }[];
+  const revenueByMonth = monthlyRows.map((r) => ({
+    month: String(r.month).slice(0, 7),
+    amount: Number(r.gross_revenue ?? 0),
+  }));
 
-  // Per-currency breakdown so the original mix stays visible (e.g. "$Y from USD").
-  // `original` is the sum in the source currency; `inr` is the base-currency value.
-  const curMap = new Map<string, { original: number; inr: number }>();
-  for (const tx of revRows) {
-    const cur = (tx as { currency?: string }).currency ?? "INR";
-    const e = curMap.get(cur) ?? { original: 0, inr: 0 };
-    e.original += Number(tx.amount);
-    e.inr += baseAmt(tx);
-    curMap.set(cur, e);
-  }
-  const currencyBreakdown = Array.from(curMap.entries())
-    .map(([currency, v]) => ({ currency, original: v.original, inr: v.inr }))
+  // MRR = avg of last 3 months; ARR = ×12; MoM = last vs prev; YoY = last vs
+  // earliest (~13 months ago). Derived from the monthly series (ascending).
+  const last3 = revenueByMonth.slice(-3);
+  const mrr = last3.length ? last3.reduce((s, m) => s + m.amount, 0) / last3.length : 0;
+  const arr = mrr * 12;
+  const thisMonth = revenueByMonth.at(-1)?.amount ?? 0;
+  const lastMonth = revenueByMonth.at(-2)?.amount ?? 0;
+  const momGrowth = lastMonth > 0 ? ((thisMonth - lastMonth) / lastMonth) * 100 : 0;
+  const sameMonthLastYear = revenueByMonth[0]?.amount ?? 0;
+  const yoyGrowth = sameMonthLastYear > 0 ? ((thisMonth - sameMonthLastYear) / sameMonthLastYear) * 100 : 0;
+
+  const currencyBreakdown = ((currencyRes.data ?? []) as unknown as { currency: string; original: number; inr: number }[])
+    .map((c) => ({ currency: c.currency, original: Number(c.original ?? 0), inr: Number(c.inr ?? 0) }))
     .sort((a, b) => b.inr - a.inr);
 
-  // Build MRR trend from transaction revenue — no snapshot dependency.
-  // MoM change is computed between consecutive months in the dataset.
   const mrrTrend = revenueByMonth.map((entry, i, arr) => {
     const prev = arr[i - 1];
-    const momChange =
-      prev && prev.amount > 0
-        ? ((entry.amount - prev.amount) / prev.amount) * 100
-        : 0;
+    const momChange = prev && prev.amount > 0 ? ((entry.amount - prev.amount) / prev.amount) * 100 : 0;
     return { month: entry.month, revenue: entry.amount, momChange };
   });
 
@@ -279,10 +263,10 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
     currencyBreakdown,
     customers:  customersResult.data ?? [],
     mrrTrend,
-    mrr:        revenueMetrics.mrr,
-    arr:        revenueMetrics.arr,
-    momGrowth:  revenueMetrics.mom_growth,
-    yoyGrowth:  revenueMetrics.yoy_growth,
+    mrr,
+    arr,
+    momGrowth,
+    yoyGrowth,
   };
 }, ["revenue-details"]);
 

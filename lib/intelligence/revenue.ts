@@ -23,7 +23,9 @@ export async function calculateRevenue(
       .eq('org_id', orgId)
       .eq('type', 'credit')
       .eq('ledger', 'payments')               // revenue firewall — bank inflows are never revenue
-      .not('category', 'eq', 'settlement')    // exclude settlement transfers — already counted as payments
+      // Exclude settlement transfers but KEEP null-category rows (the bulk of PG
+      // revenue). `.not('category','eq',...)` drops NULLs in SQL — the ~3x undercount bug.
+      .or('category.is.null,category.neq.settlement')
       .in('status', POSTED_TRANSACTION_STATUSES)
       .gte('transaction_date', fmt(startDate))
       .lte('transaction_date', fmt(today))   // guard corrupt future dates

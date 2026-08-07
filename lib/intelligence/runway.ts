@@ -66,7 +66,8 @@ export async function calculateRunway(
         .eq('org_id', orgId)
         .eq('type', 'credit')
         .eq('ledger', 'payments')      // PG collections only — bank inflows aren't new money here
-        .not('category', 'eq', 'settlement')
+        // Null-safe: exclude settlement but keep null-category rows (most PG revenue).
+        .or('category.is.null,category.neq.settlement')
         .in('status', POSTED_TRANSACTION_STATUSES)
         .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
         .lte('transaction_date', todayStr)
