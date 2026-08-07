@@ -276,21 +276,17 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
   const cfToday = new Date().toISOString().split("T")[0];
   const cfFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
-  // All three run in parallel; the transaction fetch is paginated so a busy 90-day
-  // window (>1000 rows) isn't truncated to its oldest slice.
-  const [transactions, runwayMetrics, categoryResult] = await Promise.all([
-    selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; counterparty_name: string | null; source: string | null; ledger: "payments" | "bank"; pnl_treatment: string | null }>((f, t) =>
-      supabase
-        .from("transactions")
-        .select("transaction_date, type, amount, amount_base, category, counterparty_name, source, ledger, pnl_treatment")
-        .eq("org_id", orgId)
-        .in("status", POSTED_TRANSACTION_STATUSES)
-        .gte("transaction_date", cfFrom)
-        .lte("transaction_date", cfToday)   // guard corrupt future dates
-        .order("transaction_date", { ascending: true })
-        .range(f, t)
-    ),
-    // Live burn rate + cash balance computed from transactions
+  // Daily inflow/outflow from the pre-aggregated view (≤90 rows) instead of
+  // draining ~17k raw rows. Runway + category run in parallel.
+  const [dailyRes, runwayMetrics, categoryResult] = await Promise.all([
+    supabase
+      .from("vw_cashflow_daily" as never)
+      .select("date, inflow, outflow")
+      .eq("org_id" as never, orgId)
+      .gte("date" as never, cfFrom)
+      .lte("date" as never, cfToday)
+      .order("date" as never, { ascending: true }),
+    // Live burn rate + cash balance.
     calculateRunway(orgId, supabase),
     supabase
       .from("vw_category_breakdown" as never)
@@ -302,64 +298,65 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
   const burnRate    = runwayMetrics.burn_rate;
   const cashBalance = runwayMetrics.cash_balance;
 
-  // Classify a row into inflow / outflow / excluded (null), unifying the PG and
-  // bank ledgers under one rule so cash flow never double-counts:
-  //   • PG payouts/settlements (transfer source, or credit category 'settlement')
-  //     → excluded (money already recorded as the underlying charges).
-  //   • Bank ledger → driven by its P&L treatment: income = inflow, expense =
-  //     outflow, everything else (PG-settlement inflows, transfers, owner draws,
-  //     uncategorized) = excluded. This is the double-count firewall for the bank.
-  //   • PG payments → credit = inflow, debit (refunds etc.) = outflow, as before.
-  type CfRow = (typeof transactions)[number];
-  const classify = (tx: CfRow): "inflow" | "outflow" | null => {
-    if (isTransferSource(tx.source ?? undefined)) return null;
-    if (tx.ledger === "bank") {
-      // Only income/expense rows are real cash flow; excluded/uncategorized never
-      // move totals. Direction decides the bucket, so a reversal credit (expense)
-      // is a cash inflow and its original spend debit is the outflow.
-      if (tx.pnl_treatment !== "income" && tx.pnl_treatment !== "expense") return null;
-      return tx.type === "credit" ? "inflow" : "outflow";
+  // Daily {date, inflow, outflow} rows from the view. Fallback (view not applied
+  // yet): drain raw rows and apply the app's inflow/outflow classification —
+  //   • transfer sources (payouts/settlements) → excluded (already recorded)
+  //   • bank ledger → only income/expense move cash (credit=inflow, debit=outflow)
+  //   • PG payments → credit (non-settlement)=inflow, debit=outflow
+  let dailyRows: { date: string; inflow: number; outflow: number }[];
+  if (!dailyRes.error) {
+    dailyRows = ((dailyRes.data ?? []) as unknown as { date: string; inflow: number; outflow: number }[])
+      .map((r) => ({ date: String(r.date).slice(0, 10), inflow: Number(r.inflow ?? 0), outflow: Number(r.outflow ?? 0) }));
+  } else {
+    const transactions = await selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; source: string | null; ledger: "payments" | "bank"; pnl_treatment: string | null }>((f, t) =>
+      supabase
+        .from("transactions")
+        .select("transaction_date, type, amount, amount_base, category, source, ledger, pnl_treatment")
+        .eq("org_id", orgId)
+        .in("status", POSTED_TRANSACTION_STATUSES)
+        .gte("transaction_date", cfFrom)
+        .lte("transaction_date", cfToday)
+        .order("transaction_date", { ascending: true })
+        .range(f, t)
+    );
+    const classify = (tx: (typeof transactions)[number]): "inflow" | "outflow" | null => {
+      if (isTransferSource(tx.source ?? undefined)) return null;
+      if (tx.ledger === "bank") {
+        if (tx.pnl_treatment !== "income" && tx.pnl_treatment !== "expense") return null;
+        return tx.type === "credit" ? "inflow" : "outflow";
+      }
+      if (tx.type === "credit") return tx.category === "settlement" ? null : "inflow";
+      return "outflow";
+    };
+    const m = new Map<string, { inflow: number; outflow: number }>();
+    for (const tx of transactions) {
+      const b = classify(tx);
+      if (!b) continue;
+      const d = tx.transaction_date.split("T")[0];
+      const e = m.get(d) ?? { inflow: 0, outflow: 0 };
+      if (b === "inflow") e.inflow += baseAmt(tx); else e.outflow += baseAmt(tx);
+      m.set(d, e);
     }
-    if (tx.type === "credit") return tx.category === "settlement" ? null : "inflow";
-    return "outflow";
-  };
-
-  // Daily cash flow.
-  const txByDate = new Map<string, { inflow: number; outflow: number }>();
-  for (const tx of transactions) {
-    const bucket = classify(tx);
-    if (!bucket) continue;
-    const date = tx.transaction_date.split("T")[0];
-    const existing = txByDate.get(date) ?? { inflow: 0, outflow: 0 };
-    if (bucket === "inflow") existing.inflow += baseAmt(tx);
-    else existing.outflow += baseAmt(tx);
-    txByDate.set(date, existing);
+    dailyRows = Array.from(m.entries()).map(([date, v]) => ({ date, ...v }));
   }
 
-  // Running balance starts at 0 and accumulates the net daily cash flow.
-  // An accurate absolute balance requires a connected bank account; anchoring
-  // to the Razorpay-derived cash figure would distort the chart (total
-  // all-time settlements ≠ current bank balance).  Starting at 0 shows the
-  // relative cash-flow trend honestly.
-  let runningBalance = 0;
+  const sortedDaily = dailyRows.slice().sort((a, b) => a.date.localeCompare(b.date));
 
-  const sortedDates = Array.from(txByDate.keys()).sort();
-  const cashFlowData = sortedDates.map((date) => {
-    const day = txByDate.get(date)!;
-    runningBalance = runningBalance + day.inflow - day.outflow;
-    return { date, inflow: day.inflow, outflow: day.outflow, balance: runningBalance };
+  // Running balance starts at 0 (relative trend — an absolute balance needs a
+  // connected bank; all-time settlements ≠ current balance).
+  let runningBalance = 0;
+  const cashFlowData = sortedDaily.map((d) => {
+    runningBalance = runningBalance + d.inflow - d.outflow;
+    return { date: d.date, inflow: d.inflow, outflow: d.outflow, balance: runningBalance };
   });
 
-  // Monthly aggregation — same classification rule.
+  // Monthly aggregation from the same daily rows.
   const monthMap = new Map<string, { inflow: number; outflow: number }>();
-  for (const tx of transactions) {
-    const bucket = classify(tx);
-    if (!bucket) continue;
-    const m = tx.transaction_date.split("T")[0].slice(0, 7);
-    const existing = monthMap.get(m) ?? { inflow: 0, outflow: 0 };
-    if (bucket === "inflow") existing.inflow += baseAmt(tx);
-    else existing.outflow += baseAmt(tx);
-    monthMap.set(m, existing);
+  for (const d of sortedDaily) {
+    const mo = d.date.slice(0, 7);
+    const e = monthMap.get(mo) ?? { inflow: 0, outflow: 0 };
+    e.inflow += d.inflow; e.outflow += d.outflow;
+    monthMap.set(mo, e);
   }
   const monthlyData = Array.from(monthMap.entries())
     .sort(([a], [b]) => a.localeCompare(b))

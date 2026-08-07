@@ -13,9 +13,12 @@ export async function calculateRunway(
   const ninetyDaysAgo = new Date(today);
   ninetyDaysAgo.setDate(today.getDate() - 90);
   const todayStr = today.toISOString().split('T')[0];
+  const ninetyStr = ninetyDaysAgo.toISOString().split('T')[0];
 
-  // Run balance snapshot fetch and debit transactions in parallel (debits paginated).
-  const [snapshotResult, debits90] = await Promise.all([
+  // The three 90-day sums (burn debits, PG credits, expense reversals) come from
+  // vw_runway_inputs — one row, computed in Postgres — instead of draining tens
+  // of thousands of raw rows into JS. Fetched with the snapshot in parallel.
+  const [snapshotResult, inputsRes] = await Promise.all([
     supabase
       .from('financial_snapshots')
       .select('cash_balance')
@@ -23,94 +26,64 @@ export async function calculateRunway(
       .order('snapshot_date', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    selectAll<{ amount: number; amount_base: number | null; transaction_date: string; source: string | null; ledger: 'payments' | 'bank'; pnl_treatment: string | null }>((from, to) =>
-      supabase
-        .from('transactions')
-        .select('amount, amount_base, transaction_date, source, ledger, pnl_treatment')
-        .eq('org_id', orgId)
-        .eq('type', 'debit')
-        .in('status', POSTED_TRANSACTION_STATUSES)
-        .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
-        .lte('transaction_date', todayStr)
-        .range(from, to)
-    ),
+    supabase
+      .from('vw_runway_inputs' as never)
+      .select('burn_debits_90d, credits_90d, reversals_90d')
+      .eq('org_id' as never, orgId)
+      .maybeSingle(),
   ]);
 
-  // A debit is real burn only if it's an operating expense: bank debits must be
-  // categorized treatment='expense' (transfers/owner-draws/uncategorized don't
-  // count); PG-ledger debits keep the transfer-source exclusion (payouts aren't
-  // spend).
-  const countsAsBurn = (t: { ledger: 'payments' | 'bank'; pnl_treatment: string | null; source: string | null }) =>
-    t.ledger === 'bank' ? t.pnl_treatment === 'expense' : !isTransferSource(t.source ?? undefined);
+  let totalDebits90d: number;
+  let totalCredits90d: number;
+  let totalReversals90d: number;
 
-  // Compute cash balance: prefer snapshot, fall back to credits - debits
-  let cashBalance = 0;
-
-  if (snapshotResult.data?.cash_balance != null) {
-    cashBalance = Number(snapshotResult.data.cash_balance);
+  const inputs = inputsRes.data as unknown as { burn_debits_90d: number; credits_90d: number; reversals_90d: number } | null;
+  if (inputs) {
+    totalDebits90d = Number(inputs.burn_debits_90d ?? 0);
+    totalCredits90d = Number(inputs.credits_90d ?? 0);
+    totalReversals90d = Number(inputs.reversals_90d ?? 0);
   } else {
-    // Fall back: 90-day net cash position (credits − debits over the same
-    // window used for the burn-rate query).
-    //
-    // Using the same 90-day window for both sides avoids the all-time
-    // historical-debit inflation that collapsed the old formula to ≈ 0
-    // (all-time payout debits ≈ all-time settlement credits when Razorpay
-    // sweeps nearly every rupee collected into the bank account).
-    //
-    // debits90 is already scoped to 90 days (fetched above).
-    // Settlements are excluded from credits — they double-count payments.
-    const credits90 = await selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
-      supabase
-        .from('transactions')
-        .select('amount, amount_base')
-        .eq('org_id', orgId)
-        .eq('type', 'credit')
-        .eq('ledger', 'payments')      // PG collections only — bank inflows aren't new money here
-        // Null-safe: exclude settlement but keep null-category rows (most PG revenue).
-        .or('category.is.null,category.neq.settlement')
-        .in('status', POSTED_TRANSACTION_STATUSES)
-        .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
-        .lte('transaction_date', todayStr)
-        .range(from, to)
-    );
-
-    const totalCredits = credits90.reduce((sum, t) => sum + baseAmt(t), 0);
-    const totalDebits = debits90
-      .filter(countsAsBurn)
-      .reduce((sum, t) => sum + baseAmt(t), 0);
-    cashBalance = Math.max(0, totalCredits - totalDebits);
+    // Fallback (view not applied yet): drain the 90-day rows. A debit is burn only
+    // if it's an operating expense — bank debits categorized 'expense', or PG-ledger
+    // debits that aren't transfers/payouts.
+    const countsAsBurn = (t: { ledger: 'payments' | 'bank'; pnl_treatment: string | null; source: string | null }) =>
+      t.ledger === 'bank' ? t.pnl_treatment === 'expense' : !isTransferSource(t.source ?? undefined);
+    const [debits90, credits90, reversals90] = await Promise.all([
+      selectAll<{ amount: number; amount_base: number | null; source: string | null; ledger: 'payments' | 'bank'; pnl_treatment: string | null }>((from, to) =>
+        supabase.from('transactions').select('amount, amount_base, source, ledger, pnl_treatment')
+          .eq('org_id', orgId).eq('type', 'debit').in('status', POSTED_TRANSACTION_STATUSES)
+          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
+      selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
+        supabase.from('transactions').select('amount, amount_base')
+          .eq('org_id', orgId).eq('type', 'credit').eq('ledger', 'payments')
+          .or('category.is.null,category.neq.settlement').in('status', POSTED_TRANSACTION_STATUSES)
+          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
+      selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
+        supabase.from('transactions').select('amount, amount_base')
+          .eq('org_id', orgId).eq('type', 'credit').eq('ledger', 'bank').eq('pnl_treatment', 'expense')
+          .in('status', POSTED_TRANSACTION_STATUSES)
+          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
+    ]);
+    totalDebits90d = debits90.filter(countsAsBurn).reduce((s, t) => s + baseAmt(t), 0);
+    totalCredits90d = credits90.reduce((s, t) => s + baseAmt(t), 0);
+    totalReversals90d = reversals90.reduce((s, t) => s + baseAmt(t), 0);
   }
 
+  // Cash balance: prefer the stored snapshot; else a 90-day net proxy (credits −
+  // burn debits over the same window — avoids all-time payout/settlement inflation).
+  let cashBalance = snapshotResult.data?.cash_balance != null
+    ? Number(snapshotResult.data.cash_balance)
+    : Math.max(0, totalCredits90d - totalDebits90d);
+
   // Prefer the TRUE cash position from stored Mercury balances when available
-  // (checking + savings + treasury − card owed). Only readable via a service
-  // client (RLS); on the user-client path this returns no data and we keep the
-  // transaction-derived proxy above. Note: Mercury-only — a separate INR bank
-  // where PGs settle isn't counted until it's connected.
+  // (checking + savings + treasury − card owed). Service-client only (RLS); on the
+  // user-client path this returns no data and we keep the transaction-derived proxy.
   try {
     const merc = await getMercuryCashPosition(orgId, supabase);
     if (merc.hasData) cashBalance = Math.max(0, merc.cashBase);
   } catch { /* keep proxy */ }
 
-  // Average monthly burn from the last 90 days of real operating-expense debits,
-  // net of bank expense reversals/refunds (credits in an expense category) in the
-  // same window — a reversed payment isn't burn.
-  const debits = debits90.filter(countsAsBurn);
-  const totalDebits90d = debits.reduce((sum, t) => sum + baseAmt(t), 0);
-  const reversals90 = await selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
-    supabase
-      .from('transactions')
-      .select('amount, amount_base')
-      .eq('org_id', orgId)
-      .eq('type', 'credit')
-      .eq('ledger', 'bank')
-      .eq('pnl_treatment', 'expense')
-      .in('status', POSTED_TRANSACTION_STATUSES)
-      .gte('transaction_date', ninetyDaysAgo.toISOString().split('T')[0])
-      .lte('transaction_date', todayStr)
-      .range(from, to)
-  );
-  const totalReversals90d = reversals90.reduce((sum, t) => sum + baseAmt(t), 0);
-  // 90 days ≈ 3 months
+  // Average monthly burn = (operating-expense debits − expense reversals) / 3 months.
   const avgMonthlyBurn = Math.max(0, totalDebits90d - totalReversals90d) / 3;
 
   const burnRate = avgMonthlyBurn;
