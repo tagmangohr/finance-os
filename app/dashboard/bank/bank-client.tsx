@@ -194,6 +194,10 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
   const maxCat = Math.max(1, ...byCategory.map((c) => c.amount));
   const maxCard = Math.max(1, ...byCard.map((c) => Math.abs(c.amount)));
+  // Count "needs review" with the SAME predicate as the row badge + filter (no
+  // status gate), so the metric, the "Needs review" filter, and the highlighted
+  // rows always agree — including pending-uncategorized and low-confidence AI.
+  const reviewCount = data.transactions.filter(needsReview).length;
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -235,7 +239,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         <MetricCard title="Cash balance" value={inr(runway.cashBalance, true)} icon={<Wallet className="size-4" />} subtitle="Approx. (Mercury + PG net)" />
         <MetricCard title="Monthly burn" value={inr(runway.burnRate, true)} icon={<TrendingDown className="size-4" />} subtitle="Avg last 90 days" />
         <MetricCard title="Runway" value={runwayLabel(runway.runwayDays)} icon={<Wallet className="size-4" />} severity={runway.runwayDays <= 120 ? "warning" : undefined} subtitle="Cash ÷ burn" />
-        <MetricCard title="Needs review" value={totals.uncategorizedCount.toLocaleString("en-IN")} icon={<AlertTriangle className="size-4" />} severity={totals.uncategorizedCount > 0 ? "warning" : undefined} subtitle="Uncategorized transactions" />
+        <MetricCard title="Needs review" value={reviewCount.toLocaleString("en-IN")} icon={<AlertTriangle className="size-4" />} severity={reviewCount > 0 ? "warning" : undefined} subtitle="Uncategorized or low-confidence (all statuses)" />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-3 animate-enter-1">
