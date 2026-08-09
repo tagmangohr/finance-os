@@ -14,9 +14,12 @@ const PAGE_META: Record<string, { label: string }> = {
   "/dashboard/cashflow":     { label: "Cash Flow" },
   "/dashboard/collections":  { label: "Collections" },
   "/dashboard/intelligence": { label: "Intelligence" },
+  "/dashboard/subscriptions": { label: "Subscriptions" },
   "/dashboard/connectors":   { label: "Connectors" },
   "/dashboard/data":         { label: "Payments" },
   "/dashboard/bank":         { label: "Bank" },
+  "/dashboard/profile":      { label: "Profile" },
+  "/dashboard/users":        { label: "Team" },
 };
 
 interface TopBarProps {

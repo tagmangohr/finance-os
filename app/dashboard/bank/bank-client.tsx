@@ -26,7 +26,7 @@ const TREATMENT_STYLE: Record<string, string> = {
 };
 const SOURCE_STYLE: Record<string, string> = {
   manual: "bg-sky-500/15 text-sky-600",
-  rule: "bg-violet-500/15 text-violet-600",
+  rule: "bg-primary/15 text-primary",
   ai: "bg-fuchsia-500/15 text-fuchsia-600",
 };
 const STATUS_STYLE: Record<string, string> = {

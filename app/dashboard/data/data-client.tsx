@@ -190,7 +190,7 @@ interface SummaryResponse {
 const SOURCE_COLOURS: Record<string, string> = {
   razorpay:            "bg-blue-500/15 text-blue-300 border-blue-500/20",
   razorpay_refund:     "bg-orange-500/15 text-orange-300 border-orange-500/20",
-  razorpay_settlement: "bg-violet-500/15 text-violet-300 border-violet-500/20",
+  razorpay_settlement: "bg-primary/15 text-primary border-primary/20",
   razorpay_dispute:    "bg-red-500/15 text-destructive border-red-500/20",
   razorpay_payout:     "bg-pink-500/15 text-pink-300 border-pink-500/20",
   stripe:              "bg-indigo-500/15 text-indigo-300 border-indigo-500/20",
@@ -216,7 +216,7 @@ const SOURCE_LABELS: Record<string, string> = {
 const BUCKET_COLOURS: Record<SourceBucket, string> = {
   payment:    "bg-blue-500/15 text-blue-300 border-blue-500/20",
   refund:     "bg-orange-500/15 text-orange-300 border-orange-500/20",
-  settlement: "bg-violet-500/15 text-violet-300 border-violet-500/20",
+  settlement: "bg-primary/15 text-primary border-primary/20",
   dispute:    "bg-red-500/15 text-destructive border-red-500/20",
   adjustment: "bg-accent/40 text-muted-foreground border-border",
 };
@@ -613,7 +613,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
             label="Settlements"
             count={summary.cards.settlements.count}
             amount={summary.cards.settlements.amount}
-            colour="text-violet-400"
+            colour="text-primary"
           />
           <SummaryCard
             label="Refunds"

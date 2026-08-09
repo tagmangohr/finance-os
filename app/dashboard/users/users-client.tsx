@@ -71,7 +71,7 @@ function Avatar({ name, email }: { name: string | null; email: string }) {
 function RoleBadge({ role }: { role: Role }) {
   const { label, Icon } = ROLE_META[role];
   const styles: Record<Role, string> = {
-    admin:   "bg-violet-500/[0.12] text-violet-400 border-violet-500/20",
+    admin:   "bg-primary/[0.12] text-primary border-primary/20",
     manager: "bg-amber-500/[0.10] text-warning/90 border-amber-500/20",
     viewer:  "bg-blue-500/[0.10] text-blue-400/80 border-blue-500/15",
   };
@@ -273,7 +273,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                           onChange={(e) => setFullName(e.target.value)}
                           placeholder="Jane Doe"
                           autoFocus
-                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30"
                           style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
                         />
                       </div>
@@ -290,7 +290,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                           onChange={(e) => setEmail(e.target.value)}
                           onKeyDown={(e) => e.key === "Enter" && handleSave()}
                           placeholder="colleague@company.com"
-                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30"
                           style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
                         />
                       </div>
@@ -319,7 +319,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                           }}
                         >
                           <div className="flex items-center gap-1.5 mb-0.5">
-                            <Icon className={cn("w-3 h-3", active ? "text-violet-400" : "text-muted-foreground/70")} />
+                            <Icon className={cn("w-3 h-3", active ? "text-primary" : "text-muted-foreground/70")} />
                             <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
                               {label}
                             </span>
@@ -341,7 +341,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                       <button
                         type="button"
                         onClick={toggleAll}
-                        className="text-[10px] text-violet-400/70 hover:text-violet-400 transition-colors"
+                        className="text-[10px] text-primary/70 hover:text-primary transition-colors"
                       >
                         {pageAccess.length === PAGE_OPTIONS.length ? "Deselect all" : "Select all"}
                       </button>

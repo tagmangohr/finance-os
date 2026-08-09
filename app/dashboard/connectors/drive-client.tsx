@@ -167,7 +167,7 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
           {/* Header */}
           <div className="flex items-start justify-between px-5 pt-5 pb-4 flex-shrink-0 border-b border-border">
             <div className="flex items-start gap-2.5">
-              <Sparkles className="h-4 w-4 text-violet-400 mt-0.5 flex-shrink-0" />
+              <Sparkles className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
               <div>
                 <Dialog.Title className="text-[14px] font-semibold text-foreground leading-snug">
                   Map Columns — {file.file_name}
@@ -276,12 +276,12 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                                   if (e.key === "Escape") { setCreatingCustomFor(null); setCustomInput(""); }
                                 }}
                                 placeholder="e.g. GST Number, Order ID, Tier…"
-                                className="flex-1 text-[12px] rounded-lg border border-violet-500/30 bg-violet-500/[0.05] text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/40 placeholder:text-muted-foreground/70"
+                                className="flex-1 text-[12px] rounded-lg border border-primary/30 bg-primary/[0.05] text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-muted-foreground/70"
                               />
                               <button
                                 onClick={() => customInput.trim() && confirmCustomField(col)}
                                 disabled={!customInput.trim()}
-                                className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-violet-500/20 text-violet-400 hover:bg-violet-500/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                className="text-[11px] font-semibold px-2.5 py-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                               >
                                 Save
                               </button>
@@ -328,7 +328,7 @@ function MappingDialog({ file, onClose, onConfirmed }: MappingDialogProps) {
                                   return next;
                                 });
                               }}
-                              className="flex-1 text-[12px] rounded-lg border border-border bg-accent/40 text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-violet-500/30"
+                              className="flex-1 text-[12px] rounded-lg border border-border bg-accent/40 text-muted-foreground px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary/30"
                             >
                               {MAPPING_OPTS.map((opt) => (
                                 <option key={opt.value} value={opt.value} className="bg-popover">
@@ -414,7 +414,7 @@ function MappingSummary({ mapping }: { mapping: DriveColumnMapping }) {
           </p>
           {customFields.map(([label, col]) => (
             <div key={label} className="flex items-center gap-2 py-0.5">
-              <div className="h-1.5 w-1.5 rounded-full bg-violet-400/40 flex-shrink-0" />
+              <div className="h-1.5 w-1.5 rounded-full bg-primary/40 flex-shrink-0" />
               <span className="text-[11.5px] text-muted-foreground">{label}</span>
               <span className="text-[11px] text-muted-foreground/70 font-mono ml-auto truncate max-w-[140px]">{col}</span>
             </div>
@@ -527,7 +527,7 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                   onChange={(e) => setUrl(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && url.trim()) handleAdd(); }}
                   placeholder={placeholder}
-                  className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-violet-500/30 transition-all"
+                  className="w-full pl-8 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30 transition-all"
                   style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
                 />
               </div>
@@ -577,7 +577,7 @@ function AddFolderDialog({ connectionId, provider, onClose, onAdded }: AddFolder
                 style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
               >
                 <span className="text-muted-foreground font-medium">Tip:</span> Enter a folder path like{" "}
-                <code className="text-violet-400/70 font-mono text-[11px]">/Documents/Finance</code>{" "}
+                <code className="text-primary/70 font-mono text-[11px]">/Documents/Finance</code>{" "}
                 or paste a OneDrive share link.
               </div>
             )}
@@ -723,7 +723,7 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
               "p-1.5 rounded-lg transition-all",
               file.mapping_confirmed
                 ? "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent"
-                : "text-violet-400/50 hover:text-violet-400 hover:bg-violet-500/[0.08]"
+                : "text-primary/50 hover:text-primary hover:bg-primary/[0.08]"
             )}
           >
             {syncing
@@ -855,7 +855,7 @@ function FolderSection({ folder, onFolderUpdated, onFolderRemoved }: FolderSecti
           onClick={handleRescan}
           disabled={rescanning}
           title="Rescan folder for new files"
-          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-violet-400 hover:bg-violet-500/[0.08] transition-all flex-shrink-0"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-primary hover:bg-primary/[0.08] transition-all flex-shrink-0"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${rescanning ? "animate-spin" : ""}`} />
         </button>
@@ -1059,7 +1059,7 @@ function DriveCard({ provider, orgId, connection, onConnectionRemoved, onConnect
           {/* Add folder button */}
           <button
             onClick={() => setAddingFolder(true)}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-muted-foreground/70 hover:text-muted-foreground transition-all border border-dashed border-border hover:border-violet-500/30 hover:bg-violet-500/[0.04]"
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[12px] font-medium text-muted-foreground/70 hover:text-muted-foreground transition-all border border-dashed border-border hover:border-primary/30 hover:bg-primary/[0.04]"
           >
             <FolderPlus className="h-3.5 w-3.5" />
             Add Folder
