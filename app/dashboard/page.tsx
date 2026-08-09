@@ -8,6 +8,7 @@ import { requireRouteAccess } from "@/lib/org/page-access";
 import type { DashboardSummary } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricStrip } from "@/components/dashboard/metric-strip";
 import { RevenueChart } from "@/components/charts/revenue-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
@@ -162,6 +163,8 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-3 max-w-[1400px]">
+
+      <PageHeader title="Overview" subtitle="Your money across every gateway and account, at a glance" />
 
       {/* Preview banner (sample data) */}
       {v.preview && (
