@@ -72,8 +72,8 @@ function RoleBadge({ role }: { role: Role }) {
   const { label, Icon } = ROLE_META[role];
   const styles: Record<Role, string> = {
     admin:   "bg-primary/[0.12] text-primary border-primary/20",
-    manager: "bg-amber-500/[0.10] text-warning/90 border-amber-500/20",
-    viewer:  "bg-blue-500/[0.10] text-blue-400/80 border-blue-500/15",
+    manager: "bg-amber-500/[0.10] text-amber-700 dark:text-amber-400 border-amber-500/20",
+    viewer:  "bg-blue-500/[0.10] text-blue-700 dark:text-blue-400 border-blue-500/15",
   };
   return (
     <span className={cn("flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border", styles[role])}>

@@ -187,15 +187,16 @@ interface SummaryResponse {
 
 // ─── Source badge colours ─────────────────────────────────────────────────────
 
+// Theme-adaptive: darker text in light mode, lighter in dark — legible on both.
 const SOURCE_COLOURS: Record<string, string> = {
-  razorpay:            "bg-blue-500/15 text-blue-300 border-blue-500/20",
-  razorpay_refund:     "bg-orange-500/15 text-orange-300 border-orange-500/20",
-  razorpay_settlement: "bg-primary/15 text-primary border-primary/20",
-  razorpay_dispute:    "bg-red-500/15 text-destructive border-red-500/20",
-  razorpay_payout:     "bg-pink-500/15 text-pink-300 border-pink-500/20",
-  stripe:              "bg-indigo-500/15 text-indigo-300 border-indigo-500/20",
-  stripe_payout:       "bg-purple-500/15 text-purple-300 border-purple-500/20",
-  stripe_dispute:      "bg-red-500/15 text-destructive border-red-500/20",
+  razorpay:            "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20",
+  razorpay_refund:     "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20",
+  razorpay_settlement: "bg-primary/10 text-primary border-primary/20",
+  razorpay_dispute:    "bg-red-500/10 text-destructive border-red-500/20",
+  razorpay_payout:     "bg-pink-500/10 text-pink-700 dark:text-pink-300 border-pink-500/20",
+  stripe:              "bg-indigo-500/10 text-indigo-700 dark:text-indigo-300 border-indigo-500/20",
+  stripe_payout:       "bg-purple-500/10 text-purple-700 dark:text-purple-300 border-purple-500/20",
+  stripe_dispute:      "bg-red-500/10 text-destructive border-red-500/20",
   csv:                 "bg-accent/40 text-muted-foreground border-border",
 };
 
@@ -214,10 +215,10 @@ const SOURCE_LABELS: Record<string, string> = {
 // Generic per-bucket badge colour — fallback for ANY source not in SOURCE_COLOURS
 // (so a new connector's badges are coloured sensibly with no per-gateway edit).
 const BUCKET_COLOURS: Record<SourceBucket, string> = {
-  payment:    "bg-blue-500/15 text-blue-300 border-blue-500/20",
-  refund:     "bg-orange-500/15 text-orange-300 border-orange-500/20",
-  settlement: "bg-primary/15 text-primary border-primary/20",
-  dispute:    "bg-red-500/15 text-destructive border-red-500/20",
+  payment:    "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20",
+  refund:     "bg-orange-500/10 text-orange-700 dark:text-orange-300 border-orange-500/20",
+  settlement: "bg-primary/10 text-primary border-primary/20",
+  dispute:    "bg-red-500/10 text-destructive border-red-500/20",
   adjustment: "bg-accent/40 text-muted-foreground border-border",
 };
 
@@ -225,7 +226,7 @@ const STATUS_COLOURS: Record<string, string> = {
   completed: "text-success",
   pending:   "text-warning",
   failed:    "text-destructive",
-  refunded:  "text-orange-400",
+  refunded:  "text-orange-600 dark:text-orange-400",
 };
 
 const PAGE_SIZE = 50;
@@ -619,7 +620,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
             label="Refunds"
             count={summary.cards.refunds.count}
             amount={summary.cards.refunds.amount}
-            colour="text-orange-400"
+            colour="text-orange-600 dark:text-orange-400"
           />
           <SummaryCard
             label="Disputes"

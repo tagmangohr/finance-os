@@ -672,8 +672,8 @@ function DriveFileRow({ file, onFileUpdated }: DriveFileRowProps) {
           className={cn(
             "flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded font-mono",
             isCsv
-              ? "bg-emerald-500/[0.15] text-success/70"
-              : "bg-blue-500/[0.15] text-blue-400/70"
+              ? "bg-emerald-500/[0.15] text-emerald-700 dark:text-success/80"
+              : "bg-blue-500/[0.15] text-blue-700 dark:text-blue-400/80"
           )}
         >
           {ext}
