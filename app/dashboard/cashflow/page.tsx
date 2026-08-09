@@ -6,6 +6,7 @@ import { getOrgId, getCashFlowDetails, orgHasConnectors } from "@/lib/data";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
+import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
 import { InflowOutflowChart } from "@/components/charts/inflow-outflow-chart";
 import { CategoryChart } from "@/components/charts/category-chart";
 import { formatCurrency } from "@/lib/utils";
@@ -34,11 +35,13 @@ const SAMPLE = {
   ],
 };
 
-export default async function CashFlowPage() {
+export default async function CashFlowPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
 
-  const real = await getCashFlowDetails(orgId);
+  const sp = await searchParams;
+  const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const real = await getCashFlowDetails(orgId, { from: isDate(sp.from) ? sp.from : undefined, to: isDate(sp.to) ? sp.to : undefined });
   // Sample preview only when nothing is connected yet (not just an empty window).
   const preview = !(await orgHasConnectors(orgId));
 
@@ -60,6 +63,12 @@ export default async function CashFlowPage() {
   return (
     <div className="space-y-3 max-w-[1400px]">
       {preview && <PreviewBanner />}
+
+      {!preview && (
+        <div className="flex items-center justify-end">
+          <RangeFilterBar basePath="/dashboard/cashflow" from={real.period.from} to={real.period.to} />
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
         <MetricCard title="Cash Balance" value={formatCurrency(v.cashBalance, "INR", true)}

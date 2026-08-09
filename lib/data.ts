@@ -205,23 +205,21 @@ const financialSummaryCached = cachedOrgLoader(
   ["financial-summary"]
 );
 
-export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
+export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { from?: string; to?: string }) => {
   const supabase = await createServiceClient();
 
-  // Read pre-aggregated rollups instead of draining a year of raw rows. Both views
-  // use the canonical, NULL-SAFE revenue firewall (credit + payments + posted,
-  // excluding settlement/payout) — so this matches the dashboard exactly and no
-  // longer drops the ~75k null-category PG rows the old raw query silently lost.
-  const [monthlyRes, currencyRes, customersResult] = await Promise.all([
-    supabase
-      .from("vw_metrics_monthly" as never)
-      .select("month, gross_revenue")
-      .eq("org_id" as never, orgId)
-      .order("month" as never, { ascending: true }),
-    supabase
-      .from("vw_revenue_by_currency" as never)
-      .select("currency, original, inr")
-      .eq("org_id" as never, orgId),
+  // Range: default = last ~13 months (the historic revenue window); overridable
+  // via the date-range filter. Both aggregations run in Postgres (RPC), so ANY
+  // window stays fast — no raw-row drain.
+  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const defFrom = new Date(now.getFullYear(), now.getMonth() - 12, 1).toISOString().slice(0, 10);
+  const from = opts?.from || defFrom;
+  const to = opts?.to || today;
+
+  const [mRes, cRes, customersResult] = await Promise.all([
+    supabase.rpc("metrics_monthly_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    supabase.rpc("revenue_by_currency_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase
       .from("entities")
       .select("*")
@@ -231,7 +229,22 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
       .limit(20),
   ]);
 
-  const monthlyRows = (monthlyRes.data ?? []) as unknown as { month: string; gross_revenue: number }[];
+  // Fall back to the fixed 13-month views if the RPCs aren't applied yet (the
+  // default-range result is identical; a custom range pre-migration is the only gap).
+  let monthlyRows: { month: string; gross_revenue: number }[];
+  let currencyRows: { currency: string; original: number; inr: number }[];
+  if (!mRes.error && !cRes.error) {
+    monthlyRows = (mRes.data ?? []) as unknown as typeof monthlyRows;
+    currencyRows = (cRes.data ?? []) as unknown as typeof currencyRows;
+  } else {
+    const [mv, cv] = await Promise.all([
+      supabase.from("vw_metrics_monthly" as never).select("month, gross_revenue").eq("org_id" as never, orgId).order("month" as never, { ascending: true }),
+      supabase.from("vw_revenue_by_currency" as never).select("currency, original, inr").eq("org_id" as never, orgId),
+    ]);
+    monthlyRows = (mv.data ?? []) as unknown as typeof monthlyRows;
+    currencyRows = (cv.data ?? []) as unknown as typeof currencyRows;
+  }
+
   const revenueByMonth = monthlyRows.map((r) => ({
     month: String(r.month).slice(0, 7),
     amount: Number(r.gross_revenue ?? 0),
@@ -248,7 +261,7 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
   const sameMonthLastYear = revenueByMonth[0]?.amount ?? 0;
   const yoyGrowth = sameMonthLastYear > 0 ? ((thisMonth - sameMonthLastYear) / sameMonthLastYear) * 100 : 0;
 
-  const currencyBreakdown = ((currencyRes.data ?? []) as unknown as { currency: string; original: number; inr: number }[])
+  const currencyBreakdown = currencyRows
     .map((c) => ({ currency: c.currency, original: Number(c.original ?? 0), inr: Number(c.inr ?? 0) }))
     .sort((a, b) => b.inr - a.inr);
 
@@ -267,26 +280,25 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string) => {
     arr,
     momGrowth,
     yoyGrowth,
+    period: { from, to },
   };
 }, ["revenue-details"]);
 
-export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
+export const getCashFlowDetails = cachedOrgLoader(async (orgId: string, opts?: { from?: string; to?: string }) => {
   const supabase = await createServiceClient();
 
-  const cfToday = new Date().toISOString().split("T")[0];
-  const cfFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  // Range: default = last 90 days; overridable via the date-range filter.
+  const cfToday = opts?.to || new Date().toISOString().split("T")[0];
+  const cfFrom = opts?.from || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  const isDefault = !opts?.from && !opts?.to;
 
-  // Daily inflow/outflow from the pre-aggregated view (≤90 rows) instead of
-  // draining ~17k raw rows. Runway + category run in parallel.
+  // Daily inflow/outflow aggregated in Postgres (RPC for any range; the fixed
+  // 90-day view for the default window). Runway + category run in parallel.
+  // NOTE: runway/burn is always a CURRENT 90-day health metric — it does not
+  // re-scope to the selected range (a burn rate over an arbitrary window is
+  // misleading), so the Runway/Burn cards stay constant as the filter changes.
   const [dailyRes, runwayMetrics, categoryResult] = await Promise.all([
-    supabase
-      .from("vw_cashflow_daily" as never)
-      .select("date, inflow, outflow")
-      .eq("org_id" as never, orgId)
-      .gte("date" as never, cfFrom)
-      .lte("date" as never, cfToday)
-      .order("date" as never, { ascending: true }),
-    // Live burn rate + cash balance.
+    supabase.rpc("cashflow_daily_range" as never, { p_org: orgId, p_from: cfFrom, p_to: cfToday } as never),
     calculateRunway(orgId, supabase),
     supabase
       .from("vw_category_breakdown" as never)
@@ -298,14 +310,21 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
   const burnRate    = runwayMetrics.burn_rate;
   const cashBalance = runwayMetrics.cash_balance;
 
-  // Daily {date, inflow, outflow} rows from the view. Fallback (view not applied
-  // yet): drain raw rows and apply the app's inflow/outflow classification —
+  // Daily {date, inflow, outflow} rows from the RPC. Fallbacks when the RPC isn't
+  // applied yet: the fixed 90-day view (default range), else a raw-row drain with
+  // the app's inflow/outflow classification —
   //   • transfer sources (payouts/settlements) → excluded (already recorded)
   //   • bank ledger → only income/expense move cash (credit=inflow, debit=outflow)
   //   • PG payments → credit (non-settlement)=inflow, debit=outflow
   let dailyRows: { date: string; inflow: number; outflow: number }[];
+  const viewRes = dailyRes.error && isDefault
+    ? await supabase.from("vw_cashflow_daily" as never).select("date, inflow, outflow").eq("org_id" as never, orgId).order("date" as never, { ascending: true })
+    : null;
   if (!dailyRes.error) {
     dailyRows = ((dailyRes.data ?? []) as unknown as { date: string; inflow: number; outflow: number }[])
+      .map((r) => ({ date: String(r.date).slice(0, 10), inflow: Number(r.inflow ?? 0), outflow: Number(r.outflow ?? 0) }));
+  } else if (viewRes && !viewRes.error) {
+    dailyRows = ((viewRes.data ?? []) as unknown as { date: string; inflow: number; outflow: number }[])
       .map((r) => ({ date: String(r.date).slice(0, 10), inflow: Number(r.inflow ?? 0), outflow: Number(r.outflow ?? 0) }));
   } else {
     const transactions = await selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; source: string | null; ledger: "payments" | "bank"; pnl_treatment: string | null }>((f, t) =>
@@ -381,7 +400,7 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string) => {
     pct:      Number(c.pct_of_total),
   }));
 
-  return { cashFlowData, monthlyData, forecasts, burnRate, cashBalance, categoryBreakdown };
+  return { cashFlowData, monthlyData, forecasts, burnRate, cashBalance, categoryBreakdown, period: { from: cfFrom, to: cfToday } };
 }, ["cashflow-details"]);
 
 export async function getCollectionsData(orgId: string) {
