@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { redirect } from "next/navigation";
 import { TrendingUp, Coins, ArrowUpRight, Percent } from "lucide-react";
 import { getOrgId, getRevenueDetails, orgHasConnectors } from "@/lib/data";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
@@ -39,6 +40,7 @@ const SAMPLE = {
 export default async function RevenuePage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
+  await requireRouteAccess("revenue");
 
   const sp = await searchParams;
   const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);

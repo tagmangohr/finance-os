@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { redirect } from "next/navigation";
 import { Receipt, Percent, Clock, Users } from "lucide-react";
 import { getOrgId, getCollectionsData, orgHasConnectors } from "@/lib/data";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
@@ -25,6 +26,7 @@ const SAMPLE = {
 export default async function CollectionsPage() {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
+  await requireRouteAccess("collections");
 
   const real = await getCollectionsData(orgId);
   // Sample preview only when nothing is connected yet (not just zero receivables).

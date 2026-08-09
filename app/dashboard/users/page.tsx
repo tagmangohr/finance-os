@@ -20,7 +20,7 @@ export default async function UsersPage() {
     manageable.map(async (org) => {
       const { data: members } = await service
         .from("org_members")
-        .select("id, org_id, invited_email, user_id, role, page_access, status, created_at")
+        .select("id, org_id, invited_email, user_id, role, page_access, payments_search_only, status, created_at")
         .eq("org_id", org.id)
         .neq("status", "revoked")
         .order("created_at", { ascending: true });

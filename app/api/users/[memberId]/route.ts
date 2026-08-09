@@ -33,7 +33,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  let body: { role?: string; page_access?: string[] };
+  let body: { role?: string; page_access?: string[]; payments_search_only?: boolean };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -41,6 +41,14 @@ export async function PATCH(
   const updates: Record<string, unknown> = {};
   if ((ROLES as readonly string[]).includes(body.role ?? "")) updates.role = body.role;
   if (Array.isArray(body.page_access)) updates.page_access = body.page_access;
+  if (typeof body.payments_search_only === "boolean") updates.payments_search_only = body.payments_search_only;
+
+  // Clamp: search-only is meaningless for admins or members without Payments.
+  const nextRole = (updates.role as string | undefined) ?? undefined;
+  const nextPages = (updates.page_access as string[] | undefined) ?? undefined;
+  if (nextRole === "admin" || (nextPages && !nextPages.includes("data"))) {
+    updates.payments_search_only = false;
+  }
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
@@ -50,11 +58,23 @@ export async function PATCH(
     .from("org_members")
     .update(updates)
     .eq("id", memberId)
-    .select("id, org_id, invited_email, user_id, role, page_access, status, created_at")
+    .select("id, org_id, invited_email, user_id, role, page_access, payments_search_only, status, created_at")
     .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data)  return NextResponse.json({ error: "Member not found" }, { status: 404 });
+
+  // Audit: record the permission change (best-effort — never block the update).
+  try {
+    await service.from("member_activity").insert({
+      org_id: target.org_id,
+      actor_user_id: user.id,
+      actor_email: user.email ?? null,
+      action: "permission_change",
+      target_member_id: memberId,
+      meta: { role: data.role, page_access: data.page_access, payments_search_only: data.payments_search_only },
+    });
+  } catch { /* member_activity table not present yet — ignore */ }
 
   // Preserve display name shape the client expects.
   let full_name: string | null = null;
@@ -98,6 +118,18 @@ export async function DELETE(
     .eq("id", memberId);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Audit: record the removal (best-effort).
+  try {
+    await service.from("member_activity").insert({
+      org_id: target.org_id,
+      actor_user_id: user.id,
+      actor_email: user.email ?? null,
+      action: "member_removed",
+      target_member_id: memberId,
+      meta: {},
+    });
+  } catch { /* member_activity table not present yet — ignore */ }
 
   return NextResponse.json({ success: true });
 }

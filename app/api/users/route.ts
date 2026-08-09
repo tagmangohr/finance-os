@@ -63,7 +63,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const { data: members, error } = await serviceClient
     .from("org_members")
-    .select("id, org_id, invited_email, user_id, role, page_access, status, created_at")
+    .select("id, org_id, invited_email, user_id, role, page_access, payments_search_only, status, created_at")
     .eq("org_id", orgId)
     .neq("status", "revoked")
     .order("created_at", { ascending: true });
@@ -99,7 +99,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  let body: { org_id?: string; email?: string; full_name?: string; role?: string; page_access?: string[] };
+  let body: { org_id?: string; email?: string; full_name?: string; role?: string; page_access?: string[]; payments_search_only?: boolean };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
@@ -118,6 +118,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const fullName    = body.full_name?.trim() || null;
   const role: Role  = (ROLES as readonly string[]).includes(body.role ?? "") ? (body.role as Role) : "viewer";
   const page_access = Array.isArray(body.page_access) ? body.page_access : ["dashboard", "revenue", "cashflow", "collections"];
+  // Search-only Payments applies only to restricted members who actually have Payments access.
+  const payments_search_only =
+    role !== "admin" && page_access.includes("data") && body.payments_search_only === true;
 
   if (!email || !email.includes("@")) {
     return NextResponse.json({ error: "Valid email is required" }, { status: 400 });
@@ -166,16 +169,29 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     invited_email: email,
     role,
     page_access,
+    payments_search_only,
     status: "active" as const,
     invited_by: user.id,
   };
-  const memberCols = "id, org_id, invited_email, user_id, role, page_access, status, created_at";
+  const memberCols = "id, org_id, invited_email, user_id, role, page_access, payments_search_only, status, created_at";
 
   const { data: member, error } = existing
     ? await service.from("org_members").update(memberFields).eq("id", existing.id).select(memberCols).single()
     : await service.from("org_members").insert(memberFields).select(memberCols).single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Audit: record the member addition (best-effort).
+  try {
+    await service.from("member_activity").insert({
+      org_id: orgId,
+      actor_user_id: user.id,
+      actor_email: user.email ?? null,
+      action: "member_added",
+      target_member_id: member.id,
+      meta: { email, role, page_access, payments_search_only },
+    });
+  } catch { /* member_activity table not present yet — ignore */ }
 
   return NextResponse.json(
     {

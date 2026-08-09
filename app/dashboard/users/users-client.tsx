@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import {
   UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, User, Trash2, Settings2, Check, Building2, Copy, KeyRound,
+  History, Search as SearchIcon, Download as DownloadIcon, ShieldCheck, LogIn, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,7 @@ export interface OrgMember {
   full_name:     string | null;
   role:          Role;
   page_access:   string[];
+  payments_search_only?: boolean;
   status:        "pending" | "active" | "revoked";
   created_at:    string;
 }
@@ -143,6 +145,10 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   const [pageAccess, setPageAccess] = React.useState<string[]>(
     member?.page_access ?? ["dashboard", "revenue", "cashflow", "collections"]
   );
+  // Search-only Payments (support/calling teams): they can look up a payment but
+  // never browse the whole book. Only meaningful for restricted members with
+  // Payments access.
+  const [searchOnlyPay, setSearchOnlyPay] = React.useState<boolean>(member?.payments_search_only ?? false);
   const [saving, setSaving] = React.useState(false);
   // Once a user is created, show their credentials instead of the form.
   const [credentials, setCredentials] = React.useState<{ email: string; password: string } | null>(null);
@@ -150,6 +156,9 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   // Admins implicitly get all pages; viewers/managers use the explicit list.
   const restrictsPages  = role !== "admin";
   const effectiveAccess = role === "admin" ? PAGE_OPTIONS.map((p) => p.value) : pageAccess;
+  // Search-only only applies to a restricted member who actually has Payments.
+  const canSearchOnly       = restrictsPages && effectiveAccess.includes("data");
+  const paymentsSearchOnly  = canSearchOnly && searchOnlyPay;
 
   function togglePage(value: string) {
     if (!restrictsPages) return;
@@ -175,13 +184,14 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
           body: JSON.stringify({
             org_id: orgId, email: email.trim(), full_name: fullName.trim() || null,
             role, page_access: effectiveAccess,
+            payments_search_only: paymentsSearchOnly,
           }),
         });
       } else {
         res = await fetch(`/api/users/${member!.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role, page_access: effectiveAccess }),
+          body: JSON.stringify({ role, page_access: effectiveAccess, payments_search_only: paymentsSearchOnly }),
         });
       }
       const data = await res.json();
@@ -223,11 +233,29 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
-            <div>
-              <Dialog.Title className="text-[14px] font-semibold text-foreground">{title}</Dialog.Title>
-              <p className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
-                <Building2 className="w-3 h-3" /> {orgName}
-              </p>
+            <div className="flex items-center gap-3 min-w-0">
+              {/* In edit mode, show WHO is being edited (avatar + name + email). */}
+              {mode === "edit" && member && !credentials && (
+                <Avatar name={member.full_name} email={member.invited_email} />
+              )}
+              <div className="min-w-0">
+                <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">
+                  {mode === "edit" && member && !credentials
+                    ? (member.full_name?.trim() || member.invited_email)
+                    : title}
+                </Dialog.Title>
+                {mode === "edit" && member && !credentials ? (
+                  <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mt-0.5 truncate">
+                    <Mail className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{member.invited_email}</span>
+                    <span className="text-muted-foreground/40">·</span>
+                    <Building2 className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{orgName}</span>
+                  </p>
+                ) : (
+                  <p className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
+                    <Building2 className="w-3 h-3" /> {orgName}
+                  </p>
+                )}
+              </div>
             </div>
             <Dialog.Close asChild>
               <button className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-colors">
@@ -382,6 +410,36 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
                   {role === "manager" && (
                     <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
                   )}
+
+                  {/* Search-only Payments sub-toggle — shown when a restricted member
+                      has Payments access. Turns Payments into a lookup-only tool. */}
+                  {canSearchOnly && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchOnlyPay((v) => !v)}
+                      className={cn(
+                        "mt-2.5 w-full flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all border",
+                        searchOnlyPay ? "bg-primary/[0.06] border-primary/25" : "bg-accent/40 border-border hover:bg-accent"
+                      )}
+                    >
+                      <div className={cn(
+                        "mt-0.5 w-8 h-[18px] rounded-full flex-shrink-0 relative transition-colors",
+                        searchOnlyPay ? "bg-primary" : "bg-muted-foreground/25"
+                      )}>
+                        <span className={cn(
+                          "absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all",
+                          searchOnlyPay ? "left-[15px]" : "left-0.5"
+                        )} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[11.5px] font-semibold text-foreground">Payments: search-only</p>
+                        <p className="text-[10.5px] text-muted-foreground/70 leading-snug mt-0.5">
+                          No transaction list or totals — they must search (name, email, phone, order/UTR/payment ID)
+                          to look up a specific payment. Ideal for support / calling teams.
+                        </p>
+                      </div>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -406,6 +464,135 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   );
 }
 
+// ─── Activity dialog ────────────────────────────────────────────────────────
+
+type ActivityEvent = {
+  id: string;
+  action: string;
+  actor_email: string | null;
+  meta: Record<string, unknown> | null;
+  created_at: string;
+  target_member_id: string | null;
+};
+
+function fmtWhen(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: true });
+}
+
+const ACTION_META: Record<string, { label: string; Icon: typeof History; tone: string }> = {
+  search:            { label: "Searched Payments",   Icon: SearchIcon,   tone: "text-blue-600 dark:text-blue-400" },
+  export:            { label: "Exported CSV",         Icon: DownloadIcon, tone: "text-amber-600 dark:text-amber-400" },
+  permission_change: { label: "Permissions changed",  Icon: ShieldCheck,  tone: "text-primary" },
+  member_added:      { label: "Added to organisation", Icon: UserPlus,    tone: "text-success" },
+  member_removed:    { label: "Removed from org",      Icon: Trash2,      tone: "text-destructive" },
+};
+
+function ActivityDialog({ member, onClose }: { member: OrgMember; onClose: () => void }) {
+  const [loading, setLoading] = React.useState(true);
+  const [lastSignInAt, setLastSignInAt] = React.useState<string | null>(null);
+  const [events, setEvents] = React.useState<ActivityEvent[]>([]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const p = new URLSearchParams({ org_id: member.org_id, member_id: member.id });
+        if (member.user_id) p.set("user_id", member.user_id);
+        const res = await fetch(`/api/activity?${p}`);
+        const data = await res.json();
+        if (cancelled) return;
+        setLastSignInAt(data.lastSignInAt ?? null);
+        setEvents(Array.isArray(data.events) ? data.events : []);
+      } catch { /* ignore */ } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [member]);
+
+  return (
+    <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm" />
+        <Dialog.Content
+          className="fixed z-[201] w-[calc(100vw-32px)] max-w-[480px] max-h-[82vh] flex flex-col bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none"
+          style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+        >
+          <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
+            <div className="flex items-center gap-3 min-w-0">
+              <Avatar name={member.full_name} email={member.invited_email} />
+              <div className="min-w-0">
+                <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">
+                  {member.full_name?.trim() || member.invited_email}
+                </Dialog.Title>
+                <p className="text-[11px] text-muted-foreground/70 mt-0.5 truncate">Activity &amp; usage</p>
+              </div>
+            </div>
+            <Dialog.Close asChild>
+              <button className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </Dialog.Close>
+          </div>
+
+          <div className="px-5 py-4 overflow-y-auto">
+            {/* Last login */}
+            <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-accent/40 border border-border mb-4">
+              <LogIn className="w-4 h-4 text-muted-foreground/70 flex-shrink-0" />
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">Last login</p>
+                <p className="text-[12.5px] font-medium text-foreground">
+                  {member.status === "pending" ? "Never — invite not yet accepted" : lastSignInAt ? fmtWhen(lastSignInAt) : "Never signed in"}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 mb-2">Recent activity</p>
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-10 text-muted-foreground/70 text-[12.5px]">
+                <RefreshCw className="w-4 h-4 animate-spin" /> Loading…
+              </div>
+            ) : events.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-10 text-center">
+                <Clock className="w-5 h-5 text-muted-foreground/40" />
+                <p className="text-[12.5px] text-muted-foreground/70">No recorded activity yet.</p>
+                <p className="text-[11px] text-muted-foreground/50">Searches, exports and permission changes will appear here.</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {events.map((e) => {
+                  const meta = ACTION_META[e.action] ?? { label: e.action, Icon: History, tone: "text-muted-foreground" };
+                  const q = e.meta && typeof e.meta.q === "string" ? (e.meta.q as string) : null;
+                  const rows = e.meta && typeof e.meta.rows === "number" ? (e.meta.rows as number) : null;
+                  return (
+                    <div key={e.id} className="flex items-start gap-2.5 px-2.5 py-2 rounded-lg hover:bg-accent/40 transition-colors">
+                      <meta.Icon className={cn("w-3.5 h-3.5 mt-0.5 flex-shrink-0", meta.tone)} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] text-foreground">
+                          {meta.label}
+                          {q && <span className="text-muted-foreground"> — “{q}”</span>}
+                          {rows !== null && <span className="text-muted-foreground"> — {rows.toLocaleString("en-IN")} rows</span>}
+                        </p>
+                        <p className="text-[10.5px] text-muted-foreground/60 mt-0.5">
+                          {fmtWhen(e.created_at)}
+                          {e.action === "permission_change" && e.actor_email ? ` · by ${e.actor_email}` : ""}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 // ─── Member row ───────────────────────────────────────────────────────────────
 
 function MemberRow({
@@ -416,6 +603,7 @@ function MemberRow({
   onRevoke: (orgId: string, id: string) => void;
 }) {
   const [revoking, setRevoking] = React.useState(false);
+  const [showActivity, setShowActivity] = React.useState(false);
 
   const doRevoke = async () => {
     if (!confirm(`Remove ${member.invited_email} from this organisation?`)) return;
@@ -461,10 +649,22 @@ function MemberRow({
             : PAGE_OPTIONS.map(({ value, label }) => (
                 <PageChip key={value} label={label} active={member.page_access.includes(value)} />
               ))}
+          {member.payments_search_only && (
+            <span className="flex items-center gap-1 text-[9.5px] font-medium px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+              <SearchIcon className="w-2.5 h-2.5" /> Payments: search-only
+            </span>
+          )}
         </div>
       </div>
 
       <div className="flex items-center gap-0.5 flex-shrink-0">
+        <button
+          onClick={() => setShowActivity(true)}
+          title="Activity & usage"
+          className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all"
+        >
+          <History className="w-3.5 h-3.5" />
+        </button>
         <button
           onClick={() => onEdit(member)}
           title="Edit permissions"
@@ -481,6 +681,8 @@ function MemberRow({
           {revoking ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
         </button>
       </div>
+
+      {showActivity && <ActivityDialog member={member} onClose={() => setShowActivity(false)} />}
     </div>
   );
 }

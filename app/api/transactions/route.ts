@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
-import { hasPageAccessForOrg } from "@/lib/org/page-access";
+import { getPaymentsAccessForOrg } from "@/lib/org/page-access";
 import {
   parsePagination,
   parseTransactionSort,
@@ -42,8 +42,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (isAuthFailure(auth)) return auth.error;
   // Raw Data is gated by the "data" page permission — block restricted members
   // from pulling transactions via the API directly.
-  if (!(await hasPageAccessForOrg(orgId, "data"))) {
+  const access = await getPaymentsAccessForOrg(orgId);
+  if (!access.allowed) {
     return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
+  }
+  // Search-only members (support/calling teams): NO rows are ever returned
+  // without a real search term — enforced here, not just in the UI.
+  if (access.searchOnly && (!search || search.trim().length < 3)) {
+    return NextResponse.json({ rows: [], total: 0, limit, offset });
   }
 
   let query = auth.supabase

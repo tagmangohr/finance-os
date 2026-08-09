@@ -9,7 +9,7 @@ import { DataExplorerClient } from "./data-client";
 export default async function DataPage() {
   const supabase = await createClient();
 
-  const { userId, org } = await getActiveOrg();
+  const { userId, org, paymentsSearchOnly } = await getActiveOrg();
   if (!userId) redirect("/auth/login");
   if (!org) redirect("/onboarding");
   // Restricted members without "data" access can't reach Raw Data by URL.
@@ -22,5 +22,11 @@ export default async function DataPage() {
     .eq("org_id", org.id)
     .order("created_at", { ascending: true });
 
-  return <DataExplorerClient orgId={org.id} connectors={connectors ?? []} />;
+  return (
+    <DataExplorerClient
+      orgId={org.id}
+      connectors={connectors ?? []}
+      searchOnly={paymentsSearchOnly}
+    />
+  );
 }

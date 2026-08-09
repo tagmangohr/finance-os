@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
-import { hasPageAccessForOrg } from "@/lib/org/page-access";
+import { getPaymentsAccessForOrg } from "@/lib/org/page-access";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
+
+// Zeroed summary — returned to search-only members so book-wide totals never leak.
+const EMPTY_SUMMARY = {
+  cards: { payments: { count: 0, amount: 0 }, settlements: { count: 0, amount: 0 }, refunds: { count: 0, amount: 0 }, disputes: { count: 0, amount: 0 } },
+  groups: {}, totalCredits: 0, totalDebits: 0, totalFees: 0, net: 0, total: 0,
+};
 import { POSTED_TRANSACTION_STATUSES, isTransferSource, categorizeSource } from "@/lib/finance/transaction-status";
 
 export const maxDuration = 60;
@@ -42,9 +48,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const auth = await requireOrgAccess(orgId);
   if (isAuthFailure(auth)) return auth.error;
-  if (!(await hasPageAccessForOrg(orgId, "data"))) {
+  const access = await getPaymentsAccessForOrg(orgId);
+  if (!access.allowed) {
     return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
   }
+  // Search-only members never see aggregate totals — return a zeroed summary.
+  if (access.searchOnly) return NextResponse.json(EMPTY_SUMMARY);
 
   // Per-source tallies drive ONLY the source-filter dropdown — kept over all
   // non-failed rows so every source the user can filter on appears.

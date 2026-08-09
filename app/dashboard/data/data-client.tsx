@@ -241,18 +241,26 @@ const istDate = (daysAgo = 0) =>
 interface DataExplorerClientProps {
   orgId: string;
   connectors: ConnectorSummary[];
+  /** Search-only mode (support/calling teams): no rows, cards, or export until
+   *  the user searches. Enforced server-side too — this only shapes the UI. */
+  searchOnly?: boolean;
 }
+
+// Minimum characters before a search-only lookup fires (server enforces the same).
+const SEARCH_ONLY_MIN = 3;
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProps) {
+export function DataExplorerClient({ orgId, connectors, searchOnly = false }: DataExplorerClientProps) {
   // Filters
   const [connectorId, setConnectorId] = React.useState("");
   const [source, setSource] = React.useState("");
   const [txType, setTxType] = React.useState("");
   // Default to the last 7 days (today + 6 prior, IST). Cleared → all dates.
-  const [from, setFrom] = React.useState(() => istDate(6));
-  const [to, setTo] = React.useState(() => istDate(0));
+  // Search-only mode spans all dates by default so a lookup finds the customer
+  // regardless of when they paid.
+  const [from, setFrom] = React.useState(() => (searchOnly ? "" : istDate(6)));
+  const [to, setTo] = React.useState(() => (searchOnly ? "" : istDate(0)));
   const [search, setSearch] = React.useState("");
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
 
@@ -335,6 +343,24 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     return () => clearTimeout(t);
   }, [search]);
 
+  // Fire-and-forget audit ping (never blocks or errors the UI).
+  const recordActivity = React.useCallback((action: string, meta: Record<string, unknown>) => {
+    try {
+      fetch("/api/activity", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({ org_id: orgId, action, meta }),
+      }).catch(() => {});
+    } catch { /* ignore */ }
+  }, [orgId]);
+
+  // Log each executed search (≥3 chars) — the audit trail for who looked up what.
+  React.useEffect(() => {
+    const q = debouncedSearch.trim();
+    if (q.length >= 3) recordActivity("search", { q: q.slice(0, 60), searchOnly });
+  }, [debouncedSearch, recordActivity, searchOnly]);
+
   // Reset offset when filters change
   React.useEffect(() => {
     setOffset(0);
@@ -359,8 +385,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
   const summaryAbort = React.useRef<AbortController | null>(null);
   const isAbort = (e: unknown) => e instanceof DOMException && e.name === "AbortError";
 
+  // In search-only mode, a query of at least SEARCH_ONLY_MIN chars is required
+  // before ANY rows load (mirrors the server-side enforcement).
+  const searchOnlyBlocked = searchOnly && debouncedSearch.trim().length < SEARCH_ONLY_MIN;
+
   // Fetch table rows
   const fetchData = React.useCallback(async () => {
+    if (searchOnlyBlocked) { setRows([]); setTotal(0); setLoading(false); return; }
     dataAbort.current?.abort();
     const ctrl = new AbortController();
     dataAbort.current = ctrl;
@@ -383,10 +414,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     } finally {
       if (!ctrl.signal.aborted) setLoading(false);
     }
-  }, [buildFilterParams, offset, sortCol, sortAsc]);
+  }, [buildFilterParams, offset, sortCol, sortAsc, searchOnlyBlocked]);
 
-  // Fetch summary cards — re-runs whenever filters change (not pagination/sort)
+  // Fetch summary cards — re-runs whenever filters change (not pagination/sort).
+  // Skipped entirely in search-only mode (the cards are hidden — a support agent
+  // must never see book-wide totals).
   const fetchSummary = React.useCallback(async () => {
+    if (searchOnly) { setSummary(null); return; }
     summaryAbort.current?.abort();
     const ctrl = new AbortController();
     summaryAbort.current = ctrl;
@@ -400,7 +434,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
       if (isAbort(e)) return; // superseded — keep the newer request's result
       /* non-critical */
     }
-  }, [buildFilterParams]);
+  }, [buildFilterParams, searchOnly]);
 
   React.useEffect(() => { fetchData(); }, [fetchData]);
   React.useEffect(() => { fetchSummary(); }, [fetchSummary]);
@@ -418,6 +452,9 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
 
     const res = await fetch(`/api/transactions?${params}`);
     const data: ApiResponse = await res.json();
+
+    // Audit: record the export (rows + active filters).
+    recordActivity("export", { rows: data.rows.length, from, to, source: source || null, connector_id: connectorId || null });
 
     const headers = [
       "Date","Time (IST)","Source","Connector","Type","Amount","Currency",
@@ -511,9 +548,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
     <div className="space-y-4 max-w-[1400px]">
       {/* Header */}
       <div className="animate-enter">
-        <h1 className="text-xl font-bold text-foreground">Raw Transaction Data</h1>
+        <h1 className="text-xl font-bold text-foreground">
+          {searchOnly ? "Payment Lookup" : "Raw Transaction Data"}
+        </h1>
         <p className="text-sm text-muted-foreground/70 mt-0.5">
-          Every row synced from your connected sources — all fields visible
+          {searchOnly
+            ? "Search by name, email, phone, order ID, UTR or payment ID to look up a specific payment"
+            : "Every row synced from your connected sources — all fields visible"}
         </p>
       </div>
 
@@ -546,59 +587,76 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           </button>
         </div>
 
-        {/* Connector filter */}
-        <FilterSelect
-          value={connectorId}
-          onChange={setConnectorId}
-          options={[
-            { value: "", label: "All accounts" },
-            // Bank (Mercury) has its own dedicated page — never surface it here.
-            ...connectors
-              .filter((c) => c.type !== "mercury")
-              .map((c) => ({ value: c.id, label: c.type === "app_store" ? "Apple Pay" : c.name })),
-          ]}
-        />
+        {/* Filters + export — hidden in search-only mode (a lookup tool, not a browser) */}
+        {!searchOnly && (
+          <>
+            {/* Connector filter */}
+            <FilterSelect
+              value={connectorId}
+              onChange={setConnectorId}
+              options={[
+                { value: "", label: "All accounts" },
+                // Bank (Mercury) has its own dedicated page — never surface it here.
+                ...connectors
+                  .filter((c) => c.type !== "mercury")
+                  .map((c) => ({ value: c.id, label: c.type === "app_store" ? "Apple Pay" : c.name })),
+              ]}
+            />
 
-        {/* Source filter — options derived from the sources actually present */}
-        <FilterSelect
-          value={source}
-          onChange={setSource}
-          options={sourceOptions}
-        />
+            {/* Source filter — options derived from the sources actually present */}
+            <FilterSelect
+              value={source}
+              onChange={setSource}
+              options={sourceOptions}
+            />
 
-        {/* Type filter */}
-        <FilterSelect
-          value={txType}
-          onChange={setTxType}
-          options={[
-            { value: "", label: "Credit + Debit" },
-            { value: "credit", label: "Credits only" },
-            { value: "debit",  label: "Debits only" },
-          ]}
-        />
+            {/* Type filter */}
+            <FilterSelect
+              value={txType}
+              onChange={setTxType}
+              options={[
+                { value: "", label: "Credit + Debit" },
+                { value: "credit", label: "Credits only" },
+                { value: "debit",  label: "Debits only" },
+              ]}
+            />
 
-        {/* Date range */}
-        <DateRangePicker
-          from={from}
-          to={to}
-          max={new Date().toISOString().slice(0, 10)}
-          onChange={(f, t) => { setFrom(f); setTo(t); }}
-        />
+            {/* Date range */}
+            <DateRangePicker
+              from={from}
+              to={to}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(f, t) => { setFrom(f); setTo(t); }}
+            />
 
-        {/* Spacer + export */}
-        <div className="ml-auto flex items-center gap-2">
-          {loading && <RefreshCw className="h-3.5 w-3.5 text-muted-foreground/70 animate-spin" />}
-          <span className="text-xs text-muted-foreground/70">
-            {total.toLocaleString("en-IN")} rows
-          </span>
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-border bg-accent/40 text-muted-foreground hover:bg-accent hover:text-muted-foreground hover:border-border transition-all"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Export CSV
-          </button>
-        </div>
+            {/* Spacer + export */}
+            <div className="ml-auto flex items-center gap-2">
+              {loading && <RefreshCw className="h-3.5 w-3.5 text-muted-foreground/70 animate-spin" />}
+              <span className="text-xs text-muted-foreground/70">
+                {total.toLocaleString("en-IN")} rows
+              </span>
+              <button
+                onClick={handleExport}
+                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-border bg-accent/40 text-muted-foreground hover:bg-accent hover:text-muted-foreground hover:border-border transition-all"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export CSV
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Search-only: show just a live match count next to the search box */}
+        {searchOnly && (
+          <div className="ml-auto flex items-center gap-2">
+            {loading && <RefreshCw className="h-3.5 w-3.5 text-muted-foreground/70 animate-spin" />}
+            {!searchOnlyBlocked && (
+              <span className="text-xs text-muted-foreground/70">
+                {total.toLocaleString("en-IN")} match{total === 1 ? "" : "es"}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Summary cards */}
@@ -674,10 +732,22 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                   Loading…
                 </td>
               </tr>
+            ) : searchOnlyBlocked ? (
+              <tr>
+                <td colSpan={15} className="px-4 py-16 text-center">
+                  <ScanSearch className="h-6 w-6 text-muted-foreground/40 mx-auto mb-3" />
+                  <p className="text-sm font-medium text-foreground/80">Search to look up a payment</p>
+                  <p className="text-xs text-muted-foreground/70 mt-1">
+                    Type at least {SEARCH_ONLY_MIN} characters — a name, email, phone, order ID, UTR or payment ID.
+                  </p>
+                </td>
+              </tr>
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
-                  No transactions found. Try adjusting the filters or run a sync first.
+                  {searchOnly
+                    ? "No payment matches that search."
+                    : "No transactions found. Try adjusting the filters or run a sync first."}
                 </td>
               </tr>
             ) : (

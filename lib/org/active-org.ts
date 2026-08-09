@@ -15,6 +15,8 @@ export type AccessibleOrg = {
   role: OrgRole;
   /** null = all pages (owner/admin); string[] = allowed page slugs (viewer). */
   pageAccess: string[] | null;
+  /** Restricted member sees Payments as a search-only lookup (no rows until searched). */
+  paymentsSearchOnly: boolean;
 };
 
 export type ActiveOrgContext = {
@@ -26,6 +28,8 @@ export type ActiveOrgContext = {
   accessibleOrgs: AccessibleOrg[];
   /** Page access for the ACTIVE org (null = all pages). */
   pageAccess: string[] | null;
+  /** Active org: restricted member sees Payments as search-only (no rows until searched). */
+  paymentsSearchOnly: boolean;
   /** True when the user is owner/admin of the active org (manage team + settings). */
   canManageTeam: boolean;
   /** True when the user may WRITE in the active org (owner/admin/manager). */
@@ -58,7 +62,7 @@ export async function listAccessibleOrgs(
   for (const o of owned ?? []) {
     if (seen.has(o.id)) continue;
     seen.add(o.id);
-    result.push({ id: o.id, name: o.name, role: "owner", pageAccess: null });
+    result.push({ id: o.id, name: o.name, role: "owner", pageAccess: null, paymentsSearchOnly: false });
   }
 
   // ── Active member orgs (skip ones already owned) ─────────────────────────────
@@ -69,7 +73,7 @@ export async function listAccessibleOrgs(
 
     const { data: members } = await service
       .from("org_members")
-      .select("role, page_access, created_at, organizations(id, name)")
+      .select("role, page_access, payments_search_only, created_at, organizations(id, name)")
       .or(orFilter)
       .eq("status", "active")
       .order("created_at", { ascending: true });
@@ -84,6 +88,8 @@ export async function listAccessibleOrgs(
         name: org.name,
         role,
         pageAccess: role === "admin" ? null : ((m.page_access as string[]) ?? []),
+        // Search-only applies only to restricted members with Payments access.
+        paymentsSearchOnly: role !== "admin" && (m.payments_search_only as boolean) === true,
       });
     }
   } catch {
@@ -115,6 +121,7 @@ export const getActiveOrg = cache(async (): Promise<ActiveOrgContext> => {
       org: null,
       accessibleOrgs: [],
       pageAccess: null,
+      paymentsSearchOnly: false,
       canManageTeam: false,
       canWrite: false,
       canCreateOrg: false,
@@ -135,6 +142,7 @@ export const getActiveOrg = cache(async (): Promise<ActiveOrgContext> => {
     org,
     accessibleOrgs,
     pageAccess: org?.pageAccess ?? null,
+    paymentsSearchOnly: org?.paymentsSearchOnly ?? false,
     canManageTeam: role === "owner" || role === "admin",
     canWrite: role === "owner" || role === "admin" || role === "manager",
     canCreateOrg: accessibleOrgs.some((o) => o.role === "owner" || o.role === "admin"),
