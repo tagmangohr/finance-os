@@ -11,16 +11,16 @@ interface AlertBannerProps {
 
 const severityConfig = {
   critical: {
-    chipClass: "bg-red-500/[0.08] border-red-500/25 text-destructive hover:bg-red-500/[0.12]",
+    chipClass: "bg-destructive/[0.08] border-destructive/25 text-destructive hover:bg-destructive/[0.12]",
     iconClass: "text-destructive",
-    dot: "bg-red-400",
+    dot: "bg-destructive",
     glow: "shadow-[0_0_12px_hsl(0_72%_56%/0.15)]",
     Icon: AlertCircle,
   },
   warning: {
-    chipClass: "bg-amber-500/[0.08] border-amber-500/25 text-warning hover:bg-amber-500/[0.12]",
+    chipClass: "bg-warning/[0.08] border-warning/25 text-warning hover:bg-warning/[0.12]",
     iconClass: "text-warning",
-    dot: "bg-amber-400",
+    dot: "bg-warning",
     glow: "shadow-[0_0_12px_hsl(38_92%_56%/0.15)]",
     Icon: AlertTriangle,
   },

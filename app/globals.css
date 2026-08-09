@@ -36,6 +36,7 @@
     --chart-3: 35 92% 50%;
     --chart-4: 217 91% 60%;
     --chart-5: 330 81% 60%;
+    --chart-cash: 84 55% 50%;   /* lime — primary value bars (revenue / cash) */
     --metric-revenue: 256 85% 62%;
     --metric-margin:  172 66% 42%;
     --metric-opex:    35 92% 50%;
@@ -82,6 +83,7 @@
     --chart-3: 38 92% 56%;
     --chart-4: 199 89% 54%;
     --chart-5: 330 81% 62%;
+    --chart-cash: 84 58% 60%;   /* lime — primary value bars (revenue / cash) */
     --metric-revenue: 258 88% 68%;
     --metric-margin:  166 70% 50%;
     --metric-opex:    38 92% 58%;

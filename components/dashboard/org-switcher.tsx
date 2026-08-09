@@ -47,7 +47,7 @@ export function OrgSwitcher({ orgs, activeOrgId, canCreateOrg }: OrgSwitcherProp
           >
             <div
               className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 text-white"
-              style={{ background: "linear-gradient(135deg, rgba(124,82,240,0.4), rgba(124,82,240,0.15))", border: "1px solid rgba(124,82,240,0.35)" }}
+              style={{ background: "linear-gradient(135deg, hsl(var(--primary)/0.4), hsl(var(--primary)/0.15))", border: "1px solid hsl(var(--primary)/0.35)" }}
             >
               <Building2 className="w-3 h-3" />
             </div>

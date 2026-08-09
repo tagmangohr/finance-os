@@ -41,7 +41,7 @@ export function Sparkline({
 
   // Is the last point higher than the first? (upward trend)
   const isUp = data[data.length - 1] >= data[0];
-  const trendColor = isUp ? color : "hsl(0, 72%, 56%)";
+  const trendColor = isUp ? color : "hsl(var(--destructive))";
   const gradId = `sg-${color.replace(/[^a-z0-9]/gi, "")}-${stableId}`;
 
   return (

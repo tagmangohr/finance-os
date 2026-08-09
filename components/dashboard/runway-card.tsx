@@ -15,9 +15,9 @@ interface RunwayCardProps {
 }
 
 const severityConfig: Record<RunwaySeverity, { ring: string; glow: string; pill: string; pillText: string; label: string }> = {
-  good:    { ring: "#1db884", glow: "rgba(29,184,132,0.25)", pill: "rgba(29,184,132,0.12)", pillText: "#1db884", label: "Healthy — aim for 12+ months before next raise" },
-  warning: { ring: "#f59116", glow: "rgba(245,145,22,0.25)",  pill: "rgba(245,145,22,0.12)",  pillText: "#f59116", label: "Getting tight — start extending runway now" },
-  critical:{ ring: "#e83a3a", glow: "rgba(232,58,58,0.25)",   pill: "rgba(232,58,58,0.12)",   pillText: "#e83a3a", label: "Critical — immediate action required" },
+  good:    { ring: "hsl(var(--success))", glow: "hsl(var(--success)/0.25)", pill: "hsl(var(--success)/0.12)", pillText: "hsl(var(--success))", label: "Healthy — aim for 12+ months before next raise" },
+  warning: { ring: "hsl(var(--warning))", glow: "hsl(var(--warning)/0.25)", pill: "hsl(var(--warning)/0.12)", pillText: "hsl(var(--warning))", label: "Getting tight — start extending runway now" },
+  critical:{ ring: "hsl(var(--destructive))", glow: "hsl(var(--destructive)/0.25)", pill: "hsl(var(--destructive)/0.12)", pillText: "hsl(var(--destructive))", label: "Critical — immediate action required" },
 };
 
 const MAX_DAYS = 365;
@@ -93,7 +93,7 @@ export function RunwayCard({
               className="num leading-none font-black tracking-[-0.04em]"
               style={{
                 fontSize: "clamp(40px, 5vw, 64px)",
-                background: "linear-gradient(180deg, #ffffff 0%, rgba(245,145,22,0.65) 100%)",
+                background: `linear-gradient(180deg, hsl(var(--foreground)) 0%, ${cfg.pillText} 100%)`,
                 WebkitBackgroundClip: "text",
                 WebkitTextFillColor: "transparent",
                 backgroundClip: "text",

@@ -46,8 +46,8 @@ export function InflowOutflowChart({ data, height = 230 }: Props) {
           dy={8}
         />
         <Tooltip content={<CustomTooltip />} cursor={{ fill: "hsl(var(--muted-foreground) / 0.08)", radius: 4 }} />
-        <Bar dataKey="inflow" radius={[3, 3, 0, 0]} fill="hsl(var(--metric-revenue))" />
-        <Bar dataKey="outflow" radius={[3, 3, 0, 0]} fill="hsl(var(--metric-runway))" />
+        <Bar dataKey="inflow" radius={[3, 3, 0, 0]} fill="hsl(var(--primary))" />
+        <Bar dataKey="outflow" radius={[3, 3, 0, 0]} fill="hsl(var(--warning))" />
       </BarChart>
     </ResponsiveContainer>
   );

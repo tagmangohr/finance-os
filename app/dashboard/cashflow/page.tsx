@@ -83,7 +83,7 @@ export default async function CashFlowPage({ searchParams }: { searchParams: Pro
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
         <SectionCard title="Inflow vs Outflow" subtitle="last 8 months" className="lg:col-span-2"
-          action={<span className="text-[11px] text-muted-foreground"><span className="text-metric-revenue">●</span> in <span className="text-metric-runway">●</span> out</span>}>
+          action={<span className="text-[11px] text-muted-foreground"><span className="text-primary">●</span> in <span className="text-warning">●</span> out</span>}>
           <InflowOutflowChart data={v.monthly} height={260} />
         </SectionCard>
         <SectionCard title="Expense Breakdown">

@@ -75,8 +75,8 @@ export function RevenueChart({ data, height = 260 }: RevenueChartProps) {
           {data.map((_, index) => (
             <Cell
               key={index}
-              fill="hsl(var(--metric-revenue))"
-              opacity={index === lastIdx ? 1 : 0.4}
+              fill="hsl(var(--chart-cash))"
+              opacity={index === lastIdx ? 1 : 0.45}
             />
           ))}
         </Bar>

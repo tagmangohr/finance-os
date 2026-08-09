@@ -94,7 +94,7 @@ export function CoPilot({ orgId }: CoPilotProps) {
           <div className="h-12 px-3.5 border-b border-border flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2">
               <span className="w-3.5 h-3.5 rounded-full animate-orb flex-shrink-0"
-                style={{ background: "radial-gradient(circle at 30% 30%, #fff, #7c52f0 65%)", boxShadow: "0 0 12px rgba(124,82,240,0.6)" }} />
+                style={{ background: "radial-gradient(circle at 30% 30%, hsl(var(--primary-foreground)), hsl(var(--primary)) 65%)", boxShadow: "0 0 12px hsl(var(--primary)/0.6)" }} />
               <span className="text-[13px] font-semibold text-foreground">Co-pilot</span>
             </div>
             <button onClick={toggleOpen} className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded">
