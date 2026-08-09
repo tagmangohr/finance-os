@@ -5,7 +5,6 @@ import {
   Pie,
   Cell,
   Tooltip,
-  Legend,
   ResponsiveContainer,
   type TooltipProps,
 } from "recharts";
@@ -43,75 +42,61 @@ function CustomTooltip({ active, payload }: TooltipProps<number, string>) {
   );
 }
 
-function renderLegend({
-  payload,
-}: {
-  payload?: Array<{ color: string; value: string; payload: { pct: number; amount: number } }>;
-}) {
-  if (!payload) return null;
-  return (
-    <ul className="flex flex-col gap-2 text-xs pl-2">
-      {payload.map((entry, index) => (
-        <li key={index} className="flex items-center gap-2 min-w-0">
-          <span
-            className="inline-block h-2 w-2 rounded-sm flex-shrink-0"
-            style={{ backgroundColor: entry.color }}
-          />
-          <span className="truncate text-muted-foreground">{entry.value}</span>
-          <span className="ml-auto text-foreground/70 font-medium pl-2 flex-shrink-0">
-            {entry.payload.pct?.toFixed(1)}%
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export function CategoryChart({ data }: CategoryChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-[240px] text-muted-foreground text-sm">
         No expense data available
       </div>
     );
   }
 
+  // Donut lives in its OWN fixed square box (cx/cy = 50%, radius < half the box)
+  // so it is mathematically impossible to clip — independent of how narrow the
+  // card gets on a small laptop. The legend is a separate flexible column that
+  // truncates long labels rather than pushing the donut off-screen.
   return (
-    <ResponsiveContainer width="100%" height={240}>
-      <PieChart>
-        <Pie
-          data={data}
-          cx="35%"
-          cy="50%"
-          innerRadius={58}
-          outerRadius={88}
-          dataKey="amount"
-          nameKey="category"
-          paddingAngle={2}
-          strokeWidth={0}
-        >
-          {data.map((_, index) => (
-            <Cell key={index} fill={COLORS[index % COLORS.length]} />
-          ))}
-        </Pie>
-        <text
-          x="35%"
-          y="48%"
-          textAnchor="middle"
-          dominantBaseline="middle"
-          style={{ fontSize: "10px", fill: "hsl(var(--muted-foreground))", fontWeight: 500 }}
-        >
+    <div className="flex items-center gap-4 h-[240px]">
+      <div className="relative h-[132px] w-[132px] flex-shrink-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={42}
+              outerRadius={64}
+              dataKey="amount"
+              nameKey="category"
+              paddingAngle={2}
+              strokeWidth={0}
+            >
+              {data.map((_, index) => (
+                <Cell key={index} fill={COLORS[index % COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip content={<CustomTooltip />} />
+          </PieChart>
+        </ResponsiveContainer>
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center text-[10px] font-medium text-muted-foreground">
           Spend
-        </text>
-        <Tooltip content={<CustomTooltip />} />
-        <Legend
-          layout="vertical"
-          align="right"
-          verticalAlign="middle"
-          content={renderLegend as unknown as React.ReactElement}
-          iconType="square"
-        />
-      </PieChart>
-    </ResponsiveContainer>
+        </span>
+      </div>
+
+      <ul className="flex-1 min-w-0 flex flex-col gap-1.5 text-xs overflow-y-auto max-h-[224px] no-scrollbar">
+        {data.map((entry, index) => (
+          <li key={index} className="flex items-center gap-2 min-w-0">
+            <span
+              className="inline-block h-2 w-2 rounded-sm flex-shrink-0"
+              style={{ backgroundColor: COLORS[index % COLORS.length] }}
+            />
+            <span className="truncate text-muted-foreground">{entry.category}</span>
+            <span className="ml-auto text-foreground/70 font-medium pl-2 flex-shrink-0">
+              {entry.pct?.toFixed(1)}%
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
