@@ -3,7 +3,6 @@ import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { hasPageAccessForOrg } from "@/lib/org/page-access";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource, categorizeSource } from "@/lib/finance/transaction-status";
-import { baseAmt } from "@/lib/utils";
 
 export const maxDuration = 60;
 
@@ -47,41 +46,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
   }
 
-  // Two filtered queries built fresh per page. Stable order is REQUIRED for
-  // correct pagination — without it Postgres can shift rows between pages.
-  const buildMainQuery = () => {
-    let q = auth.supabase
-      .from("transactions")
-      .select("source, type, amount, amount_base, currency, fx_rate, category, metadata, status")
-      .neq("ledger", "bank")     // Bank (Mercury) has its own page — excluded from Payments cards + source dropdown
-      .neq("status", "failed"); // failed moves no money — never counted
-    if (connectorId) q = q.eq("connector_id", connectorId);
-    if (source)      q = q.eq("source", source);
-    if (type)        q = q.eq("type", type);
-    if (from)        q = q.gte("transaction_date", from.slice(0, 10));
-    if (to)          q = q.lte("transaction_date", to.slice(0, 10));
-    if (search)      q = q.ilike("search_text", `%${search}%`);
-    return q.order("id", { ascending: true });
-  };
-
-  // Disputes: every dispute raised, ANY status (open/won/lost). category='dispute'
-  // is set by all gateways, so this catches 'lost' disputes that map to a failed
-  // status the main pass filters out.
-  const buildDisputeQuery = () => {
-    let q = auth.supabase
-      .from("transactions")
-      .select("amount, amount_base, currency, fx_rate")
-      .neq("ledger", "bank")
-      .eq("category", "dispute");
-    if (connectorId) q = q.eq("connector_id", connectorId);
-    if (source)      q = q.eq("source", source);
-    if (type)        q = q.eq("type", type);
-    if (from)        q = q.gte("transaction_date", from.slice(0, 10));
-    if (to)          q = q.lte("transaction_date", to.slice(0, 10));
-    if (search)      q = q.ilike("search_text", `%${search}%`);
-    return q.order("id", { ascending: true });
-  };
-
   // Per-source tallies drive ONLY the source-filter dropdown — kept over all
   // non-failed rows so every source the user can filter on appears.
   const groups: Record<string, { count: number; amount: number }> = {};
@@ -92,66 +56,64 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const disputes    = { count: 0, amount: 0 };
   let totalFees = 0, totalCredits = 0, totalDebits = 0, totalPayments = 0, operationalDebits = 0, total = 0;
 
-  const PAGE = 1000;
+  // ── Single DB-side aggregation ──────────────────────────────────────────────
+  // transactions_summary_groups collapses every matching row into a small grouped
+  // set (source × category × status × type) with count / Σ base-INR / Σ fee-INR.
+  // We then reduce those few dozen rows with the EXACT locked card logic below —
+  // identical numbers to the old per-row pass, but ONE query instead of paging
+  // through tens of thousands of rows (which timed out on long ranges).
+  const { data: groupRows, error } = await auth.supabase.rpc("transactions_summary_groups", {
+    p_org:       auth.org.id,
+    p_connector: connectorId,
+    p_source:    source,
+    p_type:      type,
+    p_from:      from ? from.slice(0, 10) : null,
+    p_to:        to ? to.slice(0, 10) : null,
+    p_search:    search || null,
+  });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // ── Main pass: everything except failed (payments/settlements/refunds, fees,
-  //    net flow, and the source dropdown). Disputes are handled separately. ──
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await buildMainQuery().range(offset, offset + PAGE - 1);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    const rows = data ?? [];
+  type GroupRow = { source: string; category: string | null; status: string; type: string; cnt: number | string; sum_base: number | string; sum_fee: number | string };
+  for (const g of (groupRows ?? []) as GroupRow[]) {
+    const src      = g.source;
+    const cat      = categorizeSource(src);
+    const status   = g.status;
+    const cnt      = Number(g.cnt);
+    const sumBase  = Number(g.sum_base);
+    const sumFee   = Number(g.sum_fee);
+    const transfer = isTransferSource(src);
+    const posted   = POSTED_TRANSACTION_STATUSES.includes(status);
 
-    for (const row of rows) {
-      const amt = baseAmt(row);
-      const transfer = isTransferSource(row.source as string);
-      const key = row.source as string;
-      const status = row.status as string;
-      const posted = POSTED_TRANSACTION_STATUSES.includes(status);
-      const cat = categorizeSource(key);
+    // Disputes: every dispute raised, ANY status (open/won/lost) — keyed on the
+    // category column (set by all gateways) so 'lost' disputes that map to a
+    // failed status are still counted.
+    if (g.category === "dispute") { disputes.count += cnt; disputes.amount += sumBase; }
 
-      // Source dropdown list (all non-failed rows).
-      (groups[key] ??= { count: 0, amount: 0 });
-      groups[key].count++;
-      groups[key].amount += amt;
+    // Everything below excludes failed rows (no money moved) — main-pass parity.
+    if (status === "failed") continue;
 
-      // Card totals — terminal status only (no pending).
-      if (cat === "payment" && posted)                  { payments.count++;    payments.amount += amt; }
-      else if (cat === "settlement" && status === "completed") { settlements.count++; settlements.amount += amt; }
-      else if (cat === "refund" && status === "completed")     { refunds.count++;     refunds.amount += amt; }
-      // (disputes intentionally not summed here — counted in the dedicated pass.)
+    // Source dropdown list (all non-failed rows).
+    (groups[src] ??= { count: 0, amount: 0 });
+    groups[src].count  += cnt;
+    groups[src].amount += sumBase;
 
-      // Financial totals (net / credits / debits / fees) — POSTED rows only.
-      if (!posted) continue;
-      if (row.type === "credit") {
-        totalCredits += amt;
-        if (!transfer && row.category !== "settlement") totalPayments += amt;
-      } else {
-        totalDebits += amt;
-        if (!transfer) operationalDebits += amt;
-      }
-      if (!transfer) {
-        const meta = (row.metadata as Record<string, unknown>) ?? {};
-        let fee = Number(meta.fee ?? meta.fees ?? 0);
-        if (!isNaN(fee) && fee) {
-          if ((row.currency as string) !== "INR") fee *= Number(row.fx_rate ?? 1);
-          totalFees += fee;
-        }
-      }
+    // Card totals — terminal status only (no pending).
+    if (cat === "payment" && posted)                         { payments.count    += cnt; payments.amount    += sumBase; }
+    else if (cat === "settlement" && status === "completed") { settlements.count += cnt; settlements.amount += sumBase; }
+    else if (cat === "refund" && status === "completed")     { refunds.count     += cnt; refunds.amount     += sumBase; }
+
+    total += cnt;
+
+    // Financial totals (net / credits / debits / fees) — POSTED rows only.
+    if (!posted) continue;
+    if (g.type === "credit") {
+      totalCredits += sumBase;
+      if (!transfer && g.category !== "settlement") totalPayments += sumBase;
+    } else {
+      totalDebits += sumBase;
+      if (!transfer) operationalDebits += sumBase;
     }
-
-    total += rows.length;
-    if (rows.length < PAGE) break;
-  }
-
-  // ── Disputes pass: every dispute raised, ANY status (open/won/lost). Keyed on
-  //    category='dispute' (set by all gateways) so 'lost' disputes that map to a
-  //    failed status — excluded from the main pass — are still counted. ──
-  for (let offset = 0; ; offset += PAGE) {
-    const { data, error } = await buildDisputeQuery().range(offset, offset + PAGE - 1);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    const rows = data ?? [];
-    for (const row of rows) { disputes.count++; disputes.amount += baseAmt(row); }
-    if (rows.length < PAGE) break;
+    if (!transfer) totalFees += sumFee;
   }
 
   return NextResponse.json({
