@@ -70,7 +70,7 @@ export function MetricCard({
             )}
           >
             {isUp ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}
-            {isUp ? "+" : ""}{trend.toFixed(1)}%{trendLabel ? ` ${trendLabel}` : ""}
+            {Math.abs(trend).toFixed(1)}%{trendLabel ? ` ${trendLabel}` : ""}
           </span>
         )}
       </div>
@@ -86,12 +86,18 @@ export function MetricCard({
       {/* Subtitle */}
       {subtitle && <div className="text-[11px] text-muted-foreground leading-snug">{subtitle}</div>}
 
-      {/* Sparkline */}
-      {hasSparkline && (
-        <div className="mt-2">
+      {/* Sparkline — always reserve the slot so every card is the same height.
+          A faint baseline stands in when a metric has no series (keeps the grid
+          tidy instead of leaving dead space under short cards). */}
+      <div className="mt-auto pt-2">
+        {hasSparkline ? (
           <Sparkline data={sparklineData} color={sparkColor} height={30} strokeWidth={1.5} className="w-full" />
-        </div>
-      )}
+        ) : (
+          <div className="h-[30px] flex items-center" aria-hidden="true">
+            <span className="w-full border-t border-dashed border-border/70" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
