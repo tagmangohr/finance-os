@@ -551,7 +551,10 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           onChange={setConnectorId}
           options={[
             { value: "", label: "All accounts" },
-            ...connectors.map((c) => ({ value: c.id, label: c.name })),
+            // Bank (Mercury) has its own dedicated page — never surface it here.
+            ...connectors
+              .filter((c) => c.type !== "mercury")
+              .map((c) => ({ value: c.id, label: c.type === "app_store" ? "Apple Pay" : c.name })),
           ]}
         />
 

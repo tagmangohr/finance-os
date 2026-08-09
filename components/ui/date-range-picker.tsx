@@ -5,6 +5,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Calendar, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   format, parseISO, addMonths, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
+  startOfYear, endOfYear, subWeeks, subMonths, subYears,
   eachDayOfInterval, isSameDay, isSameMonth, isAfter, isBefore, isWithinInterval, isValid,
 } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -21,16 +22,34 @@ function fyStart(today: Date): Date {
   const y = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
   return new Date(y, 3, 1);
 }
+// "All time" lower bound — earlier than any real transaction in the system.
+const ALL_TIME_START = new Date(2015, 0, 1);
 
+// Grouped presets (rendered with light separators), Mercury-style but richer.
 type Preset = { label: string; range: (today: Date) => [Date, Date] };
-const PRESETS: Preset[] = [
-  { label: "Last 7 days",  range: (t) => [new Date(t.getTime() - 6 * 864e5), t] },
-  { label: "Last 30 days", range: (t) => [new Date(t.getTime() - 29 * 864e5), t] },
-  { label: "Last 90 days", range: (t) => [new Date(t.getTime() - 89 * 864e5), t] },
-  { label: "This month",   range: (t) => [startOfMonth(t), t] },
-  { label: "This FY",      range: (t) => [fyStart(t), t] },
-  { label: "Last 1 year",  range: (t) => [new Date(t.getTime() - 364 * 864e5), t] },
+const PRESET_GROUPS: Preset[][] = [
+  [
+    { label: "This week",  range: (t) => [startOfWeek(t, { weekStartsOn: 1 }), t] },
+    { label: "This month", range: (t) => [startOfMonth(t), t] },
+    { label: "This year",  range: (t) => [startOfYear(t), t] },
+    { label: "This FY",    range: (t) => [fyStart(t), t] },
+  ],
+  [
+    { label: "Last week",  range: (t) => [startOfWeek(subWeeks(t, 1), { weekStartsOn: 1 }), endOfWeek(subWeeks(t, 1), { weekStartsOn: 1 })] },
+    { label: "Last month", range: (t) => [startOfMonth(subMonths(t, 1)), endOfMonth(subMonths(t, 1))] },
+    { label: "Last year",  range: (t) => [startOfYear(subYears(t, 1)), endOfYear(subYears(t, 1))] },
+    { label: "Last FY",    range: (t) => [subYears(fyStart(t), 1), new Date(fyStart(t).getTime() - 864e5)] },
+  ],
+  [
+    { label: "Last 7 days",  range: (t) => [new Date(t.getTime() - 6 * 864e5), t] },
+    { label: "Last 30 days", range: (t) => [new Date(t.getTime() - 29 * 864e5), t] },
+    { label: "Last 90 days", range: (t) => [new Date(t.getTime() - 89 * 864e5), t] },
+  ],
+  [
+    { label: "All time", range: (t) => [ALL_TIME_START, t] },
+  ],
 ];
+const PRESETS: Preset[] = PRESET_GROUPS.flat();
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
@@ -114,16 +133,30 @@ export function DateRangePicker({ from, to, onChange, max, align = "start", clas
           sideOffset={6}
           className="z-[400] flex overflow-hidden rounded-xl border border-border bg-card shadow-[0_12px_48px_rgba(0,0,0,0.6)]"
         >
-          {/* Presets */}
-          <div className="flex flex-col gap-0.5 p-2 border-r border-border min-w-[124px]">
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => applyPreset(p)}
-                className="text-left text-[12px] px-2.5 py-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
-                {p.label}
-              </button>
+          {/* Presets (grouped, active one highlighted) */}
+          <div className="flex flex-col gap-0.5 p-2 border-r border-border min-w-[132px] max-h-[320px] overflow-y-auto">
+            {PRESET_GROUPS.map((group, gi) => (
+              <React.Fragment key={gi}>
+                {gi > 0 && <div className="my-1 border-t border-border/60" />}
+                {group.map((p) => {
+                  const [pa, pb] = p.range(today);
+                  const active = fromD && toD && isSameDay(pa, fromD) && isSameDay(pb, toD);
+                  return (
+                    <button
+                      key={p.label}
+                      onClick={() => applyPreset(p)}
+                      className={cn(
+                        "text-left text-[12px] px-2.5 py-1.5 rounded-lg transition-colors",
+                        active
+                          ? "bg-primary/15 text-foreground font-medium"
+                          : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      )}
+                    >
+                      {p.label}
+                    </button>
+                  );
+                })}
+              </React.Fragment>
             ))}
           </div>
 

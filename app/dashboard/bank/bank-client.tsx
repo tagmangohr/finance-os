@@ -12,6 +12,7 @@ import { SectionCard } from "@/components/dashboard/section-card";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import type { BankOverview, BankTxn } from "@/lib/expenses/reports";
 import type { LedgerCategory } from "@/lib/expenses/types";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 
 const s = (v: unknown) => (v == null ? "" : String(v));
 const inr = (n: number, compact = false) => formatCurrency(n, "INR", compact);
@@ -43,35 +44,6 @@ const acctLabel = (k: string | null) => (k ? ACCOUNT_LABEL[k.toLowerCase()] ?? (
 // it in IST (the reporting timezone) — date from the timestamp so it never drifts.
 const IST_DATE = { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" } as const;
 const IST_TIME = { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true } as const;
-
-/** Date-range picker — updates ?from/?to so the server re-fetches the whole tab
- *  (cards + P&L + transactions) for the chosen window. Default = current FY. */
-function DateRangePicker({ period }: { period: { from: string; to: string } }) {
-  const router = useRouter();
-  const [from, setFrom] = useState(period.from);
-  const [to, setTo] = useState(period.to);
-  const today = new Date().toISOString().slice(0, 10);
-  const now = new Date();
-  const fyY = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1; // FY starts April
-  const go = (f: string, t: string) => router.push(`/dashboard/bank?from=${f}&to=${t}`);
-  const presets: [string, string, string][] = [
-    ["This FY", `${fyY}-04-01`, today],
-    ["Last FY", `${fyY - 1}-04-01`, `${fyY}-03-31`],
-    ["90d", new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10), today],
-    ["All", "2020-01-01", today],
-  ];
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-      <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1 outline-none" />
-      <span className="text-muted-foreground">→</span>
-      <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} className="rounded-lg border border-border bg-background px-2 py-1 outline-none" />
-      <button onClick={() => go(from, to)} className="rounded-lg bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90">Apply</button>
-      {presets.map(([label, f, t]) => (
-        <button key={label} onClick={() => go(f, t)} className="rounded-lg border border-border px-2 py-1 text-muted-foreground hover:border-border/60">{label}</button>
-      ))}
-    </div>
-  );
-}
 
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
@@ -203,7 +175,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
     <div className="space-y-3 max-w-[1400px]">
       {/* Header — date range + actions */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <DateRangePicker key={`${data.period.from}_${data.period.to}`} period={data.period} />
+        <DateRangePicker
+          from={data.period.from}
+          to={data.period.to}
+          max={new Date().toISOString().slice(0, 10)}
+          onChange={(f, t) => router.push(`/dashboard/bank?from=${f}&to=${t}`)}
+        />
         <div className="flex items-center gap-2">
           <button
             onClick={runCategorize}

@@ -5,13 +5,14 @@ import { Download, Search, Repeat, TrendingUp, AlertTriangle, XCircle, Clock, Us
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import type { SubscriptionsOverview } from "@/lib/subscriptions/reports";
 
 type Row = Record<string, unknown>;
 const s = (v: unknown) => (v == null ? "" : String(v));
 
 const GATEWAY_LABEL: Record<string, string> = {
-  cashfree: "Cashfree", stripe: "Stripe", razorpay: "Razorpay", app_store: "App Store",
+  cashfree: "Cashfree", stripe: "Stripe", razorpay: "Razorpay", app_store: "Apple Pay",
   payu: "PayU", paytm: "Paytm", easebuzz: "Easebuzz",
 };
 
@@ -61,16 +62,25 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
   const { totals, byGateway, period, byPlan } = data;
   const [tab, setTab] = useState<"active" | "upcoming" | "pastDue">("active");
   const [q, setQ] = useState("");
+  // Date filter scopes by subscription START date (started_at). Empty = all dates.
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
 
   const rows = tab === "active" ? data.activeList : tab === "upcoming" ? data.upcomingList : data.pastDueList;
   const filtered = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!t) return rows;
-    return rows.filter((r) =>
-      [r.customer_name, r.customer_email, r.customer_phone, r.plan_name, r.subscription_id, r.gateway]
-        .some((v) => s(v).toLowerCase().includes(t))
-    );
-  }, [rows, q]);
+    return rows.filter((r) => {
+      if (from || to) {
+        const d = s(r.started_at).slice(0, 10);
+        if (!d) return false;                 // no start date → excluded when a range is set
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+      }
+      if (!t) return true;
+      return [r.customer_name, r.customer_email, r.customer_phone, r.plan_name, r.subscription_id, r.gateway]
+        .some((v) => s(v).toLowerCase().includes(t));
+    });
+  }, [rows, q, from, to]);
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -151,6 +161,7 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
               <Search className="size-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search customer / plan / id" className="h-7 w-56 rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-ring" />
             </div>
+            <DateRangePicker from={from} to={to} max={new Date().toISOString().slice(0, 10)} align="end" onChange={(f, t) => { setFrom(f); setTo(t); }} />
             <a href={`/api/subscriptions/export?report=${tab}&format=csv`} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />CSV</a>
             <a href={`/api/subscriptions/export?report=${tab}&format=xlsx`} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />Excel</a>
           </div>

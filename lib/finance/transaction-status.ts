@@ -44,6 +44,12 @@ const cap = (w: string) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w);
  */
 export function sourceLabel(source: string | null | undefined): string {
   if (!source) return "—";
+  // "app_store" is a two-word gateway (splitting on "_" would mangle it) and is
+  // surfaced to users as "Apple Pay". Handle its prefix explicitly.
+  if (source === "app_store" || source.startsWith("app_store_")) {
+    const rest = source.slice("app_store".length).replace(/^_/, "");
+    return rest ? `Apple Pay ${rest.split("_").map(cap).join(" ")}` : "Apple Pay";
+  }
   const [gw, ...rest] = source.split("_");
   const gateway = GATEWAY_NAMES[gw] ?? cap(gw);
   return rest.length ? `${gateway} ${rest.map(cap).join(" ")}` : gateway;

@@ -53,6 +53,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     let q = auth.supabase
       .from("transactions")
       .select("source, type, amount, amount_base, currency, fx_rate, category, metadata, status")
+      .neq("ledger", "bank")     // Bank (Mercury) has its own page — excluded from Payments cards + source dropdown
       .neq("status", "failed"); // failed moves no money — never counted
     if (connectorId) q = q.eq("connector_id", connectorId);
     if (source)      q = q.eq("source", source);
@@ -70,6 +71,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     let q = auth.supabase
       .from("transactions")
       .select("amount, amount_base, currency, fx_rate")
+      .neq("ledger", "bank")
       .eq("category", "dispute");
     if (connectorId) q = q.eq("connector_id", connectorId);
     if (source)      q = q.eq("source", source);
