@@ -653,7 +653,6 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
               <Th col="transaction_date" label="Date" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="transaction_at" label="Time" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="source" label="Source" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Connector</th>
               <Th col="type" label="Type" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="amount" label="Amount" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
@@ -671,13 +670,13 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
           <tbody>
             {loading && rows.length === 0 ? (
               <tr>
-                <td colSpan={16} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={16} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
+                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
                   No transactions found. Try adjusting the filters or run a sync first.
                 </td>
               </tr>
@@ -705,12 +704,12 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                       )}
                     >
                       {/* Date */}
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
+                      <td className="px-3 py-2.5 text-foreground whitespace-nowrap tabular-nums">
                         {row.transaction_date}
                       </td>
 
                       {/* Time (IST, 24h) */}
-                      <td className="px-3 py-2.5 text-muted-foreground/70 whitespace-nowrap tabular-nums">
+                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap tabular-nums">
                         {fmtTime(row.transaction_at)}
                       </td>
 
@@ -724,11 +723,6 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                         >
                           {SOURCE_LABELS[row.source] ?? sourceLabel(row.source)}
                         </span>
-                      </td>
-
-                      {/* Connector */}
-                      <td className="px-3 py-2.5 text-muted-foreground/70 whitespace-nowrap">
-                        {row.connectors?.name ?? "—"}
                       </td>
 
                       {/* Type */}
@@ -754,14 +748,14 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                       </td>
 
                       {/* INR value (base currency) */}
-                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground">
+                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-foreground font-medium">
                         {row.amount_base != null
                           ? `₹${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(row.amount_base)}`
                           : "—"}
                       </td>
 
                       {/* FX rate (USD→INR etc.); 1:1 rows show — */}
-                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground/70">
+                      <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-muted-foreground">
                         {row.currency !== "INR" && row.fx_rate != null
                           ? Number(row.fx_rate).toFixed(2)
                           : "—"}
@@ -775,17 +769,17 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                       </td>
 
                       {/* Counterparty — full display + copy (often an email for Razorpay) */}
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-foreground whitespace-nowrap">
                         {row.counterparty_name ? <CopyValue value={row.counterparty_name} /> : "—"}
                       </td>
 
                       {/* Email (from metadata) — shown in full, one-click copy */}
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-foreground whitespace-nowrap">
                         {email ? <CopyValue value={email} /> : "—"}
                       </td>
 
                       {/* Phone (from metadata) — one-click copy (copies the 10-digit number, no ISD code) */}
-                      <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-foreground whitespace-nowrap">
                         {phone ? (
                           <CopyValue
                             value={phone}
@@ -798,17 +792,17 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                       </td>
 
                       {/* Description */}
-                      <td className="px-3 py-2.5 text-muted-foreground/70 max-w-[220px] truncate">
+                      <td className="px-3 py-2.5 text-muted-foreground max-w-[220px] truncate">
                         {row.description ?? "—"}
                       </td>
 
                       {/* External ID */}
-                      <td className="px-3 py-2.5 font-mono text-muted-foreground/70 text-[10px] whitespace-nowrap">
+                      <td className="px-3 py-2.5 font-mono text-muted-foreground text-[10px] whitespace-nowrap">
                         {row.external_id ?? "—"}
                       </td>
 
                       {/* Category */}
-                      <td className="px-3 py-2.5 text-muted-foreground/70 capitalize whitespace-nowrap">
+                      <td className="px-3 py-2.5 text-foreground capitalize whitespace-nowrap">
                         {row.category ?? "—"}
                       </td>
 
@@ -833,7 +827,7 @@ export function DataExplorerClient({ orgId, connectors }: DataExplorerClientProp
                     {/* Expanded metadata row */}
                     {isExpanded && (
                       <tr className="border-b border-border bg-accent/40">
-                        <td colSpan={16} className="px-4 pb-3 pt-2">
+                        <td colSpan={15} className="px-4 pb-3 pt-2">
                           <div className="flex flex-wrap gap-x-6 gap-y-1.5">
                             {metaKeys.map(([k, v]) => (
                               <div key={k} className="flex items-center gap-2 min-w-[160px]">
