@@ -71,8 +71,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // ALL metadata) — covers order id, raw payment id, UTR/RRN, email, phone, etc.
   if (search) query = query.ilike("search_text", `%${search}%`);
 
+  // Primary sort is the chosen column. When sorting by date, tie-break by the
+  // full timestamp so rows within the same day are ordered by time (not arbitrary
+  // PostgREST order) — null-time rows (CSV/historical) sink to the end of the day.
+  // A final id tiebreaker makes the order fully deterministic and pagination-safe.
+  query = query.order(sortCol, { ascending });
+  if (sortCol === "transaction_date") {
+    query = query.order("transaction_at", { ascending, nullsFirst: false });
+  }
   query = query
-    .order(sortCol, { ascending })
+    .order("id", { ascending: false })
     .range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
