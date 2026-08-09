@@ -42,19 +42,19 @@ export function OrgSwitcher({ orgs, activeOrgId, canCreateOrg }: OrgSwitcherProp
       <DropdownMenu.Root>
         <DropdownMenu.Trigger asChild>
           <button
-            className="group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg hover:bg-accent transition-colors outline-none"
+            className="group flex items-center gap-2 w-full px-2 py-1.5 rounded-lg bg-sidebar-accent/60 border border-sidebar-border hover:bg-sidebar-accent transition-colors outline-none"
             aria-label="Switch organisation"
           >
             <div
               className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 text-white"
-              style={{ background: "linear-gradient(135deg, hsl(var(--primary)/0.4), hsl(var(--primary)/0.15))", border: "1px solid hsl(var(--primary)/0.35)" }}
+              style={{ background: "linear-gradient(135deg, hsl(var(--primary)/0.55), hsl(var(--primary)/0.25))", border: "1px solid hsl(var(--primary)/0.4)" }}
             >
               <Building2 className="w-3 h-3" />
             </div>
-            <span className="flex-1 min-w-0 text-left text-[12px] font-medium text-foreground/80 truncate">
+            <span className="flex-1 min-w-0 text-left text-[12px] font-medium text-sidebar-foreground truncate">
               {active?.name ?? "Organisation"}
             </span>
-            <ChevronsUpDown className="w-3.5 h-3.5 text-muted-foreground/70 group-hover:text-muted-foreground flex-shrink-0" />
+            <ChevronsUpDown className="w-3.5 h-3.5 text-sidebar-muted group-hover:text-sidebar-foreground flex-shrink-0" />
           </button>
         </DropdownMenu.Trigger>
 
