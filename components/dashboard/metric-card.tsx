@@ -41,10 +41,15 @@ export function MetricCard({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border bg-card p-3.5 flex flex-col gap-1 transition-all duration-200 hover:border-border/80 hover:-translate-y-px",
+        "group relative overflow-hidden rounded-xl border border-border bg-card pl-4 pr-3.5 py-3.5 flex flex-col gap-1 transition-all duration-200 hover:border-border/80 hover:-translate-y-px hover:shadow-[0_6px_20px_-8px_rgba(0,0,0,0.18)]",
         className
       )}
     >
+      {/* Accent stripe — carries this metric's identity colour down the left edge */}
+      <span
+        className="absolute left-0 top-0 bottom-0 w-[3px]"
+        style={{ background: accentColor, opacity: 0.9 }}
+      />
       {/* Icon chip + delta */}
       <div className="flex items-center justify-between">
         {icon ? (
@@ -76,7 +81,7 @@ export function MetricCard({
       )}
 
       {/* Value */}
-      <div className="num text-[24px] font-bold tracking-tight leading-[1.1] text-foreground">{value}</div>
+      <div className="num text-[27px] font-bold tracking-[-0.02em] leading-[1.05] text-foreground">{value}</div>
 
       {/* Subtitle */}
       {subtitle && <div className="text-[11px] text-muted-foreground leading-snug">{subtitle}</div>}
