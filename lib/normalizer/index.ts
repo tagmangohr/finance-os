@@ -1300,9 +1300,18 @@ export function normalizeAppStoreTransaction(
   const amount = txn.price != null ? txn.price / 1000 : 0;
   const currency = (txn.currency ?? "USD").toUpperCase();
 
-  // Economic date = the purchase date (unchanged by a later refund, so re-syncs
-  // don't churn the date). Fall back to the JWS signed date if absent.
-  const whenMs = txn.purchaseDate ?? txn.signedDate;
+  // Money-movement time. Apple's purchaseDate for RENEWALs is the new billing
+  // period's START, which for BILLED_UPFRONT renewals is stamped hours AHEAD of
+  // when Apple actually charged the card and signed the notification (signedDate).
+  // Using purchaseDate therefore made renewal rows show a future time. Use the
+  // EARLIER of the two: for a renewal this picks signedDate (the real charge
+  // time); for a refund/revoke notification — whose signedDate is later than the
+  // original purchaseDate — it keeps the original purchaseDate, so re-syncs don't
+  // churn the date. Falls back to whichever is present.
+  const whenMs =
+    txn.purchaseDate != null && txn.signedDate != null
+      ? Math.min(txn.purchaseDate, txn.signedDate)
+      : (txn.purchaseDate ?? txn.signedDate);
 
   return {
     external_id: `appstore_${txId}`,
