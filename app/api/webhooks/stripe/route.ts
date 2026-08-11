@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import {
   normalizeStripeCharge,
+  stripeRefundFromCharge,
   normalizeStripePayout,
   normalizeStripeDispute,
   isTagMangoCharge,
@@ -91,7 +92,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   else if (PAYOUT_EVENTS.has(event.type)) txns.push(normalizeStripePayout(obj as StripePayout));
   else if (CHARGE_EVENTS.has(event.type)) {
     const c = obj as StripeCharge;
-    if (!isTagMangoCharge(c)) txns.push(normalizeStripeCharge(c)); // exclude shared-account TagMango charges
+    if (!isTagMangoCharge(c)) {
+      txns.push(normalizeStripeCharge(c)); // exclude shared-account TagMango charges
+      const refund = stripeRefundFromCharge(c); // emit a refund line-item if the charge is (partly) refunded
+      if (refund) txns.push(refund);
+    }
   }
   const isSub = SUBSCRIPTION_EVENTS.has(event.type);
   const isInvoice = INVOICE_EVENTS.has(event.type);

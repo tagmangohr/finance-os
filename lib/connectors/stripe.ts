@@ -5,6 +5,7 @@ import {
   StripePayout,
   StripeDispute,
   normalizeStripeCharge,
+  stripeRefundFromCharge,
   normalizeStripePayout,
   normalizeStripeDispute,
   isTagMangoCharge,
@@ -92,8 +93,11 @@ export class StripeConnector {
       const page = await this.stripe.charges.list(params);
 
       for (const charge of page.data) {
-        if (isTagMangoCharge(charge as unknown as StripeCharge)) continue; // exclude shared-account TagMango
-        results.push(normalizeStripeCharge(charge as unknown as StripeCharge));
+        const c = charge as unknown as StripeCharge;
+        if (isTagMangoCharge(c)) continue; // exclude shared-account TagMango
+        results.push(normalizeStripeCharge(c));
+        const refund = stripeRefundFromCharge(c); // separate refund line-item if refunded
+        if (refund) results.push(refund);
       }
 
       if (!page.has_more || page.data.length === 0) break;
@@ -175,14 +179,19 @@ export class StripeConnector {
           : await this.stripe.disputes.list(params as Stripe.DisputeListParams);
 
       for (const item of page.data) {
-        if (stream === "charges" && isTagMangoCharge(item as unknown as StripeCharge)) continue; // exclude TagMango
-        results.push(
-          stream === "charges"
-            ? normalizeStripeCharge(item as unknown as StripeCharge)
-            : stream === "payouts"
-            ? normalizeStripePayout(item as unknown as StripePayout)
-            : normalizeStripeDispute(item as unknown as StripeDispute)
-        );
+        if (stream === "charges") {
+          const c = item as unknown as StripeCharge;
+          if (isTagMangoCharge(c)) continue; // exclude TagMango
+          results.push(normalizeStripeCharge(c));
+          const refund = stripeRefundFromCharge(c);
+          if (refund) results.push(refund);
+        } else {
+          results.push(
+            stream === "payouts"
+              ? normalizeStripePayout(item as unknown as StripePayout)
+              : normalizeStripeDispute(item as unknown as StripeDispute)
+          );
+        }
       }
 
       if (!page.has_more || page.data.length === 0) {
@@ -262,7 +271,11 @@ export class StripeConnector {
         else if (PAYOUT.has(ev.type)) txn = normalizeStripePayout(obj as unknown as StripePayout);
         else if (CHARGE.has(ev.type)) {
           const c = obj as unknown as StripeCharge;
-          if (!isTagMangoCharge(c)) txn = normalizeStripeCharge(c); // skip TagMango charge events
+          if (!isTagMangoCharge(c)) {
+            txn = normalizeStripeCharge(c); // skip TagMango charge events
+            const refund = stripeRefundFromCharge(c); // refund delta on the same charge
+            if (refund?.external_id) byId.set(refund.external_id, refund);
+          }
         }
         if (txn?.external_id) byId.set(txn.external_id, txn);
       } catch {

@@ -587,6 +587,66 @@ export function normalizeStripeCharge(
 }
 
 /**
+ * Derive a standalone REFUND line-item from a Stripe charge. Stripe reports refunds
+ * as `amount_refunded` on the charge (it does not push a separate refund object into
+ * charge.* events, and refunds.data isn't expanded on our lean pages), so — unlike
+ * Razorpay/Cashfree which emit their own refund rows — Stripe refunds would otherwise
+ * never appear as a `category='refund'` deduction. Without this, a refunded charge is
+ * counted at full gross in revenue and NEVER subtracted (net + refund card both wrong).
+ *
+ * Returns one refund row per charge carrying the CUMULATIVE refunded amount (partial
+ * refunds accumulate into charge.amount_refunded, so one row is correct — and keying
+ * on `<charge>_refund` means later refunds refresh the same row via the upsert path,
+ * never double-count). Booked at the CHARGE date (Stripe gives no per-refund date
+ * here); INR conversion is left to enrichRowsWithFx = the charge-date ECB rate.
+ * Returns null when nothing is refunded.
+ */
+export function stripeRefundFromCharge(charge: StripeCharge): NormalizedTransaction | null {
+  const refundedMinor = charge.amount_refunded ?? 0;
+  if (!refundedMinor || refundedMinor <= 0) return null;
+
+  const currency = charge.currency.toUpperCase();
+  const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(currency);
+  const amount = isZeroDecimal ? refundedMinor : refundedMinor / 100;
+
+  let counterparty: string | null = null;
+  if (charge.customer && typeof charge.customer === "object") {
+    counterparty = charge.customer.name ?? charge.customer.email ?? null;
+  }
+  if (!counterparty) counterparty = charge.billing_details?.name ?? charge.billing_details?.email ?? null;
+
+  // INR rows resolve immediately; foreign rows leave amount_base null so
+  // enrichRowsWithFx fills it at the charge-date rate (same basis as the charge).
+  const amount_base = currency === BASE_CURRENCY ? amount : null;
+  const base_currency = currency === BASE_CURRENCY ? BASE_CURRENCY : null;
+  const fx_rate = currency === BASE_CURRENCY ? 1 : null;
+
+  return {
+    external_id: `${charge.id}_refund`,
+    type: "debit",
+    amount,
+    currency,
+    category: "refund",
+    counterparty_name: counterparty,
+    description: `Refund for charge ${charge.id}`,
+    source: "stripe_refund",
+    status: "completed",
+    transaction_date: unixToDateString(charge.created),
+    transaction_at: unixToIso(charge.created),
+    amount_base,
+    base_currency,
+    fx_rate,
+    metadata: {
+      charge_id: charge.id,
+      charge_amount: isZeroDecimal ? charge.amount : charge.amount / 100,
+      fully_refunded: !!charge.refunded,
+      reconstructed_from_charge: true,
+    },
+    raw: { charge_id: charge.id, amount_refunded: charge.amount_refunded, currency: charge.currency, refunded: charge.refunded },
+  };
+}
+
+/**
  * On a Stripe account shared across brands, the statement descriptor identifies
  * the brand. TagMango charges (descriptor "TAGMANGO INC") must be excluded from
  * Fiesta's books — everything else on the account (AI_FIESTA, FIESTA LABS, or

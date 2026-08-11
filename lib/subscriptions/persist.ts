@@ -1,10 +1,26 @@
 import type { createServiceClient } from "@/lib/supabase/server";
 import type { Database, Json } from "@/lib/supabase/types";
 import type { NormalizedSubscription, NormalizedSubscriptionEvent, SubscriptionAdapterResult } from "./types";
+import { getInrRates } from "@/lib/fx/rates";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
 const BASE_CURRENCY = "INR";
+
+/**
+ * INR value of `amount` in `currency`, converted at the ECB rate for `isoWhen`'s
+ * date (the same per-date basis transactions use — never a flat rate). For a
+ * subscription this is its START date, frozen once: the recurring price is booked
+ * at the FX of the day the mandate began, matching "convert on the transaction's
+ * own date". Returns null when the currency has no published rate yet (leave the
+ * column unset so a later pass fills it rather than storing a wrong number).
+ */
+async function toInrOnDate(amount: number, currency: string, isoWhen: string): Promise<number | null> {
+  if (currency === BASE_CURRENCY) return amount;
+  const d = isoWhen.slice(0, 10);
+  const rate = (await getInrRates(currency, [d])).get(d);
+  return rate != null ? Math.round(amount * rate * 100) / 100 : null;
+}
 
 /**
  * Upsert a subscription snapshot into `subscriptions` (merge, never null-clobber).
@@ -28,9 +44,16 @@ export async function upsertSubscription(
   };
   if (connectorId) row.connector_id = connectorId;
 
-  // INR-normalized recurring amount for MRR (foreign currencies filled by a later FX pass).
-  if (sub.plan_amount != null && (sub.currency ?? BASE_CURRENCY) === BASE_CURRENCY) {
-    row.amount_base = sub.plan_amount;
+  // INR-normalized recurring amount for MRR, converted at the subscription's
+  // START-date FX (per-date, frozen once — no flat rate). started_at is the mandate
+  // creation date; fall back to the current period start, then now. Only assigned
+  // when a value is produced, so a not-yet-published rate leaves the merge untouched
+  // (a later re-sync/backfill fills it) instead of clobbering an existing figure.
+  if (sub.plan_amount != null) {
+    const cur = sub.currency ?? BASE_CURRENCY;
+    const whenIso = sub.started_at ?? sub.current_period_start ?? nowIso;
+    const base = await toInrOnDate(sub.plan_amount, cur, whenIso);
+    if (base != null) row.amount_base = base;
   }
 
   for (const [k, v] of Object.entries(sub)) {
@@ -58,6 +81,8 @@ export async function insertSubscriptionEvents(
   events: NormalizedSubscriptionEvent[]
 ): Promise<void> {
   for (const ev of events) {
+    // Convert the event amount at the event's OWN date (per-date FX, never flat).
+    const evBase = ev.amount != null ? await toInrOnDate(ev.amount, ev.currency ?? BASE_CURRENCY, ev.event_at) : null;
     const row: Database["public"]["Tables"]["subscription_events"]["Insert"] = {
       org_id: orgId,
       gateway: ev.gateway,
@@ -67,7 +92,7 @@ export async function insertSubscriptionEvents(
       native_event_type: ev.native_event_type ?? null,
       amount: ev.amount ?? null,
       currency: ev.currency ?? null,
-      amount_base: ev.amount != null && (ev.currency ?? BASE_CURRENCY) === BASE_CURRENCY ? ev.amount : null,
+      amount_base: evBase,
       transaction_external_id: ev.transaction_external_id ?? null,
       event_ref: ev.event_ref ?? null,
       raw: (ev.raw ?? null) as Json,
