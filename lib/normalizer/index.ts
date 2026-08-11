@@ -853,6 +853,15 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
   // dispute rows under a different id. Skip them — the webhook is the sole source.
   if (type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION") return null;
 
+  // Settlement-cycle accounting artifacts (settlement charge, its tax, balance
+  // carry-over) are NOT settlements or standalone transactions. They previously
+  // landed as category=settlement / source=cashfree_settlement, which (a) polluted
+  // the settlement counts/lists with fee & carry-over rows that aren't payouts, and
+  // (b) would double-count fees — the per-transaction MDR is already captured on
+  // each payment row (metadata.fee) and the NET payout is its own settlement row.
+  // Skip them; the recon feed's real PAYMENT/REFUND events are still ingested.
+  if (CASHFREE_SETTLEMENT_EVENTS.has(type)) return null;
+
   // Direction from sale_type; PAYMENT is a credit by default.
   const credit = ev.sale_type ? ev.sale_type.toUpperCase() === "CREDIT" : type === "PAYMENT";
 
@@ -883,19 +892,15 @@ export function normalizeCashfreeReconEvent(e: CashfreeReconEvent): NormalizedTr
     : ev.event_id ? `cf_evt_${ev.event_id}`
     : `cf_${type}_${e.order_details?.order_id ?? ""}_${ev.event_time ?? ""}`;
 
-  const isDispute = type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION";
-  const isSettlement = CASHFREE_SETTLEMENT_EVENTS.has(type);
+  // Disputes and settlement-cycle artifacts are already skipped above, so a recon
+  // event that reaches here is a PAYMENT, a REFUND, or an other-adjustment.
   const category =
     type === "PAYMENT" ? "payment"
     : type === "REFUND" ? "refund"
-    : isDispute ? "dispute"
-    : isSettlement ? "settlement"
     : "adjustment";
   const source =
     type === "PAYMENT" ? "cashfree"
     : type === "REFUND" ? "cashfree_refund"
-    : isDispute ? "cashfree_dispute"
-    : isSettlement ? "cashfree_settlement"  // ends in _settlement → existing metric logic excludes from Net Flow (no fee double-count)
     : "cashfree_adjustment";
 
   // Cashfree fee for this payment = service charge + tax (full INR units).
