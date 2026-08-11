@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
+import { getSubscriptionsOverview } from "@/lib/subscriptions/reports";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Columns exported for every subscription report — customer-level detail included.
-const COLS: Array<{ key: string; label: string }> = [
+// Customer-level columns (active / pastDue / upcoming / all reports).
+const CUST_COLS: Array<{ key: string; label: string }> = [
   { key: "customer_name", label: "Customer" },
   { key: "customer_email", label: "Email" },
   { key: "customer_phone", label: "Phone" },
@@ -22,40 +23,78 @@ const COLS: Array<{ key: string; label: string }> = [
   { key: "started_at", label: "Started" },
   { key: "current_period_end", label: "Current period end" },
   { key: "next_charge_at", label: "Next charge" },
+  { key: "last_charge_at", label: "Last charge" },
   { key: "cancel_requested_at", label: "Cancel requested" },
   { key: "ended_at", label: "Ended" },
 ];
-const SELECT = COLS.map((c) => c.key).join(",");
+
+const MONTHLY_COLS: Array<{ key: string; label: string }> = [
+  { key: "month", label: "Month" },
+  { key: "active", label: "Active subs" },
+  { key: "mrr", label: "MRR (INR)" },
+  { key: "pastDue", label: "Past-due subs" },
+  { key: "pastDueMrr", label: "Past-due MRR (INR)" },
+  { key: "newSubs", label: "New subs" },
+  { key: "newMrr", label: "New MRR (INR)" },
+  { key: "churnedSubs", label: "Churned subs" },
+  { key: "churnedMrr", label: "Churned MRR (INR)" },
+  { key: "netNewMrr", label: "Net-new MRR (INR)" },
+  { key: "renewalCount", label: "Renewals" },
+  { key: "renewalAmount", label: "Renewal revenue (INR)" },
+];
+
+const GATEWAY_COLS: Array<{ key: string; label: string }> = [
+  { key: "month", label: "Month" },
+  { key: "gateway", label: "Gateway" },
+  { key: "active", label: "Active subs" },
+  { key: "mrr", label: "MRR (INR)" },
+  { key: "pastDue", label: "Past-due subs" },
+  { key: "newSubs", label: "New subs" },
+  { key: "churnedSubs", label: "Churned subs" },
+];
 
 /**
- * GET /api/subscriptions/export?report=active|upcoming|pastDue&format=csv|xlsx
- * Admin/finance-gated (customer PII). Streams ALL matching rows (paginated past the
- * 1000-row API cap) as CSV or Excel, with customer detail on every report.
+ * GET /api/subscriptions/export?report=<r>&format=csv|xlsx[&grace=N]
+ * Admin/finance-gated (customer PII).
+ *   report = active | pastDue | upcoming | all → customer-level rows (all, paginated)
+ *   report = monthly  → month-wise aggregate metrics (uses the period-end model + grace)
+ *   report = gateway  → month × gateway aggregate metrics
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
   if (!org) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (pageAccess !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 }); // owners/admins only
+  if (pageAccess !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const report = req.nextUrl.searchParams.get("report") ?? "active";
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
-  const sb = await createServiceClient();
-  const nowIso = new Date().toISOString();
-  const in30d = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  const grace = Math.min(48, Math.max(1, Number(req.nextUrl.searchParams.get("grace")) || 6));
 
-  // Fetch all matching rows, paginating past the 1000-row cap.
-  const rows: Record<string, unknown>[] = [];
-  for (let from = 0; ; from += 1000) {
-    let q = sb.from("subscriptions").select(SELECT).eq("org_id", org.id).range(from, from + 999);
-    if (report === "active") q = q.eq("status", "active").order("amount_base", { ascending: false, nullsFirst: false });
-    else if (report === "upcoming") q = q.eq("status", "active").gte("next_charge_at", nowIso).lte("next_charge_at", in30d).order("next_charge_at", { ascending: true });
-    else if (report === "pastDue") q = q.eq("status", "past_due");
-    else q = q.order("started_at", { ascending: false }); // "all"
-    const { data, error } = await q;
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    rows.push(...((data ?? []) as unknown as Record<string, unknown>[]));
-    if (!data || data.length < 1000) break;
-    if (rows.length >= 100_000) break; // hard safety cap
+  let cols: Array<{ key: string; label: string }>;
+  let rows: Record<string, unknown>[];
+
+  if (report === "monthly" || report === "gateway") {
+    const ov = await getSubscriptionsOverview(org.id, grace);
+    if (report === "monthly") { cols = MONTHLY_COLS; rows = ov.monthly as unknown as Record<string, unknown>[]; }
+    else { cols = GATEWAY_COLS; rows = ov.monthlyByGateway as unknown as Record<string, unknown>[]; }
+  } else {
+    cols = CUST_COLS;
+    const sb = await createServiceClient();
+    const nowIso = new Date().toISOString();
+    const in30d = new Date(Date.now() + 30 * 86_400_000).toISOString();
+    const select = CUST_COLS.map((c) => c.key).join(",");
+    rows = [];
+    for (let from = 0; ; from += 1000) {
+      let q = sb.from("subscriptions").select(select).eq("org_id", org.id).range(from, from + 999);
+      if (report === "active") q = q.eq("status", "active").order("amount_base", { ascending: false, nullsFirst: false });
+      else if (report === "upcoming") q = q.eq("status", "active").gte("next_charge_at", nowIso).lte("next_charge_at", in30d).order("next_charge_at", { ascending: true });
+      else if (report === "pastDue") q = q.eq("status", "past_due");
+      else q = q.order("started_at", { ascending: false });
+      const { data, error } = await q;
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      rows.push(...((data ?? []) as unknown as Record<string, unknown>[]));
+      if (!data || data.length < 1000) break;
+      if (rows.length >= 100_000) break;
+    }
   }
 
   const stamp = new Date().toISOString().slice(0, 10);
@@ -63,7 +102,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   if (format === "xlsx") {
     const XLSX = await import("xlsx");
-    const aoa = [COLS.map((c) => c.label), ...rows.map((r) => COLS.map((c) => (r[c.key] ?? "") as string | number))];
+    const aoa = [cols.map((c) => c.label), ...rows.map((r) => cols.map((c) => (r[c.key] ?? "") as string | number))];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Subscriptions");
@@ -77,12 +116,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
   }
 
-  // CSV
   const esc = (v: unknown) => {
     const str = v == null ? "" : String(v);
     return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
   };
-  const csv = [COLS.map((c) => c.label).join(","), ...rows.map((r) => COLS.map((c) => esc(r[c.key])).join(","))].join("\n");
+  const csv = [cols.map((c) => c.label).join(","), ...rows.map((r) => cols.map((c) => esc(r[c.key])).join(","))].join("\n");
   return new NextResponse(csv, {
     status: 200,
     headers: {
