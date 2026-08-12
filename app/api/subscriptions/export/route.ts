@@ -68,6 +68,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const report = req.nextUrl.searchParams.get("report") ?? "active";
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
   const grace = Math.min(48, Math.max(1, Number(req.nextUrl.searchParams.get("grace")) || 1));
+  const isoDate = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const from = isoDate(req.nextUrl.searchParams.get("from"));
+  const to = isoDate(req.nextUrl.searchParams.get("to"));
 
   let cols: Array<{ key: string; label: string }>;
   let rows: Record<string, unknown>[];
@@ -85,7 +88,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     rows = [];
     for (let offset = 0; ; offset += 200) {
       const { data, error } = await sb.rpc("subscription_list", {
-        p_org: org.id, p_segment: segment, p_grace_months: grace, p_sort: "mrr", p_limit: 200, p_offset: offset,
+        p_org: org.id, p_segment: segment, p_grace_months: grace, p_sort: "mrr", p_limit: 200, p_offset: offset, p_from: from, p_to: to,
       });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       const batch = (data ?? []) as unknown as Record<string, unknown>[];

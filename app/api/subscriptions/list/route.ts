@@ -26,11 +26,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const pageSize = Math.min(100, Math.max(10, Number(p.get("pageSize")) || 50));
   const page = Math.max(1, Number(p.get("page")) || 1);
   const offset = (page - 1) * pageSize;
+  const iso = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const from = iso(p.get("from"));
+  const to = iso(p.get("to"));
 
   const sb = await createServiceClient();
   const { data, error } = await sb.rpc("subscription_list", {
     p_org: org.id, p_segment: segment, p_grace_months: grace,
-    p_search: search, p_sort: sort, p_limit: pageSize, p_offset: offset,
+    p_search: search, p_sort: sort, p_limit: pageSize, p_offset: offset, p_from: from, p_to: to,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

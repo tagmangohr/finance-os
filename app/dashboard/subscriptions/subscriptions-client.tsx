@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import { Download, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { SubscriptionMetricStrip } from "@/components/dashboard/subscription-metric-strip";
 import { computeSubscriptionMetrics } from "@/lib/subscriptions/metric-registry";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
@@ -242,6 +243,8 @@ function CustomersSection({ grace }: { grace: number }) {
   const [sort, setSort] = useState<string>("mrr");
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState(0);
@@ -258,21 +261,28 @@ function CustomersSection({ grace }: { grace: number }) {
   const load = useCallback(async () => {
     setLoading(true);
     const qs = new URLSearchParams({ segment, grace: String(grace), sort, page: String(page), pageSize: String(pageSize), search: debounced });
+    if (from) qs.set("from", from);
+    if (to) qs.set("to", to);
     try {
       const res = await fetch(`/api/subscriptions/list?${qs}`);
       const j = await res.json();
       setRows(j.rows ?? []); setTotal(j.total ?? 0);
     } catch { setRows([]); setTotal(0); }
     setLoading(false);
-  }, [segment, grace, sort, page, debounced]);
+  }, [segment, grace, sort, page, debounced, from, to]);
 
   useEffect(() => { load(); }, [load]);
 
   const pages = Math.max(1, Math.ceil(total / pageSize));
-  const exportHref = (fmt: string) => `/api/subscriptions/export?report=${segment}&format=${fmt}&grace=${grace}`;
+  const exportHref = (fmt: string) => {
+    const q = new URLSearchParams({ report: segment, format: fmt, grace: String(grace) });
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    return `/api/subscriptions/export?${q}`;
+  };
 
   return (
-    <SectionCard title="Customers" subtitle="Every subscription, page-by-page, by status — with full export"
+    <SectionCard title="Customers" subtitle="Every subscription, page-by-page, by status · date filters by start date · with full export"
       action={
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -284,6 +294,7 @@ function CustomersSection({ grace }: { grace: number }) {
             <option value="lapsed">Sort: oldest lapse</option>
             <option value="recent">Sort: newest</option>
           </select>
+          <DateRangePicker from={from} to={to} max={new Date().toISOString().slice(0, 10)} align="end" onChange={(f, t) => { setFrom(f); setTo(t); setPage(1); }} />
           <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />CSV</a>
           <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />Excel</a>
         </div>
