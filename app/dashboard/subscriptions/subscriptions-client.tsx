@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
 } from "recharts";
-import { Download, Search, Repeat, TrendingUp, AlertTriangle, IndianRupee, Activity, HeartPulse, Gauge, ChevronLeft, ChevronRight } from "lucide-react";
-import { MetricCard } from "@/components/dashboard/metric-card";
+import { Download, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/section-card";
+import { SubscriptionMetricStrip } from "@/components/dashboard/subscription-metric-strip";
+import { computeSubscriptionMetrics } from "@/lib/subscriptions/metric-registry";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import type { SubscriptionsOverview } from "@/lib/subscriptions/reports";
 
@@ -15,7 +16,6 @@ const s = (v: unknown) => (v == null ? "" : String(v));
 const nfmt = (n: number) => n.toLocaleString("en-IN");
 const inr = (n: number) => formatCurrency(n, "INR", true);
 const pctv = (n: number | null) => (n == null ? "—" : `${n.toFixed(1)}%`);
-const ratio = (n: number | null) => (n == null ? "—" : n === Infinity ? "∞" : `${n.toFixed(2)}×`);
 
 const GATEWAY_LABEL: Record<string, string> = { cashfree: "Cashfree", stripe: "Stripe", razorpay: "Razorpay", app_store: "Apple Pay", payu: "PayU", paytm: "Paytm", easebuzz: "Easebuzz" };
 const gwLabel = (g: string) => GATEWAY_LABEL[g] ?? g;
@@ -36,19 +36,10 @@ const SEG_STYLE: Record<string, string> = {
 };
 const SEG_TABS = [["active", "Active"], ["past_due", "Past due (revivable)"], ["churned", "Churned"], ["pending", "Pending"]] as const;
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground">{label}</div>
-      <div className="num text-[17px] font-bold leading-tight">{value}</div>
-      {sub && <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">{sub}</div>}
-    </div>
-  );
-}
-
-export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
-  const { now, kpis, byGateway, monthly, cohorts, cohortPeriods, contractMix, grace } = data;
+export function SubscriptionsClient({ data, prefs, orgId }: { data: SubscriptionsOverview; prefs: { pinned: string[]; visibleCount: number }; orgId: string }) {
+  const { kpis, byGateway, monthly, cohorts, cohortPeriods, contractMix, grace } = data;
   const [chartView, setChartView] = useState<"total" | "gateway">("total");
+  const computed = useMemo(() => computeSubscriptionMetrics(data), [data]);
 
   const monthlyChart = monthly.map((m) => ({ month: monthLabel(m.month), MRR: m.mrr, New: m.newSubs, Churned: -m.churnedSubs }));
   const gatewayList = useMemo(() => {
@@ -82,28 +73,8 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
         </div>
       </div>
 
-      {/* Primary KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
-        <MetricCard title="MRR" value={inr(now.active.mrr)} icon={<IndianRupee className="size-4" />} accentColor="#10b981" subtitle="Active run-rate" />
-        <MetricCard title="ARR" value={inr(now.arr)} icon={<TrendingUp className="size-4" />} subtitle="MRR × 12" />
-        <MetricCard title="Net-new MRR" value={inr(kpis.netNewMrr)} icon={<Activity className="size-4" />} trend={kpis.mrrGrowthPct ?? undefined} trendLabel="MoM" subtitle="vs last complete month" accentColor="#6366f1" />
-        <MetricCard title="Active subscriptions" value={nfmt(now.active.subs)} icon={<Repeat className="size-4" />} subtitle={`${nfmt(now.totalCustomers)} incl. past-due`} />
-      </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter-1">
-        <MetricCard title="Past due (revivable)" value={nfmt(now.pastDue.subs)} icon={<AlertTriangle className="size-4" />} accentColor="#f59e0b" subtitle={`${inr(now.pastDue.mrr)} recoverable · lapsed <1mo`} />
-        <MetricCard title="Logo churn" value={pctv(kpis.logoChurnPct)} icon={<Activity className="size-4" />} accentColor="#ef4444" subtitle="last complete month" />
-        <MetricCard title="Net revenue retention" value={pctv(kpis.nrrPct)} icon={<HeartPulse className="size-4" />} accentColor="#8b5cf6" subtitle="rev-churn basis" />
-        <MetricCard title="Quick ratio" value={ratio(kpis.quickRatio)} icon={<Gauge className="size-4" />} accentColor="#0ea5e9" subtitle="new ÷ churned MRR" />
-      </div>
-      {/* Secondary metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 animate-enter-1">
-        <Stat label="ARPU" value={formatCurrency(now.arpu, "INR")} sub="MRR ÷ active" />
-        <Stat label="LTV" value={kpis.ltv == null ? "—" : inr(kpis.ltv)} sub="ARPU × lifetime" />
-        <Stat label="Avg lifetime" value={kpis.avgLifetimeMonths == null ? "—" : `${kpis.avgLifetimeMonths.toFixed(1)} mo`} sub="1 ÷ churn" />
-        <Stat label="Renewal success" value={pctv(kpis.renewalSuccessPct)} sub="charges this month" />
-        <Stat label="Renewals ₹" value={inr(kpis.renewalsThisMonth)} sub="collected this month" />
-        <Stat label="Top-10 concentration" value={pctv(kpis.concentrationPct)} sub="of MRR" />
-      </div>
+      {/* Customizable KPI strip — pin/reorder/count via the Customize drawer */}
+      <SubscriptionMetricStrip computed={computed} initialPinned={prefs.pinned} initialVisibleCount={prefs.visibleCount} orgId={orgId} />
 
       {/* Growth over time */}
       <SectionCard title="Growth over time" subtitle={chartView === "total" ? "Active MRR and net subscriber movement, by month" : "MRR by gateway, stacked, by month"}
