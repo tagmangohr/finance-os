@@ -40,6 +40,15 @@ function fillMonths(byKey: Map<string, Partial<MonthlyPoint>>): MonthlyPoint[] {
  * lands. Never throws — a data problem yields zeros, not a broken page.
  */
 export async function getMetricData(orgId: string, supabase: SupabaseClient): Promise<MetricData> {
+  // Primary: trigger-maintained rollups (migration 068) — precomputed, instant,
+  // scales to millions of rows. Never scans the raw table, so it can't time out
+  // and silently zero the dashboard (the old failure mode with the plain views).
+  try {
+    const viaRollups = await fromRollups(orgId, supabase);
+    if (viaRollups) return viaRollups;
+  } catch {
+    /* rollups unavailable → fall through to the (slower) views */
+  }
   try {
     const viaViews = await fromViews(orgId, supabase);
     if (viaViews) return viaViews;
@@ -51,6 +60,53 @@ export async function getMetricData(orgId: string, supabase: SupabaseClient): Pr
   } catch {
     return { ...emptyData(), source: "fallback" };
   }
+}
+
+// ── Primary path: trigger-maintained rollups (migration 068) ─────────────────
+async function fromRollups(orgId: string, supabase: SupabaseClient): Promise<MetricData | null> {
+  const keys = monthSkeleton(MONTHS_BACK);
+  const from = `${keys[0]}-01`;
+  const to = new Date().toISOString().slice(0, 10);
+  const [m, h, c, t] = await Promise.all([
+    supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    supabase.rpc("dash_metrics_health" as never, { p_org: orgId } as never),
+    supabase.rpc("dash_metrics_customers" as never, { p_org: orgId } as never),
+    supabase.rpc("dash_metrics_totals" as never, { p_org: orgId } as never),
+  ]);
+  const errs = [m.error, h.error, c.error, t.error].filter(Boolean) as { code?: string; message?: string }[];
+  if (errs.length) {
+    // 42883 = undefined_function → migration 068 not applied → signal fallback.
+    if (errs.some((e) => e.code === "42883" || /does not exist/i.test(e.message ?? ""))) return null;
+    throw new Error(errs[0].message ?? "rollup RPC failed");
+  }
+
+  const byKey = new Map<string, Partial<MonthlyPoint>>();
+  let expenseSeen = 0;
+  for (const row of (m.data ?? []) as Record<string, unknown>[]) {
+    const key = String(row.month).slice(0, 7);
+    const gross = Number(row.gross_revenue ?? 0);
+    const refunds = Number(row.refunds ?? 0);
+    const expense = Number(row.expense_total ?? 0);
+    expenseSeen += expense;
+    byKey.set(key, { gross, refunds, net: gross - refunds, expense, txns: Number(row.txn_count ?? 0), customers: Number(row.paying_customers ?? 0) });
+  }
+  const hh = ((h.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
+  const cc = ((c.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
+  const tt = ((t.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
+
+  return {
+    monthly: fillMonths(byKey),
+    health: {
+      completed: Number(hh.completed_count ?? 0), failed: Number(hh.failed_count ?? 0),
+      pending: Number(hh.pending_count ?? 0), refunded: Number(hh.refunded_count ?? 0),
+      grossVolume: Number(hh.gross_volume ?? 0), netCompletedVolume: Number(hh.net_completed_volume ?? 0),
+      refundAmount: Number(hh.refund_amount ?? 0), disputeCount: Number(hh.dispute_count ?? 0), disputeAmount: Number(hh.dispute_amount ?? 0),
+    },
+    customers: { paying: Number(cc.paying_customers ?? 0), netRevenue: Number(cc.net_revenue ?? 0), txns: Number(cc.txn_count ?? 0) },
+    totals: { lifetimeInflow: Number(tt.lifetime_inflow ?? 0), lifetimeOutflow: Number(tt.lifetime_outflow ?? 0) },
+    hasExpenses: expenseSeen > 0,
+    source: "views",
+  };
 }
 
 function emptyData(): MetricData {
