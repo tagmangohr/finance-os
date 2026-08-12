@@ -21,7 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const p = req.nextUrl.searchParams;
   const segment = SEGMENTS.has(p.get("segment") ?? "") ? p.get("segment")! : "active";
   const sort = SORTS.has(p.get("sort") ?? "") ? p.get("sort")! : "mrr";
-  const grace = Math.min(48, Math.max(1, Number(p.get("grace")) || 6));
+  const grace = Math.min(48, Math.max(1, Number(p.get("grace")) || 1));
   const search = (p.get("search") ?? "").trim().slice(0, 120) || null;
   const pageSize = Math.min(100, Math.max(10, Number(p.get("pageSize")) || 50));
   const page = Math.max(1, Number(p.get("page")) || 1);

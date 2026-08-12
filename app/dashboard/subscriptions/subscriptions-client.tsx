@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Bar, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceLine,
 } from "recharts";
@@ -49,10 +48,6 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
   const { now, kpis, byGateway, monthly, cohorts, cohortPeriods, contractMix, grace } = data;
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const setGrace = (g: number) => startTransition(() => router.push(`?grace=${g}`));
-
   const [chartView, setChartView] = useState<"total" | "gateway">("total");
 
   const monthlyChart = monthly.map((m) => ({ month: monthLabel(m.month), MRR: m.mrr, New: m.newSubs, Churned: -m.churnedSubs }));
@@ -83,15 +78,8 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-lg font-semibold tracking-tight">Subscriptions</h1>
-          <p className="text-xs text-muted-foreground">Recurring revenue across all gateways · MRR/ARR are current run-rate; new/churned are month-wise</p>
+          <p className="text-xs text-muted-foreground">Recurring revenue across all gateways · MRR/ARR are current run-rate; new/churned are month-wise · churned once &gt;1 month past due</p>
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          Revival window
-          <select value={grace} onChange={(e) => setGrace(Number(e.target.value))} className="h-7 rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-ring">
-            {[3, 6, 12, 24].map((g) => <option key={g} value={g}>{g} months</option>)}
-          </select>
-          {pending && <span className="text-[10px]">updating…</span>}
-        </label>
       </div>
 
       {/* Primary KPIs */}
@@ -102,7 +90,7 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
         <MetricCard title="Active subscriptions" value={nfmt(now.active.subs)} icon={<Repeat className="size-4" />} subtitle={`${nfmt(now.totalCustomers)} incl. past-due`} />
       </div>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter-1">
-        <MetricCard title="Past due (revivable)" value={nfmt(now.pastDue.subs)} icon={<AlertTriangle className="size-4" />} accentColor="#f59e0b" subtitle={`${inr(now.pastDue.mrr)} recoverable · ${grace}mo`} />
+        <MetricCard title="Past due (revivable)" value={nfmt(now.pastDue.subs)} icon={<AlertTriangle className="size-4" />} accentColor="#f59e0b" subtitle={`${inr(now.pastDue.mrr)} recoverable · lapsed <1mo`} />
         <MetricCard title="Logo churn" value={pctv(kpis.logoChurnPct)} icon={<Activity className="size-4" />} accentColor="#ef4444" subtitle="last complete month" />
         <MetricCard title="Net revenue retention" value={pctv(kpis.nrrPct)} icon={<HeartPulse className="size-4" />} accentColor="#8b5cf6" subtitle="rev-churn basis" />
         <MetricCard title="Quick ratio" value={ratio(kpis.quickRatio)} icon={<Gauge className="size-4" />} accentColor="#0ea5e9" subtitle="new ÷ churned MRR" />
@@ -246,7 +234,7 @@ export function SubscriptionsClient({ data }: { data: SubscriptionsOverview }) {
       </div>
 
       {/* Cohort retention */}
-      <SectionCard title="Cohort retention" subtitle={`% of each start-month cohort still active after N months · darker = higher · revival window ${grace}mo`}>
+      <SectionCard title="Cohort retention" subtitle="% of each start-month cohort still active after N months · darker = higher">
         <div className="overflow-x-auto">
           <table className="text-xs" style={{ borderCollapse: "separate", borderSpacing: "2px" }}>
             <thead><tr className="text-muted-foreground">

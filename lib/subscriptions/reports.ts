@@ -38,7 +38,7 @@ function istMonthStart12(d: Date): string {
   return `${d.getUTCFullYear() - 1}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
 }
 
-export async function getSubscriptionsOverview(orgId: string, grace = 6): Promise<SubscriptionsOverview> {
+export async function getSubscriptionsOverview(orgId: string, grace = 1): Promise<SubscriptionsOverview> {
   const sb = await createServiceClient();
   const now = new Date();
   const fromDate = istMonthStart12(now);

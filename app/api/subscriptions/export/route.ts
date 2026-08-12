@@ -67,7 +67,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const report = req.nextUrl.searchParams.get("report") ?? "active";
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
-  const grace = Math.min(48, Math.max(1, Number(req.nextUrl.searchParams.get("grace")) || 6));
+  const grace = Math.min(48, Math.max(1, Number(req.nextUrl.searchParams.get("grace")) || 1));
 
   let cols: Array<{ key: string; label: string }>;
   let rows: Record<string, unknown>[];
