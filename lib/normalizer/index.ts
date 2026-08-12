@@ -1240,10 +1240,12 @@ export function extractCashfreeSubscription(p: CashfreeWebhookPayload): Cashfree
  * therefore unsearchable by customer — unlike Stripe/Razorpay whose charge payloads
  * include the customer inline. This bridges that gap.
  *
- * `counterparty_name` drives the Payments UI label + name search; email/phone go into
- * metadata because search_text = external_id+description+counterparty_name+metadata::text
- * (migration 024), so a lookup by email/phone matches. Fill-only for the name (never
- * blanks an existing label).
+ * `counterparty_name` drives the Payments UI label + name search. Email/phone go into
+ * metadata under the keys `email`/`phone` — the SAME keys the Payments table promotes to
+ * its Email/Phone columns + CSV export (data-client.tsx) and the refund-linker uses
+ * (connectors/sync.ts); search_text = …+metadata::text (migration 024) then makes them
+ * searchable too. (Don't invent new keys like customer_email — the columns wouldn't fill
+ * and the keys would litter the metadata expander.) Fill-only for name.
  *
  * MUST be applied identically by every write path (webhook route, subscription poller,
  * one-time backfill) from the SAME source (cashfree_subscriptions) — otherwise a re-sync
@@ -1267,9 +1269,8 @@ export function applyCashfreeCustomer(
     counterparty_name: txn.counterparty_name ?? name ?? email,
     metadata: {
       ...md,
-      ...(name ? { customer_name: name } : {}),
-      ...(email ? { customer_email: email } : {}),
-      ...(phone ? { customer_phone: phone } : {}),
+      ...(email ? { email } : {}),
+      ...(phone ? { phone } : {}),
     },
   };
 }
