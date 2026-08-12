@@ -151,6 +151,11 @@ export type StripeCharge = {
     email: string | null;
     phone: string | null;
   };
+  // The email Stripe sends the receipt to. Frequently the ONLY customer email present
+  // on subscription/retry charges (billing_details.* come back null there), so it's a
+  // required fallback — without it those charges have no searchable customer identity.
+  receipt_email?: string | null;
+  shipping?: { name?: string | null; phone?: string | null } | null;
   metadata: Record<string, string>;
   failure_code: string | null;
   failure_message: string | null;
@@ -507,6 +512,13 @@ export function normalizeStripeCharge(
     status = "pending";
   }
 
+  // Customer identity for the Payments label + name search. Walk every place Stripe
+  // stashes it: expanded customer → billing_details → shipping → receipt_email. On
+  // subscription/retry charges billing_details.* is null, so receipt_email is the
+  // only email we get — omitting it is exactly what left ~2.6k charges unsearchable.
+  const custEmail = typeof charge.customer === "object" ? charge.customer?.email ?? null : null;
+  const stripeEmail =
+    charge.billing_details?.email ?? custEmail ?? charge.receipt_email ?? null;
   let counterparty: string | null = null;
   if (charge.customer && typeof charge.customer === "object") {
     counterparty =
@@ -514,7 +526,7 @@ export function normalizeStripeCharge(
   }
   if (!counterparty) {
     counterparty =
-      charge.billing_details?.name ?? charge.billing_details?.email ?? null;
+      charge.billing_details?.name ?? charge.shipping?.name ?? stripeEmail;
   }
 
   // Stripe amounts are in smallest unit — divide by 100 for most currencies
@@ -577,8 +589,8 @@ export function normalizeStripeCharge(
         ? charge.amount_refunded
         : charge.amount_refunded / 100,
       fee, // processing fee in charge currency; converted to INR at aggregation
-      email: charge.billing_details?.email ?? (typeof charge.customer === "object" ? charge.customer?.email : null) ?? null,
-      phone: charge.billing_details?.phone ?? null,
+      email: stripeEmail,
+      phone: charge.billing_details?.phone ?? charge.shipping?.phone ?? null,
       statement_descriptor: charge.calculated_statement_descriptor ?? charge.statement_descriptor ?? null,
       stripe_metadata: charge.metadata,
     },

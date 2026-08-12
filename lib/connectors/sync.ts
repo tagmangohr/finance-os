@@ -310,6 +310,18 @@ function toInsertRows(
     // (aggregation falls back to amount, surfacing them rather than mis-summing).
     const amountBase =
       tx.amount_base ?? (tx.currency === BASE_CURRENCY ? tx.amount : null);
+    // Identity backstop (source-agnostic): if a normalizer produced no counterparty
+    // label but did stash a customer email in metadata (the shared `email` key), use
+    // the email as the label. Keeps every charge — from any gateway, present or future —
+    // searchable + displayable by customer, so the "unsearchable charge" gap can't recur
+    // just because a new connector forgets to set counterparty_name. Deterministic from
+    // `tx`, so a re-sync reproduces it (no clobber).
+    const metaEmail =
+      tx.metadata && typeof tx.metadata === "object"
+        ? (tx.metadata as Record<string, unknown>).email
+        : null;
+    const counterpartyName =
+      tx.counterparty_name ?? (typeof metaEmail === "string" && metaEmail ? metaEmail : null);
     return {
     org_id: orgId,
     connector_id: connectorId,
@@ -329,7 +341,7 @@ function toInsertRows(
     card_last4: tx.card_last4 ?? null,
     card_holder: tx.card_holder ?? null,
     counterparty_id: null,
-    counterparty_name: tx.counterparty_name,
+    counterparty_name: counterpartyName,
     description: tx.description,
     source: tx.source,
     status: tx.status,
@@ -417,6 +429,20 @@ export async function persistTransactions(
   if (transactions.length === 0) return out;
 
   const rows = toInsertRows(orgId, connectorId, transactions);
+  // Canary: a payment-ledger credit with NO customer identity at all (no label AND no
+  // email in metadata) is unsearchable by customer — the gap this file's backstop exists
+  // to prevent. If a normalizer still produces one, surface it in logs so a new/changed
+  // gateway is caught early instead of going silently unsearchable.
+  const identityGaps = rows.filter(
+    (r) =>
+      r.type === "credit" &&
+      (r.ledger ?? "payments") === "payments" &&
+      !r.counterparty_name &&
+      !((r.metadata as Record<string, unknown> | null)?.email)
+  ).length;
+  if (identityGaps > 0) {
+    console.warn(`[sync] ${identityGaps}/${rows.length} ${rows[0]?.source ?? "?"} payment credits have no customer identity (no name, no metadata.email) — not searchable by customer`);
+  }
   // Convert foreign-currency rows to the base currency (INR) — the settling
   // gateway can't always provide it (a USD Stripe account never sees INR), so we
   // convert via ECB rates at each transaction's date.
