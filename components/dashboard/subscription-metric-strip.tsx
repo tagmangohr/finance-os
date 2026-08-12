@@ -26,6 +26,8 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
   const [draftPinned, setDraftPinned] = React.useState<string[]>(initialPinned);
   const [draftCount, setDraftCount] = React.useState<number>(initialVisibleCount);
   const dragKey = React.useRef<string | null>(null);
+  const gridDrag = React.useRef<string | null>(null);
+  const [overKey, setOverKey] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     try {
@@ -76,6 +78,22 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
     } finally { setSaving(false); }
   };
 
+  const persistPrefs = async (nextPinned: string[], nextCount: number) => {
+    try { localStorage.setItem(LS_KEY(orgId), JSON.stringify({ pinned: nextPinned, visibleCount: nextCount })); } catch { /* ignore */ }
+    try {
+      await fetch("/api/subscriptions/metric-prefs", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ org_id: orgId, pinned: nextPinned, visibleCount: nextCount }) });
+    } catch { /* keep local */ }
+  };
+  const reorderGrid = (targetKey: string) => {
+    const src = gridDrag.current; gridDrag.current = null; setOverKey(null);
+    if (!src || src === targetKey) return;
+    const from = pinned.indexOf(src), to = pinned.indexOf(targetKey);
+    if (from < 0 || to < 0) return;
+    const next = [...pinned];
+    next.splice(from, 1); next.splice(to, 0, src);
+    setPinned(next); persistPrefs(next, visibleCount);
+  };
+
   const shown = pinned.filter((k) => SUB_METRICS_BY_KEY[k]).slice(0, visibleCount);
 
   return (
@@ -91,10 +109,21 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
         {shown.map((key) => {
           const def = SUB_METRICS_BY_KEY[key];
           const c = computed[key] ?? { value: null, display: "—", available: false };
+          const isTarget = overKey === key && gridDrag.current && gridDrag.current !== key;
           return (
-            <MetricCard key={key} title={def.label} value={c.display} subtitle={c.note ?? undefined}
-              trend={c.available ? c.trend ?? undefined : undefined} trendLabel={c.trendLabel}
-              icon={<def.icon className="w-4 h-4" />} accentColor={def.accent} />
+            <div
+              key={key}
+              draggable
+              onDragStart={() => { gridDrag.current = key; }}
+              onDragEnd={() => { gridDrag.current = null; setOverKey(null); }}
+              onDragOver={(e) => { e.preventDefault(); if (overKey !== key) setOverKey(key); }}
+              onDrop={() => reorderGrid(key)}
+              className={`cursor-grab active:cursor-grabbing rounded-xl transition-shadow ${isTarget ? "ring-2 ring-primary/60" : ""} ${gridDrag.current === key ? "opacity-50" : ""}`}
+            >
+              <MetricCard title={def.label} value={c.display} subtitle={c.note ?? undefined}
+                trend={c.available ? c.trend ?? undefined : undefined} trendLabel={c.trendLabel}
+                icon={<def.icon className="w-4 h-4" />} accentColor={def.accent} />
+            </div>
           );
         })}
       </div>
