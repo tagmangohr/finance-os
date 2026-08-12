@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import {
   normalizeStripeCharge,
   stripeRefundFromCharge,
@@ -127,6 +128,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.warn(`[stripe webhook] no unique connector match (account=${account ?? "none"}); ${event.type} skipped`);
     return NextResponse.json({ received: true, unmatched: true }, { status: 200 });
   }
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  await captureEvent(supabase, {
+    provider: "stripe", connectorId: matched.id, orgId: matched.org_id,
+    eventId: event.id, eventType: event.type,
+    occurredAt: typeof event.created === "number" ? new Date(event.created * 1000).toISOString() : null,
+    signatureOk: true, payload: event,
+  });
 
   // ── Transactions (charge / dispute / payout) ────────────────────────────────
   if (txns.length > 0) {

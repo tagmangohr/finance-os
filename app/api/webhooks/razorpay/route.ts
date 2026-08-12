@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import { upsertRazorpayInvoice } from "@/lib/subscriptions/invoices";
 import { razorpaySubscriptionAdapter } from "@/lib/subscriptions/adapters/razorpay";
@@ -98,6 +99,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await logWebhook(supabase, { outcome: "unmatched", signature_ok: true, event_type: type, order_id: keyId });
     return NextResponse.json({ received: true, unmatched: true }, { status: 200 });
   }
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  const rzpCreated = (event as { created_at?: number }).created_at;
+  await captureEvent(supabase, {
+    provider: "razorpay", connectorId: matched.id, orgId: matched.org_id,
+    eventId: req.headers.get("x-razorpay-event-id"), eventType: type,
+    occurredAt: typeof rzpCreated === "number" ? new Date(rzpCreated * 1000).toISOString() : null,
+    signatureOk: true, payload: event,
+  });
 
   // ── Subscription events ──────────────────────────────────────────────────────
   if (type.startsWith("subscription.")) {

@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { enqueueIncremental, drainSyncJobs } from "@/lib/connectors/jobs";
+import { captureEvent } from "@/lib/events/capture";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import { refreshMercuryBalances } from "@/lib/expenses/mercury-balances";
 import type { Database } from "@/lib/supabase/types";
@@ -110,6 +111,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const orgId = connector.org_id;
   const conn = { id: connector.id, org_id: connector.org_id, type: "mercury" as const };
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  await captureEvent(supabase, {
+    provider: "mercury", connectorId: connector.id, orgId: connector.org_id,
+    eventId: (event as { id?: string }).id ?? null, eventType: type || null,
+    signatureOk: true, payload: event,
+  });
 
   after(async () => {
     const sb = await createServiceClient();

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { SignedDataVerifier, Environment } from "@apple/app-store-server-library";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import { APPLE_ROOT_CERTIFICATES } from "@/lib/apple/root-ca";
 import { normalizeAppStoreTransaction, type AppStoreTransactionInfo } from "@/lib/normalizer";
 import { appStoreSubscriptionAdapter } from "@/lib/subscriptions/adapters/app-store";
@@ -119,6 +120,13 @@ async function handleFiestaRelay(
     });
     return NextResponse.json({ received: true, unmatched: "no app_store connector" }, { status: 200 });
   }
+
+  // Durable archive of the raw (decoded) event (no-op unless capture is enabled).
+  await captureEvent(supabase, {
+    provider: "app_store", connectorId: matched.id, orgId: matched.org_id,
+    eventId: typeof body.notificationUUID === "string" ? body.notificationUUID : null,
+    eventType, signatureOk: false, payload: body,
+  });
 
   // Update the unified subscription model (lifecycle + charge), derived from the
   // notification stream. Runs for ALL sub notifications incl. money-less lifecycle
@@ -265,6 +273,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     });
     return NextResponse.json({ error: "Verification failed" }, { status: 500 });
   }
+
+  // Durable archive of the raw (verified, decoded) event (no-op unless capture is enabled).
+  await captureEvent(supabase, {
+    provider: "app_store", connectorId: matched.id, orgId: matched.org_id,
+    eventId: (payload as { notificationUUID?: string }).notificationUUID ?? null,
+    eventType, signatureOk: true, payload: payload as unknown,
+  });
 
   const txn = txnInfo
     ? normalizeAppStoreTransaction(txnInfo, { notificationType: payload.notificationType, subtype: payload.subtype })

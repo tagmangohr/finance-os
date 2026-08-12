@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, applyCashfreeCustomer, type CashfreeWebhookPayload } from "@/lib/normalizer";
 import { cashfreeSubscriptionAdapter } from "@/lib/subscriptions/adapters/cashfree";
@@ -105,6 +106,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await logWebhook(supabase, { outcome: "bad_json", signature_ok: true, connector_id: matched.id, org_id: matched.org_id });
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  await captureEvent(supabase, {
+    provider: "cashfree", connectorId: matched.id, orgId: matched.org_id,
+    eventType: payload?.type ?? null,
+    occurredAt: (payload as { event_time?: string })?.event_time ?? null,
+    signatureOk: true, payload,
+  });
 
   // ── Subscription registry ──────────────────────────────────────────────────
   // Cashfree has NO list-subscriptions API, so the only way we enumerate a

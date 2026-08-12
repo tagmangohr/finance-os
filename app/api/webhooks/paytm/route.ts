@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { normalizePaytmTransaction, type PaytmTransaction } from "@/lib/normalizer";
 
@@ -81,6 +82,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!verifyPaytmChecksum(params, merchantKey, checksum)) {
     return NextResponse.json({ error: "Invalid checksum" }, { status: 401 });
   }
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  await captureEvent(supabase, {
+    provider: "paytm", connectorId: conn.id, orgId: conn.org_id,
+    eventType: params.STATUS ?? null, eventId: params.TXNID ?? params.ORDERID ?? null,
+    signatureOk: true, payload: params,
+  });
 
   // Map Paytm's uppercase callback params to the normalizer's shape.
   const paytmTxn: PaytmTransaction = {

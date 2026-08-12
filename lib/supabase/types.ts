@@ -34,10 +34,43 @@ export interface Database {
           last_synced_at: string | null;
           synced_through: string | null;
           events_synced_through: string | null;
+          capture_events: boolean;
           created_at: string;
         };
         Insert: Omit<Database["public"]["Tables"]["connectors"]["Row"], "id" | "created_at">;
         Update: Partial<Database["public"]["Tables"]["connectors"]["Insert"]>;
+      };
+      gateway_events: {
+        Row: {
+          id: string;
+          provider: string;
+          connector_id: string | null;
+          org_id: string | null;
+          event_id: string | null;
+          event_type: string | null;
+          dedup_key: string;
+          occurred_at: string | null;
+          received_at: string;
+          signature_ok: boolean;
+          source: string;
+          payload: Json;
+          processed_at: string | null;
+          process_error: string | null;
+        };
+        Insert: Omit<Database["public"]["Tables"]["gateway_events"]["Row"], "id" | "received_at" | "occurred_at" | "processed_at" | "process_error" | "event_id" | "event_type" | "org_id" | "connector_id" | "signature_ok" | "source"> & {
+          id?: string;
+          received_at?: string;
+          occurred_at?: string | null;
+          processed_at?: string | null;
+          process_error?: string | null;
+          event_id?: string | null;
+          event_type?: string | null;
+          org_id?: string | null;
+          connector_id?: string | null;
+          signature_ok?: boolean;
+          source?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["gateway_events"]["Insert"]>;
       };
       webhook_events: {
         Row: {

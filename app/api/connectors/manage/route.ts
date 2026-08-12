@@ -191,6 +191,13 @@ export async function PATCH(request: Request) {
       updates.name = body.name.trim();
     }
 
+    if (body.capture_events !== undefined) {
+      if (typeof body.capture_events !== "boolean") {
+        return NextResponse.json({ error: "capture_events must be a boolean" }, { status: 400 });
+      }
+      updates.capture_events = body.capture_events;
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "No updates provided" }, { status: 400 });
     }

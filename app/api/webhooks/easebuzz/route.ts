@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { captureEvent } from "@/lib/events/capture";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { normalizeEasebuzzTransaction, type EasebuzzTransaction } from "@/lib/normalizer";
 
@@ -59,6 +60,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
     return NextResponse.json({ error: "Invalid hash" }, { status: 401 });
   }
+
+  // Durable archive of the raw event (no-op unless capture is enabled for this connector).
+  await captureEvent(supabase, {
+    provider: "easebuzz", connectorId: conn.id, orgId: conn.org_id,
+    eventType: params.status ?? null, eventId: params.easepayid ?? params.txnid ?? null,
+    signatureOk: true, payload: params,
+  });
 
   try {
     await persistTransactions(supabase, conn.org_id, conn.id, [
