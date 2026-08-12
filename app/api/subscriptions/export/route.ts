@@ -77,23 +77,21 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (report === "monthly") { cols = MONTHLY_COLS; rows = ov.monthly as unknown as Record<string, unknown>[]; }
     else { cols = GATEWAY_COLS; rows = ov.monthlyByGateway as unknown as Record<string, unknown>[]; }
   } else {
-    cols = CUST_COLS;
+    // Customer-level export for a DERIVED segment (active / past_due / churned /
+    // pending) — same classification the page shows, paginated past the RPC cap.
+    cols = [...CUST_COLS, { key: "period_end", label: "Period end (derived)" }, { key: "segment", label: "Segment" }];
+    const segment = ["active", "past_due", "churned", "pending"].includes(report) ? report : "active";
     const sb = await createServiceClient();
-    const nowIso = new Date().toISOString();
-    const in30d = new Date(Date.now() + 30 * 86_400_000).toISOString();
-    const select = CUST_COLS.map((c) => c.key).join(",");
     rows = [];
-    for (let from = 0; ; from += 1000) {
-      let q = sb.from("subscriptions").select(select).eq("org_id", org.id).range(from, from + 999);
-      if (report === "active") q = q.eq("status", "active").order("amount_base", { ascending: false, nullsFirst: false });
-      else if (report === "upcoming") q = q.eq("status", "active").gte("next_charge_at", nowIso).lte("next_charge_at", in30d).order("next_charge_at", { ascending: true });
-      else if (report === "pastDue") q = q.eq("status", "past_due");
-      else q = q.order("started_at", { ascending: false });
-      const { data, error } = await q;
+    for (let offset = 0; ; offset += 200) {
+      const { data, error } = await sb.rpc("subscription_list", {
+        p_org: org.id, p_segment: segment, p_grace_months: grace, p_sort: "mrr", p_limit: 200, p_offset: offset,
+      });
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      rows.push(...((data ?? []) as unknown as Record<string, unknown>[]));
-      if (!data || data.length < 1000) break;
-      if (rows.length >= 100_000) break;
+      const batch = (data ?? []) as unknown as Record<string, unknown>[];
+      rows.push(...batch);
+      if (batch.length < 200) break;
+      if (rows.length >= 200_000) break;
     }
   }
 
