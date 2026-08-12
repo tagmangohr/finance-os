@@ -3,40 +3,30 @@
 export const dynamic = "force-dynamic";
 
 import { useState } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { TrendingUp, Loader2 } from "lucide-react";
 import { signInAction } from "./actions";
 
+/**
+ * Login only — Finance OS is invite-only. Accounts are created exclusively by an
+ * admin via Team → Create User (server-side admin.createUser); there is no public
+ * self-signup. (Also disable "Allow new users to sign up" in Supabase Auth settings
+ * for the hard server-side lock — this page removes the client path.)
+ */
 export default function LoginPage() {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading]   = useState(false);
-  const [mode, setMode]         = useState<"login" | "signup">("login");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     try {
-      if (mode === "login") {
-        // Server Action: calls signInWithPassword server-side so the session
-        // is written via Set-Cookie headers in the action response. The browser
-        // stores those cookies before window.location.href fires, meaning the
-        // next server render has a fully-authenticated request.
-        const result = await signInAction(email, password);
-        if (result.error) throw new Error(result.error);
-        window.location.href = "/dashboard";
-      } else {
-        const supabase = createClient();
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
-        });
-        if (error) throw error;
-        toast.success("Check your email to confirm your account.");
-        setLoading(false);
-      }
+      // Server Action: calls signInWithPassword server-side so the session is
+      // written via Set-Cookie headers before window.location.href fires.
+      const result = await signInAction(email, password);
+      if (result.error) throw new Error(result.error);
+      window.location.href = "/dashboard";
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Something went wrong";
       toast.error(message);
@@ -55,14 +45,8 @@ export default function LoginPage() {
         </div>
 
         <div className="bg-card border border-border rounded-xl p-8 shadow-sm">
-          <h1 className="text-2xl font-semibold mb-1">
-            {mode === "login" ? "Welcome back" : "Get started"}
-          </h1>
-          <p className="text-muted-foreground text-sm mb-6">
-            {mode === "login"
-              ? "Sign in to your Finance OS"
-              : "Create your Finance OS account"}
-          </p>
+          <h1 className="text-2xl font-semibold mb-1">Welcome back</h1>
+          <p className="text-muted-foreground text-sm mb-6">Sign in to your Finance OS</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -95,23 +79,17 @@ export default function LoginPage() {
               className="w-full h-10 bg-primary text-primary-foreground rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              {mode === "login" ? "Sign in" : "Create account"}
+              Sign in
             </button>
           </form>
 
-          <p className="text-center text-sm text-muted-foreground mt-5">
-            {mode === "login" ? "Don't have an account?" : "Already have an account?"}{" "}
-            <button
-              onClick={() => setMode(mode === "login" ? "signup" : "login")}
-              className="text-primary font-medium hover:underline"
-            >
-              {mode === "login" ? "Sign up" : "Sign in"}
-            </button>
+          <p className="text-center text-xs text-muted-foreground mt-5">
+            Access is invite-only. Ask your admin to create your account.
           </p>
         </div>
 
         <p className="text-center text-xs text-muted-foreground mt-4">
-          The intelligence layer for founders & MSMEs
+          The intelligence layer for founders &amp; MSMEs
         </p>
       </div>
     </div>

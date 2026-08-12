@@ -24,5 +24,17 @@ export default async function OnboardingPage() {
 
   if (existingOrg) redirect("/dashboard");
 
+  // Invited member (no owned org)? They belong to an org someone else owns — send
+  // them there instead of offering onboarding, so they never create a duplicate org
+  // (this is how stray orgs got created). Invite-only: members don't self-onboard.
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .limit(1)
+    .maybeSingle();
+  if (membership) redirect("/dashboard");
+
   return <OnboardingForm />;
 }

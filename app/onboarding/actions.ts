@@ -46,6 +46,22 @@ export async function createOrgAction(formData: {
     return {};
   }
 
+  // Invited member with no owned org: never create a duplicate org (invite-only) —
+  // activate the org they were added to. Server-side guard so a direct POST can't
+  // bypass the onboarding page's redirect.
+  const { data: membership } = await supabase
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (membership) {
+    cookieStore.set(ACTIVE_ORG_COOKIE, membership.org_id, COOKIE_OPTIONS);
+    return {};
+  }
+
   const { orgId, error } = await insertOrg(supabase, user.id, formData);
   if (error || !orgId) return { error: error ?? "Failed to create organisation." };
 
