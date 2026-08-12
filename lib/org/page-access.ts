@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { GRANTABLE_PAGES } from "@/lib/org/pages";
 
 /**
  * Server-side page-access enforcement.
@@ -16,24 +17,19 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
  * through ungated and could bounce a restricted member in a redirect loop.
  */
 
-// Single source of truth: access slug → the route that renders it. Bank and
-// Subscriptions are intentionally absent — they are owner/admin-only PII pages
-// (their page components redirect any restricted member) and are never grantable.
-export const SLUG_ROUTES: Record<string, string> = {
-  dashboard:    "/dashboard",
-  revenue:      "/dashboard/revenue",
-  cashflow:     "/dashboard/cashflow",
-  collections:  "/dashboard/collections",
-  intelligence: "/dashboard/intelligence",
-  connectors:   "/dashboard/connectors",
-  data:         "/dashboard/data",
-};
+// access slug → the route that renders it. Derived from the canonical page
+// registry (lib/org/pages.ts) so the grantable set never drifts from the Team
+// modal's list. Subscriptions/Bank are grantable too (PII — flagged in the
+// registry; the org owner decides per member).
+export const SLUG_ROUTES: Record<string, string> = Object.fromEntries(
+  GRANTABLE_PAGES.map((p) => [p.slug, p.route])
+);
 
 // Preference order for where to send a restricted member who lands on a page
 // they can't see. Profile is the ultimate fallback: it has no access slug, so
 // it is ALWAYS reachable — a member with an empty/mismatched grant set lands
-// there instead of bouncing forever.
-const FALLBACK_ORDER = ["dashboard", "data", "revenue", "cashflow", "collections", "intelligence", "connectors"];
+// there instead of bouncing forever. PII pages sit last (least-surprising landing).
+const FALLBACK_ORDER = ["dashboard", "data", "revenue", "cashflow", "collections", "intelligence", "connectors", "subscriptions", "bank"];
 const SAFE_FALLBACK  = "/dashboard/profile";
 
 function firstAllowedRoute(pageAccess: string[]): string {

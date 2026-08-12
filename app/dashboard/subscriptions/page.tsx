@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { redirect } from "next/navigation";
 import { getActiveOrg } from "@/lib/org/active-org";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { createClient } from "@/lib/supabase/server";
 import { getSubscriptionsOverview } from "@/lib/subscriptions/reports";
 import { getSubMetricPrefs, subDefaultPrefs } from "@/lib/subscriptions/metric-prefs";
@@ -19,9 +20,9 @@ import { SubscriptionsClient } from "./subscriptions-client";
 const GRACE_MONTHS = 1;
 
 export default async function SubscriptionsPage() {
-  const { org, pageAccess } = await getActiveOrg();
+  const { org } = await getActiveOrg();
   if (!org) redirect("/auth/login");
-  if (pageAccess !== null) redirect("/dashboard"); // owners/admins only
+  await requireRouteAccess("subscriptions"); // owners/admins, or members granted the page
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

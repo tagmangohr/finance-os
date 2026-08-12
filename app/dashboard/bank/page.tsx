@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 
 import { redirect } from "next/navigation";
 import { getActiveOrg } from "@/lib/org/active-org";
+import { requireRouteAccess } from "@/lib/org/page-access";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getBankOverviewCached } from "@/lib/expenses/reports";
 import { BankClient } from "./bank-client";
@@ -14,9 +15,9 @@ import { BankClient } from "./bank-client";
  * "Bank" sidebar item is likewise hidden for restricted members.
  */
 export default async function BankPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
-  const { org, pageAccess } = await getActiveOrg();
+  const { org } = await getActiveOrg();
   if (!org) redirect("/auth/login");
-  if (pageAccess !== null) redirect("/dashboard"); // owners/admins only
+  await requireRouteAccess("bank"); // owners/admins, or members granted the page
 
   // Date-range from the URL (?from=YYYY-MM-DD&to=YYYY-MM-DD); default = current FY.
   const sp = await searchParams;

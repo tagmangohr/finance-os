@@ -9,18 +9,13 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { GRANTABLE_PAGES } from "@/lib/org/pages";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-export const PAGE_OPTIONS = [
-  { value: "dashboard",    label: "War Room" },
-  { value: "revenue",      label: "Revenue" },
-  { value: "cashflow",     label: "Cash Flow" },
-  { value: "collections",  label: "Collections" },
-  { value: "intelligence", label: "Intelligence" },
-  { value: "connectors",   label: "Connectors" },
-  { value: "data",         label: "Payments" },
-] as const;
+// Derived from the canonical page registry (lib/org/pages.ts) so any page added
+// there appears here for selection automatically. `pii` flags customer-data pages.
+export const PAGE_OPTIONS = GRANTABLE_PAGES.map((p) => ({ value: p.slug, label: p.label, pii: !!p.pii }));
 
 export type Role = "admin" | "manager" | "viewer";
 

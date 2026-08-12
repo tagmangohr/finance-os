@@ -16,7 +16,7 @@ const SORTS = new Set(["mrr", "lapsed", "recent"]);
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
   if (!org) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (pageAccess !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (pageAccess !== null && !pageAccess.includes("subscriptions")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const p = req.nextUrl.searchParams;
   const segment = SEGMENTS.has(p.get("segment") ?? "") ? p.get("segment")! : "active";

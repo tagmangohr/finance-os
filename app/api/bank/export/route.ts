@@ -34,7 +34,7 @@ const COLS: Array<{ key: string; label: string }> = [
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
   if (!org) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (pageAccess !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (pageAccess !== null && !pageAccess.includes("bank")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const treatment = req.nextUrl.searchParams.get("treatment") ?? "all";
   const format = req.nextUrl.searchParams.get("format") ?? "csv";

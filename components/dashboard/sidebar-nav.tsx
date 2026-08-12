@@ -31,7 +31,7 @@ const NAV_GROUPS: NavGroup[] = [
     { href: "/dashboard/collections",   slug: "collections",   label: "Collections",   Icon: Inbox },
   ]},
   { label: "Money out", items: [
-    // slug "bank" is never in a restricted member's page_access → owner/admin only.
+    // "bank" is a grantable (PII) slug now — visible to owners/admins and members granted it.
     { href: "/dashboard/bank",     slug: "bank",     label: "Bank",      Icon: Landmark },
     { href: "/dashboard/cashflow", slug: "cashflow", label: "Cash flow", Icon: Activity },
   ]},

@@ -63,7 +63,7 @@ const GATEWAY_COLS: Array<{ key: string; label: string }> = [
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
   if (!org) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (pageAccess !== null) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (pageAccess !== null && !pageAccess.includes("subscriptions")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const report = req.nextUrl.searchParams.get("report") ?? "active";
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
