@@ -144,6 +144,7 @@ export type StripeCharge = {
         id: string;
         name: string | null;
         email: string | null;
+        phone?: string | null;
       }
     | null;
   billing_details: {
@@ -517,6 +518,7 @@ export function normalizeStripeCharge(
   // subscription/retry charges billing_details.* is null, so receipt_email is the
   // only email we get — omitting it is exactly what left ~2.6k charges unsearchable.
   const custEmail = typeof charge.customer === "object" ? charge.customer?.email ?? null : null;
+  const custPhone = typeof charge.customer === "object" ? charge.customer?.phone ?? null : null;
   const stripeEmail =
     charge.billing_details?.email ?? custEmail ?? charge.receipt_email ?? null;
   let counterparty: string | null = null;
@@ -590,7 +592,7 @@ export function normalizeStripeCharge(
         : charge.amount_refunded / 100,
       fee, // processing fee in charge currency; converted to INR at aggregation
       email: stripeEmail,
-      phone: charge.billing_details?.phone ?? charge.shipping?.phone ?? null,
+      phone: charge.billing_details?.phone ?? custPhone ?? charge.shipping?.phone ?? null,
       statement_descriptor: charge.calculated_statement_descriptor ?? charge.statement_descriptor ?? null,
       stripe_metadata: charge.metadata,
     },

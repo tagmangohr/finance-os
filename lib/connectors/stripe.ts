@@ -82,11 +82,15 @@ export class StripeConnector {
           lte: Math.floor(toDate.getTime() / 1000),
         },
         limit: 100,
-        // No expands. balance_transaction was tried for FX but this account
-        // settles in USD (no INR there) so it added per-page latency for nothing
-        // — INR now comes from ECB rates (lib/fx). data.customer is also avoided;
-        // billing_details (inline) covers the counterparty name. Keeping pages
-        // lean is what keeps each backfill job under the function timeout.
+        // Expand data.customer so EVERY charge carries the customer's email/name/phone
+        // for the Payments customer-search — including one-time-purchase charges where
+        // billing_details.* and receipt_email come back null (a large slice of failed
+        // charges did exactly that, leaving them unsearchable). The normalizer reads
+        // charge.customer.{name,email,phone} from this. We do NOT expand balance_transaction
+        // (FX comes from ECB rates, lib/fx) — keeping the expand to one keeps pages light,
+        // and the resumable chunked sync (migration 021) absorbs any extra per-page latency
+        // by simply spanning more chunks rather than timing out.
+        expand: ["data.customer"],
       };
       if (startingAfter) params.starting_after = startingAfter;
 
