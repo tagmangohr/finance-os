@@ -94,8 +94,7 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
           return (
             <MetricCard key={key} title={def.label} value={c.display} subtitle={c.note ?? undefined}
               trend={c.available ? c.trend ?? undefined : undefined} trendLabel={c.trendLabel}
-              icon={<def.icon className="w-4 h-4" />} accentColor={def.accent}
-              sparklineData={c.available ? c.spark : undefined} />
+              icon={<def.icon className="w-4 h-4" />} accentColor={def.accent} />
           );
         })}
       </div>
