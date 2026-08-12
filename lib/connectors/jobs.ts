@@ -172,11 +172,11 @@ export async function pollCashfreeSubscriptions(
     return { polled: 0, inserted: 0, updated: 0 };
   }
 
-  let subs: Array<{ subscription_id: string; plan_name: string | null; customer_name: string | null; currency: string | null }>;
+  let subs: Array<{ subscription_id: string; plan_name: string | null; customer_name: string | null; customer_email: string | null; customer_phone: string | null; currency: string | null }>;
   try {
     const { data, error } = await supabase
       .from("cashfree_subscriptions")
-      .select("subscription_id, plan_name, customer_name, currency")
+      .select("subscription_id, plan_name, customer_name, customer_email, customer_phone, currency")
       .eq("connector_id", connector.id)
       .order("last_polled_at", { ascending: true, nullsFirst: true })
       .limit(limit);
@@ -191,7 +191,8 @@ export async function pollCashfreeSubscriptions(
   for (const s of subs) {
     if (Date.now() > deadline) break;
     const txns = await client.fetchSubscriptionPayments(s.subscription_id, {
-      planName: s.plan_name, customerName: s.customer_name, currency: s.currency,
+      planName: s.plan_name, customerName: s.customer_name,
+      customerEmail: s.customer_email, customerPhone: s.customer_phone, currency: s.currency,
     });
     if (txns.length > 0) {
       const res = await persistTransactions(supabase, connector.org_id, connector.id, txns);

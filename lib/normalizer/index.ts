@@ -1231,6 +1231,50 @@ export function extractCashfreeSubscription(p: CashfreeWebhookPayload): Cashfree
 }
 
 /**
+ * Fold a subscription's customer identity onto a Cashfree payment transaction so the
+ * Payments explorer can find it by customer name / email / phone.
+ *
+ * Cashfree's payment/auth webhook events carry NO customer fields (only STATUS_CHANGED
+ * does — which we route into the subscription registry, not onto the charge). So a bare
+ * subscription payment row has counterparty_name=null and no email in metadata, and is
+ * therefore unsearchable by customer — unlike Stripe/Razorpay whose charge payloads
+ * include the customer inline. This bridges that gap.
+ *
+ * `counterparty_name` drives the Payments UI label + name search; email/phone go into
+ * metadata because search_text = external_id+description+counterparty_name+metadata::text
+ * (migration 024), so a lookup by email/phone matches. Fill-only for the name (never
+ * blanks an existing label).
+ *
+ * MUST be applied identically by every write path (webhook route, subscription poller,
+ * one-time backfill) from the SAME source (cashfree_subscriptions) — otherwise a re-sync
+ * whose row differs would overwrite the identity (see toRefreshFields in connectors/sync).
+ */
+export type CashfreeCustomer = { name?: string | null; email?: string | null; phone?: string | null };
+
+export function applyCashfreeCustomer(
+  txn: NormalizedTransaction,
+  cust: CashfreeCustomer
+): NormalizedTransaction {
+  const name = cust.name?.trim() || null;
+  const email = cust.email?.trim() || null;
+  const phone = cust.phone?.trim() || null;
+  if (!name && !email && !phone) return txn; // nothing known — leave the row as-is
+  const md = (txn.metadata ?? {}) as Record<string, unknown>;
+  return {
+    ...txn,
+    // Prefer a real name for the label; fall back to email so the row is never blank when
+    // we know *something*. Never overwrite a name the row already carries.
+    counterparty_name: txn.counterparty_name ?? name ?? email,
+    metadata: {
+      ...md,
+      ...(name ? { customer_name: name } : {}),
+      ...(email ? { customer_email: email } : {}),
+      ...(phone ? { customer_phone: phone } : {}),
+    },
+  };
+}
+
+/**
  * Normalize ONE payment object from GET /pg/subscriptions/{id}/payments (the poller
  * path — Layer 2's self-healing net). The API shape differs from the webhook, so we
  * read several likely field names defensively and keep the full object as `raw`.
@@ -1256,7 +1300,14 @@ export type CashfreeSubscriptionApiPayment = {
 
 export function normalizeCashfreeSubscriptionApiPayment(
   pay: CashfreeSubscriptionApiPayment,
-  ctx: { subscriptionId: string; planName?: string | null; customerName?: string | null; currency?: string | null }
+  ctx: {
+    subscriptionId: string;
+    planName?: string | null;
+    customerName?: string | null;
+    customerEmail?: string | null;
+    customerPhone?: string | null;
+    currency?: string | null;
+  }
 ): NormalizedTransaction | null {
   // Prefer cf_txn_id so poller rows dedup with recon + the webhook path (see the webhook
   // normalizer). Fall back through the other id fields if the endpoint names it differently.
@@ -1264,14 +1315,14 @@ export function normalizeCashfreeSubscriptionApiPayment(
   if (payId == null) return null;
   const status = mapCashfreePaymentStatus(pay.payment_status ?? pay.status);
   const whenIso = gatewayTimeToIso(pay.payment_time ?? pay.payment_initiated_date ?? pay.scheduled_on);
-  return {
+  const txn: NormalizedTransaction = {
     // Same identity as recon (source "cashfree", cf_pay_<id>) — dedups, never double-counts.
     external_id: `cf_pay_${payId}`,
     type: "credit",
     amount: Number(pay.payment_amount ?? pay.amount ?? 0),
     currency: (pay.payment_currency ?? pay.currency ?? ctx.currency ?? "INR").toUpperCase(),
     category: "payment",
-    counterparty_name: ctx.customerName ?? null,
+    counterparty_name: null,
     description: `Subscription payment · ${ctx.subscriptionId}`,
     source: "cashfree",
     status,
@@ -1287,6 +1338,13 @@ export function normalizeCashfreeSubscriptionApiPayment(
     },
     raw: pay,
   };
+  // Fold in the customer identity from the subscription registry so the charge is
+  // searchable by name/email/phone (Cashfree charge events carry no customer).
+  return applyCashfreeCustomer(txn, {
+    name: ctx.customerName,
+    email: ctx.customerEmail,
+    phone: ctx.customerPhone,
+  });
 }
 
 // ─── Apple App Store normalizers ──────────────────────────────────────────────

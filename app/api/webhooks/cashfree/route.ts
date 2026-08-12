@@ -3,7 +3,7 @@ import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
-import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, type CashfreeWebhookPayload } from "@/lib/normalizer";
+import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, applyCashfreeCustomer, type CashfreeWebhookPayload } from "@/lib/normalizer";
 import { cashfreeSubscriptionAdapter } from "@/lib/subscriptions/adapters/cashfree";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import type { Database } from "@/lib/supabase/types";
@@ -154,7 +154,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.error("[cashfree webhook] unified subscription persist failed (non-fatal):", e);
   }
 
-  const txn = normalizeCashfreeWebhookEvent(payload);
+  let txn = normalizeCashfreeWebhookEvent(payload);
+  // Cashfree charge webhooks carry NO customer — fold in the identity from the
+  // subscription registry (upserted just above) so the charge is searchable by
+  // customer name/email/phone in the Payments explorer. Same source (cashfree_subscriptions)
+  // the nightly poller uses, so a later re-sync reproduces the identical row (no clobber).
+  if (txn?.subscription_id) {
+    try {
+      const { data: sub } = await supabase
+        .from("cashfree_subscriptions")
+        .select("customer_name, customer_email, customer_phone")
+        .eq("subscription_id", txn.subscription_id)
+        .eq("connector_id", matched.id)
+        .maybeSingle();
+      if (sub) txn = applyCashfreeCustomer(txn, { name: sub.customer_name, email: sub.customer_email, phone: sub.customer_phone });
+    } catch {
+      // registry table missing / not applied — persist bare; poller + backfill will enrich later.
+    }
+  }
   if (!txn) {
     // Lifecycle-only subscription events carry no money — but we DID persist their
     // state to the registry above, so record that rather than a bare "ignored".

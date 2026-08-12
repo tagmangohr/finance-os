@@ -121,7 +121,13 @@ export class CashfreeConnector {
    */
   async fetchSubscriptionPayments(
     subscriptionId: string,
-    ctx: { planName?: string | null; customerName?: string | null; currency?: string | null } = {}
+    ctx: {
+      planName?: string | null;
+      customerName?: string | null;
+      customerEmail?: string | null;
+      customerPhone?: string | null;
+      currency?: string | null;
+    } = {}
   ): Promise<NormalizedTransaction[]> {
     try {
       const res = await fetch(
