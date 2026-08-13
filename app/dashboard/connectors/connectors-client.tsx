@@ -400,6 +400,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const [csvFile, setCsvFile] = React.useState<File | null>(null);
   const [csvHeaders, setCsvHeaders] = React.useState<string[]>([]);
   const [csvMapping, setCsvMapping] = React.useState<Record<string, string>>({});
+  // App Store Financial Report upload (per-connector), for fee attribution.
+  const [uploadingReportId, setUploadingReportId] = React.useState<string | null>(null);
 
   // ── Draggable dialog ───────────────────────────────────────────────────────
 
@@ -558,6 +560,37 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       else if (lower.includes("name") || lower.includes("party")) autoMap[h] = "counterparty";
     });
     setCsvMapping(autoMap);
+  };
+
+  // ── App Store Financial Report upload ───────────────────────────────────────
+  // Apple's relay carries the customer price only; the monthly Financial Report is
+  // the only source of net proceeds. Uploading it derives a (country × sku) payout
+  // rate and attributes metadata.fee onto existing/future App Store transactions.
+  const handleAppStoreReportUpload = async (
+    inst: Connector,
+    fileList: FileList | null
+  ) => {
+    if (!fileList || fileList.length === 0) return;
+    setUploadingReportId(inst.id);
+    try {
+      const fd = new FormData();
+      fd.append("org_id", orgId);
+      fd.append("connector_id", inst.id);
+      Array.from(fileList).forEach((f) => fd.append("file", f));
+      const res = await fetch("/api/connectors/app-store-report", { method: "POST", body: fd });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((body as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
+      const rows = ((body as { files?: { inserted: number }[] } | null)?.files ?? []).reduce((a, f) => a + f.inserted, 0);
+      const rates = (body as { rates?: number } | null)?.rates ?? 0;
+      const fees = (body as { fees_backfilled?: number } | null)?.fees_backfilled ?? 0;
+      const booked = ((body as { reconciled?: { booked: number }[] } | null)?.reconciled ?? []).reduce((a, r) => a + r.booked, 0);
+      toast.success(`Imported ${rows} report rows · ${rates} rates · ${fees} fees · ${booked} txns reconciled`);
+      window.location.reload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploadingReportId(null);
+    }
   };
 
   // ── Connect (create) or Save (edit) ────────────────────────────────────────
@@ -1019,6 +1052,28 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                           className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all">
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
+                        {inst.type === "app_store" && (
+                          <label
+                            title="Upload Financial Report(s) — attributes Apple's fees onto transactions"
+                            className={cn(
+                              "p-1.5 rounded-lg cursor-pointer text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent transition-all",
+                              uploadingReportId === inst.id && "opacity-60 pointer-events-none"
+                            )}
+                          >
+                            <Upload className={cn("h-3.5 w-3.5", uploadingReportId === inst.id && "animate-pulse")} />
+                            <input
+                              type="file"
+                              multiple
+                              accept=".txt,.tsv,text/plain,text/tab-separated-values"
+                              className="hidden"
+                              disabled={uploadingReportId === inst.id}
+                              onChange={(e) => {
+                                void handleAppStoreReportUpload(inst, e.target.files);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                        )}
                         {LINK_CONNECTORS.has(inst.type) ? (
                           <button
                             onClick={() => handleLinkSync(inst)}

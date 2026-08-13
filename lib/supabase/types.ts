@@ -72,6 +72,59 @@ export interface Database {
         };
         Update: Partial<Database["public"]["Tables"]["gateway_events"]["Insert"]>;
       };
+      app_store_financial_lines: {
+        Row: {
+          id: string;
+          org_id: string;
+          connector_id: string | null;
+          report_period: string;
+          period_start: string | null;
+          period_end: string | null;
+          transaction_date: string | null;
+          settlement_date: string | null;
+          apple_identifier: string | null;
+          sku: string | null;
+          title: string | null;
+          product_type: string | null;
+          country: string;
+          quantity: number;
+          partner_share: number;
+          extended_partner_share: number;
+          partner_currency: string | null;
+          customer_price: number;
+          customer_currency: string | null;
+          sale_or_return: string | null;
+          promo_code: string | null;
+          order_type: string | null;
+          region: string | null;
+          created_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["app_store_financial_lines"]["Row"], "id" | "created_at"> & {
+          id?: string;
+          created_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["app_store_financial_lines"]["Insert"]>;
+      };
+      app_store_payout_rates: {
+        Row: {
+          id: string;
+          org_id: string;
+          country_alpha2: string;
+          country_alpha3: string | null;
+          sku: string;
+          payout_ratio: number;
+          sample_customer_price: number | null;
+          sample_partner_share: number | null;
+          currency: string | null;
+          units: number;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["app_store_payout_rates"]["Row"], "id" | "updated_at"> & {
+          id?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["app_store_payout_rates"]["Insert"]>;
+      };
       webhook_events: {
         Row: {
           id: string;

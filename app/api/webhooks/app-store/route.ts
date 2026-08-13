@@ -5,6 +5,7 @@ import { persistTransactions } from "@/lib/connectors/sync";
 import { captureEvent } from "@/lib/events/capture";
 import { APPLE_ROOT_CERTIFICATES } from "@/lib/apple/root-ca";
 import { normalizeAppStoreTransaction, type AppStoreTransactionInfo } from "@/lib/normalizer";
+import { stampAppStoreFee } from "@/lib/connectors/app-store-rates";
 import { appStoreSubscriptionAdapter } from "@/lib/subscriptions/adapters/app-store";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import type { Database, Json } from "@/lib/supabase/types";
@@ -157,6 +158,8 @@ async function handleFiestaRelay(
   // Persist the full relayed body as raw (not just the transaction) so the
   // notificationUUID/type/subtype context survives alongside the money row.
   txn.raw = body;
+  // Attribute Apple's fee (customer price − partner share) from the derived rates.
+  await stampAppStoreFee(supabase, matched.org_id, txn);
   try {
     await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
   } catch (err) {
@@ -295,6 +298,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, ignored: eventType }, { status: 200 });
   }
 
+  // Attribute Apple's fee (customer price − partner share) from the derived rates.
+  await stampAppStoreFee(supabase, matched.org_id, txn);
   try {
     await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
   } catch (err) {
