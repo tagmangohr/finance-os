@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { isAuthFailure, requireOrgRead } from "@/lib/api/auth";
+import { getPaymentsAccessForOrg } from "@/lib/org/page-access";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -41,8 +42,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const orgId = body.org_id;
   if (!orgId) return NextResponse.json({ error: "org_id is required" }, { status: 400 });
 
-  const auth = await requireOrgAccess(orgId);
+  const auth = await requireOrgRead(orgId);
   if (isAuthFailure(auth)) return auth.error;
+  // Same Payments gate as the text search — OCR lookup is available to any member
+  // (viewers included) who has the "data" page, search-only or not.
+  const access = await getPaymentsAccessForOrg(orgId);
+  if (!access.allowed) {
+    return NextResponse.json({ error: "Forbidden — no access to Payments" }, { status: 403 });
+  }
 
   const tokens = sanitizeTokens(body.tokens);
   if (tokens.length === 0) {

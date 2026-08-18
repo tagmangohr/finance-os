@@ -83,6 +83,59 @@ export async function requireOrgAccess(
   return { supabase, userId: user.id, org };
 }
 
+/**
+ * Return the org {id, owner_id} if `userId` may READ it — i.e. they own it OR are
+ * an active member of ANY role (viewer included). Reads are gated further by page
+ * access (getPaymentsAccessForOrg); this only proves membership. Distinct from
+ * getWritableOrg, which is admin/manager-only and must stay that way for writes.
+ */
+async function getReadableOrg(
+  service: ServiceClient,
+  userId: string,
+  orgId: string
+): Promise<Pick<OrganizationRow, "id" | "owner_id"> | null> {
+  const { data: org } = await service
+    .from("organizations")
+    .select("id, owner_id")
+    .eq("id", orgId)
+    .maybeSingle();
+
+  if (!org) return null;
+  if (org.owner_id === userId) return org;
+
+  const { data: member } = await service
+    .from("org_members")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .maybeSingle();
+
+  return member ? org : null;
+}
+
+/**
+ * Read-side auth: any active member (viewer/manager/admin) or the owner. Use for
+ * READ endpoints (transactions, summary, image search) whose finer gate is page
+ * access. Do NOT use for writes — those must use requireOrgAccess (writable-org).
+ */
+export async function requireOrgRead(
+  orgId: string
+): Promise<ApiAuthContext | AuthFailure> {
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) {
+    return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  }
+
+  const supabase = await createServiceClient();
+  const org = await getReadableOrg(supabase, user.id, orgId);
+  if (!org) {
+    return { error: NextResponse.json({ error: "Organization not found" }, { status: 404 }) };
+  }
+  return { supabase, userId: user.id, org };
+}
+
 export async function requireConnectorAccess(
   connectorId: string,
   options: { orgId?: string; type?: string } = {}

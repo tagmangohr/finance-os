@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { isAuthFailure, requireOrgRead } from "@/lib/api/auth";
 import { getPaymentsAccessForOrg } from "@/lib/org/page-access";
 import { sanitizeSearchTerm } from "@/lib/api/validation";
 
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const to          = searchParams.get("to") ?? null;
   const search      = sanitizeSearchTerm(searchParams.get("search"));
 
-  const auth = await requireOrgAccess(orgId);
+  const auth = await requireOrgRead(orgId);
   if (isAuthFailure(auth)) return auth.error;
   const access = await getPaymentsAccessForOrg(orgId);
   if (!access.allowed) {

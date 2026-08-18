@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { isAuthFailure, requireOrgRead } from "@/lib/api/auth";
 import { getPaymentsAccessForOrg } from "@/lib/org/page-access";
 import {
   parsePagination,
@@ -38,7 +38,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const { limit, offset } = parsePagination(searchParams);
   const { sortCol, ascending } = parseTransactionSort(searchParams);
 
-  const auth = await requireOrgAccess(orgId);
+  // Read-side auth: any active member (viewers included) — the real gate is the
+  // "data" page permission below. (requireOrgAccess is writable-org = admin/manager
+  // only, which wrongly 404'd viewers before this check could run.)
+  const auth = await requireOrgRead(orgId);
   if (isAuthFailure(auth)) return auth.error;
   // Raw Data is gated by the "data" page permission — block restricted members
   // from pulling transactions via the API directly.
