@@ -95,6 +95,13 @@ export async function getFinancialSummary(): Promise<DashboardSummary> {
   return financialSummaryCached(orgId);
 }
 
+/** Org-scoped fast summary for server contexts that already hold an org id and
+ *  have authorized access (e.g. the AI co-pilot). Same rollup + snapshot path as
+ *  the dashboard — no live full-table scans, so it never hits statement timeouts. */
+export async function getFinancialSummaryForOrg(orgId: string): Promise<DashboardSummary> {
+  return financialSummaryCached(orgId);
+}
+
 // Cached, service-client body (org-scoped aggregate; identical for all members).
 const financialSummaryCached = cachedOrgLoader(
   async (orgId: string): Promise<DashboardSummary> => {

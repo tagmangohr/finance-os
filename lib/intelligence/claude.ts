@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getFinancialSummary } from "./index";
+import { getFinancialSummaryForOrg } from "@/lib/data";
 import { formatCurrency, formatDate, formatRunway } from "@/lib/utils";
 
 export type ChatMessage = {
@@ -10,94 +10,92 @@ export type ChatMessage = {
 
 const client = new Anthropic();
 
-async function buildFinancialContext(
-  orgId: string,
-  supabase: SupabaseClient
-): Promise<string> {
-  const summary = await getFinancialSummary(orgId, supabase);
+async function buildFinancialContext(orgId: string): Promise<string> {
+  // Use the fast, rollup + snapshot-based summary (same path as the dashboard) so
+  // the co-pilot never recomputes the heavy intelligence suite live — that scanned
+  // the raw transactions table on every question and hit Postgres statement timeouts.
+  const s = await getFinancialSummaryForOrg(orgId);
+
+  if (!s.hasData) {
+    return "No financial data is connected for this organisation yet, so there are no numbers to analyse.";
+  }
+
+  const year = new Date().getFullYear().toString();
+  const ytd = s.revenueByMonth
+    .filter((m) => m.month.startsWith(year))
+    .reduce((sum, m) => sum + m.amount, 0);
+
+  const cf = s.cashFlowData ?? [];
+  const inflow = cf.reduce((a, d) => a + (d.inflow || 0), 0);
+  const outflow = cf.reduce((a, d) => a + (d.outflow || 0), 0);
 
   const lines: string[] = [
     "=== CURRENT FINANCIAL STATE ===",
     "",
-    `Cash & Runway:`,
-    `  Cash Balance: ${formatCurrency(summary.runway.cash_balance)}`,
-    `  Monthly Burn: ${formatCurrency(summary.burn_rate.current_month)}`,
-    `  Runway: ${formatRunway(summary.runway.runway_days)} (${summary.runway.severity} zone)`,
-    `  Projected Cash Zero: ${summary.runway.projected_zero_date}`,
+    "Cash & Runway:",
+    `  Cash Balance: ${formatCurrency(s.cashBalance)}`,
+    `  Monthly Burn: ${formatCurrency(s.burnRate)}`,
+    `  Runway: ${formatRunway(s.runwayDays)}`,
     "",
-    `Revenue:`,
-    `  MRR: ${formatCurrency(summary.revenue.mrr)}`,
-    `  ARR: ${formatCurrency(summary.revenue.arr)}`,
-    `  MoM Growth: ${summary.revenue.mom_growth.toFixed(1)}%`,
-    `  YTD Revenue: ${formatCurrency(summary.revenue.total_ytd)}`,
+    "Revenue:",
+    `  MRR: ${formatCurrency(s.mrr)}`,
+    `  ARR: ${formatCurrency(s.arr)}`,
+    `  MoM Growth: ${s.mrrGrowth.toFixed(1)}%`,
+    `  YTD Revenue: ${formatCurrency(ytd)}`,
     "",
-    `Burn Rate (this month vs last month):`,
-    `  This Month: ${formatCurrency(summary.burn_rate.current_month)}`,
-    `  Last Month: ${formatCurrency(summary.burn_rate.previous_month)}`,
-    `  Change: ${summary.burn_rate.change_pct.toFixed(1)}% (${summary.burn_rate.trend})`,
-    `  Top spend categories: ${summary.burn_rate.top_categories.slice(0, 3).map(c => `${c.category} ${formatCurrency(c.amount)} (${c.pct.toFixed(0)}%)`).join(", ")}`,
-    "",
-    `Collections (Accounts Receivable):`,
-    `  Total Outstanding: ${formatCurrency(summary.collections.total_outstanding)}`,
-    `  0-30 days: ${formatCurrency(summary.collections.overdue_0_30)}`,
-    `  31-60 days: ${formatCurrency(summary.collections.overdue_31_60)}`,
-    `  61-90 days: ${formatCurrency(summary.collections.overdue_61_90)}`,
-    `  90+ days: ${formatCurrency(summary.collections.overdue_90_plus)}`,
-    `  Collection Rate: ${summary.collections.collection_rate.toFixed(1)}%`,
+    "Burn:",
+    `  This Month: ${formatCurrency(s.burnRate)}`,
+    `  MoM Change: ${s.burnChange.toFixed(1)}%`,
   ];
 
-  if (summary.collections.top_debtors.length > 0) {
-    lines.push(`  Top debtors:`);
-    summary.collections.top_debtors.slice(0, 3).forEach((d) => {
-      lines.push(`    - ${d.name}: ${formatCurrency(d.amount)} (${d.days_overdue}d overdue)`);
+  if (s.categoryBreakdown.length > 0) {
+    lines.push(
+      `  Top spend categories: ${s.categoryBreakdown
+        .slice(0, 3)
+        .map((c) => `${c.category} ${formatCurrency(c.amount)} (${c.pct.toFixed(0)}%)`)
+        .join(", ")}`
+    );
+  }
+
+  if (s.snapshot) {
+    lines.push(
+      "",
+      "Collections (Accounts Receivable):",
+      `  Total Outstanding: ${formatCurrency(s.snapshot.accounts_receivable)}`,
+      `  Collection Rate: ${s.snapshot.collection_rate.toFixed(1)}%`
+    );
+  }
+
+  if (s.topDebtors.length > 0) {
+    lines.push("  Top debtors:");
+    s.topDebtors.slice(0, 5).forEach((d) => {
+      lines.push(`    - ${d.name}: ${formatCurrency(d.outstanding_amount)}`);
     });
+  }
+
+  if (cf.length > 0) {
+    lines.push(
+      "",
+      `Cash Flow (recent ${cf.length} days):`,
+      `  Inflows: ${formatCurrency(inflow)}`,
+      `  Outflows: ${formatCurrency(outflow)}`,
+      `  Net: ${formatCurrency(inflow - outflow)}`
+    );
+  }
+
+  if (s.revenueByMonth.length > 0) {
+    lines.push("", "Revenue by month (recent):");
+    s.revenueByMonth.slice(-6).forEach((m) => lines.push(`  ${m.month}: ${formatCurrency(m.amount)}`));
+  }
+
+  if (s.alerts.length > 0) {
+    lines.push("", `Active Alerts (${s.alerts.length}):`);
+    s.alerts.slice(0, 5).forEach((a) => lines.push(`  - [${a.severity.toUpperCase()}] ${a.title}`));
   }
 
   lines.push(
     "",
-    `Revenue Concentration:`,
-    `  Risk Level: ${summary.concentration.risk_level.toUpperCase()}`,
-    `  HHI: ${summary.concentration.herfindahl_index.toFixed(3)}`,
-  );
-
-  if (summary.concentration.top_customers.length > 0) {
-    lines.push(`  Top customers:`);
-    summary.concentration.top_customers.slice(0, 3).forEach((c) => {
-      lines.push(`    - ${c.name}: ${formatCurrency(c.revenue)} (${c.pct.toFixed(1)}% of revenue)`);
-    });
-  }
-
-  lines.push(
-    "",
-    `Cash Flow (30 days):`,
-    `  Inflows: ${formatCurrency(summary.cash_flow.inflows_30d)}`,
-    `  Outflows: ${formatCurrency(summary.cash_flow.outflows_30d)}`,
-    `  Net: ${formatCurrency(summary.cash_flow.net_30d)}`,
-    `  Forecast 30d: ${formatCurrency(summary.cash_flow.forecast_30d)}`,
-    `  Forecast 90d: ${formatCurrency(summary.cash_flow.forecast_90d)}`,
-    "",
-    `Tax Position (estimates):`,
-    `  GST Liability (quarter): ${formatCurrency(summary.tax_position.gst_liability_estimate)}`,
-    `  Next GST Due: ${summary.tax_position.next_due_date}`,
-    "",
-    `Revenue Forecast:`,
-    `  Next Month: ${formatCurrency(summary.forecast.revenue_next_month)}`,
-    `  Next Quarter: ${formatCurrency(summary.forecast.revenue_next_quarter)}`,
-    `  Confidence: ${(summary.forecast.confidence * 100).toFixed(0)}%`,
-  );
-
-  if (summary.anomalies.anomalies.length > 0) {
-    lines.push(``, `Anomalies detected (${summary.anomalies.anomalies.length}):`);
-    summary.anomalies.anomalies.slice(0, 3).forEach((a) => {
-      lines.push(`  - [${a.severity.toUpperCase()}] ${a.description}: ${formatCurrency(a.amount)} — ${a.reason}`);
-    });
-  }
-
-  lines.push(
-    "",
-    `Active Alerts: ${summary.alert_count.critical} critical, ${summary.alert_count.warning} warnings, ${summary.alert_count.info} info`,
-    "",
-    `Data as of: ${formatDate(summary.generated_at)}`,
+    `Data as of: ${formatDate(s.snapshot?.snapshot_date ?? new Date().toISOString())}`
   );
 
   return lines.join("\n");
@@ -109,7 +107,7 @@ export async function askFinancialQuestion(
   history: ChatMessage[],
   supabase: SupabaseClient
 ): Promise<string> {
-  const context = await buildFinancialContext(orgId, supabase);
+  const context = await buildFinancialContext(orgId);
 
   const systemPrompt = `You are a senior CFO and financial advisor embedded in Finance OS — an intelligence platform built for founders and MSMEs.
 
