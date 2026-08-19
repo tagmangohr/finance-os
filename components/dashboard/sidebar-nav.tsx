@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Activity, Sparkles, type LucideIcon,
+  Repeat, Activity, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,6 @@ type NavGroup = { label: string; items: NavItem[] };
 const NAV_GROUPS: NavGroup[] = [
   { label: "Overview", items: [
     { href: "/dashboard",              slug: "dashboard",    label: "Dashboard",    Icon: LayoutDashboard, exact: true },
-    { href: "/dashboard/intelligence", slug: "intelligence", label: "Intelligence", Icon: Sparkles },
   ]},
   { label: "Money in", items: [
     { href: "/dashboard/data",          slug: "data",          label: "Payments",      Icon: Table2 },

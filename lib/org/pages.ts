@@ -14,7 +14,6 @@ export const GRANTABLE_PAGES: PageDef[] = [
   { slug: "dashboard",     label: "War Room",      route: "/dashboard" },
   { slug: "revenue",       label: "Revenue",       route: "/dashboard/revenue" },
   { slug: "cashflow",      label: "Cash Flow",     route: "/dashboard/cashflow" },
-  { slug: "intelligence",  label: "Intelligence",  route: "/dashboard/intelligence" },
   { slug: "connectors",    label: "Connectors",    route: "/dashboard/connectors" },
   { slug: "data",          label: "Payments",      route: "/dashboard/data" },
   { slug: "subscriptions", label: "Subscriptions", route: "/dashboard/subscriptions", pii: true },

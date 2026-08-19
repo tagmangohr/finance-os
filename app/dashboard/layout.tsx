@@ -98,10 +98,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </main>
       </div>
 
-      {/* AI Co-pilot rail */}
-      <div className="hidden lg:flex flex-shrink-0">
-        <CoPilot orgId={org.id} />
-      </div>
+      {/* AI Co-pilot — floating button + popup (bottom-right, all screens) */}
+      <CoPilot orgId={org.id} />
     </div>
   );
 }

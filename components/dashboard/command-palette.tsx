@@ -2,22 +2,15 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, Brain, Plug, Table2, Landmark, Sparkles, ArrowRight } from "lucide-react";
+import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, Plug, Table2, Landmark } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard",             label: "War Room",      Icon: LayoutDashboard, hint: "⌘1" },
   { href: "/dashboard/revenue",     label: "Revenue",       Icon: TrendingUp,      hint: "⌘2" },
   { href: "/dashboard/cashflow",    label: "Cash Flow",     Icon: ArrowLeftRight,  hint: "⌘3" },
-  { href: "/dashboard/intelligence",label: "Intelligence",  Icon: Brain,           hint: "⌘5" },
   { href: "/dashboard/connectors",  label: "Connectors",    Icon: Plug,            hint: "⌘6" },
   { href: "/dashboard/data",        label: "Payments",      Icon: Table2,          hint: "⌘7" },
   { href: "/dashboard/bank",        label: "Bank",          Icon: Landmark,        hint: "⌘8" },
-];
-
-const AI_PROMPTS = [
-  "Why is burn up this month?",
-  "Forecast cash for next 90 days",
-  "Which customers should I worry about?",
 ];
 
 interface CommandPaletteProps {
@@ -68,7 +61,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               if (e.key === "Escape") onClose();
               if (e.key === "Enter" && filtered[0]) navigate(filtered[0].href);
             }}
-            placeholder="Search pages, or ask co-pilot…"
+            placeholder="Search pages…"
             className="flex-1 bg-transparent border-none outline-none text-[14px] text-foreground placeholder:text-muted-foreground/70"
           />
           <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-accent/40 border border-border rounded text-muted-foreground">esc</kbd>
@@ -87,24 +80,6 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 <n.Icon className="h-3.5 w-3.5 flex-shrink-0" />
                 <span className="flex-1">{n.label}</span>
                 <kbd className="font-mono text-[10px] px-1.5 py-0.5 bg-accent/40 border border-border rounded text-muted-foreground/70">{n.hint}</kbd>
-              </button>
-            ))}
-          </>
-        )}
-
-        {/* Ask co-pilot section */}
-        {!query && (
-          <>
-            <div className="px-4 pt-3 pb-1 text-[9.5px] font-bold tracking-[0.14em] text-muted-foreground/70 uppercase">Ask co-pilot</div>
-            {AI_PROMPTS.map((p) => (
-              <button
-                key={p}
-                onClick={() => { router.push("/dashboard/intelligence?q=" + encodeURIComponent(p)); onClose(); }}
-                className="w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] text-muted-foreground hover:bg-primary/[0.10] hover:text-white transition-all"
-              >
-                <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary/60" />
-                <span className="flex-1">{p}</span>
-                <ArrowRight className="h-3 w-3 text-muted-foreground/70" />
               </button>
             ))}
           </>

@@ -12,7 +12,6 @@ const PAGE_META: Record<string, { label: string }> = {
   "/dashboard":              { label: "War Room" },
   "/dashboard/revenue":      { label: "Revenue" },
   "/dashboard/cashflow":     { label: "Cash Flow" },
-  "/dashboard/intelligence": { label: "Intelligence" },
   "/dashboard/subscriptions": { label: "Subscriptions" },
   "/dashboard/connectors":   { label: "Connectors" },
   "/dashboard/data":         { label: "Payments" },
