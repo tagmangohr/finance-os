@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { parsePaymentText, type ParsedPayment } from "@/lib/ocr/parse";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // ─── Client-side OCR (no AI) ─────────────────────────────────────────────────
 // Reads a payment screenshot entirely in the browser with Tesseract.js (lazy-
@@ -726,12 +727,12 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             </tr>
           </thead>
           <tbody>
-            {loading && rows.length === 0 ? (
-              <tr>
-                <td colSpan={15} className="px-4 py-12 text-center text-muted-foreground/70 text-sm">
-                  Loading…
-                </td>
-              </tr>
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`sk-${i}`} className="border-b border-border/40">
+                  <td colSpan={15} className="px-4 py-2.5"><Skeleton className="h-4 w-full" /></td>
+                </tr>
+              ))
             ) : searchOnlyBlocked ? (
               <tr>
                 <td colSpan={15} className="px-4 py-16 text-center">

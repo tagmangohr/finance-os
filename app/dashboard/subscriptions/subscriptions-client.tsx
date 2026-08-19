@@ -7,6 +7,7 @@ import {
 import { Download, Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { Skeleton } from "@/components/ui/skeleton";
 import { SubscriptionMetricStrip } from "@/components/dashboard/subscription-metric-strip";
 import { computeSubscriptionMetrics } from "@/lib/subscriptions/metric-registry";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
@@ -311,21 +312,30 @@ function CustomersSection({ grace }: { grace: number }) {
             <th className="py-1.5 font-medium">Customer</th><th className="font-medium">Gateway</th><th className="font-medium">Plan</th><th className="font-medium text-right">Amount</th><th className="font-medium">Started</th><th className="font-medium">Last charge</th><th className="font-medium">Period end</th>
           </tr></thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b border-border/30 hover:bg-muted/40">
-                <td className="py-1.5">
-                  <div className="font-medium">{s(r.customer_name) || <span className="text-muted-foreground">—</span>}</div>
-                  <div className="text-muted-foreground">{s(r.customer_email) || s(r.customer_phone)}</div>
-                </td>
-                <td className="text-muted-foreground">{gwLabel(s(r.gateway))}</td>
-                <td className="max-w-[200px] truncate" title={s(r.plan_name)}>{s(r.plan_name) || <span className="text-muted-foreground">—</span>}</td>
-                <td className="text-right tabular-nums">{money(r.plan_amount, r.currency)}<span className="text-muted-foreground">{r.billing_interval ? `/${s(r.billing_interval)[0]}` : ""}</span></td>
-                <td className="text-muted-foreground">{r.started_at ? formatDate(s(r.started_at)) : "—"}</td>
-                <td className="text-muted-foreground">{r.last_charge_at ? formatDate(s(r.last_charge_at)) : "—"}</td>
-                <td className="text-muted-foreground">{r.period_end ? formatDate(s(r.period_end)) : "—"}</td>
-              </tr>
-            ))}
-            {!loading && rows.length === 0 && <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">No subscriptions</td></tr>}
+            {loading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`sk-${i}`} className="border-b border-border/30">
+                  <td colSpan={7} className="py-2"><Skeleton className="h-4 w-full" /></td>
+                </tr>
+              ))
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">No subscriptions</td></tr>
+            ) : (
+              rows.map((r, i) => (
+                <tr key={i} className="border-b border-border/30 hover:bg-muted/40">
+                  <td className="py-1.5">
+                    <div className="font-medium">{s(r.customer_name) || <span className="text-muted-foreground">—</span>}</div>
+                    <div className="text-muted-foreground">{s(r.customer_email) || s(r.customer_phone)}</div>
+                  </td>
+                  <td className="text-muted-foreground">{gwLabel(s(r.gateway))}</td>
+                  <td className="max-w-[200px] truncate" title={s(r.plan_name)}>{s(r.plan_name) || <span className="text-muted-foreground">—</span>}</td>
+                  <td className="text-right tabular-nums">{money(r.plan_amount, r.currency)}<span className="text-muted-foreground">{r.billing_interval ? `/${s(r.billing_interval)[0]}` : ""}</span></td>
+                  <td className="text-muted-foreground">{r.started_at ? formatDate(s(r.started_at)) : "—"}</td>
+                  <td className="text-muted-foreground">{r.last_charge_at ? formatDate(s(r.last_charge_at)) : "—"}</td>
+                  <td className="text-muted-foreground">{r.period_end ? formatDate(s(r.period_end)) : "—"}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

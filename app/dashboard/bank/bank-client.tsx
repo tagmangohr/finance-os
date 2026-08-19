@@ -7,6 +7,7 @@ import {
   Landmark, Search, Download, Sparkles, Wand2, TrendingUp, TrendingDown,
   Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug,
 } from "lucide-react";
+import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ const PAGE = 50;
 
 export function BankClient({ data, hasBankConnector }: { data: BankOverview; hasBankConnector: boolean }) {
   const router = useRouter();
+  const { navigate } = useNavProgress();
   const { totals, categories, byCategory, byCard, monthly, runway } = data;
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -179,7 +181,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
           from={data.period.from}
           to={data.period.to}
           max={new Date().toISOString().slice(0, 10)}
-          onChange={(f, t) => router.push(`/dashboard/bank?from=${f}&to=${t}`)}
+          onChange={(f, t) => navigate(`/dashboard/bank?from=${f}&to=${t}`)}
         />
         <div className="flex items-center gap-2">
           <button

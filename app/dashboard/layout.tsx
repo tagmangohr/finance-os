@@ -7,6 +7,7 @@ import { TopBar } from "@/components/dashboard/top-bar";
 import { MobileSidebarWrapper } from "@/components/dashboard/mobile-sidebar-wrapper";
 import { AutoRefresh } from "@/components/dashboard/auto-refresh";
 import { CoPilot } from "@/components/dashboard/co-pilot";
+import { NavProgressProvider } from "@/components/dashboard/nav-progress";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -91,7 +92,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <TopBar orgId={org.id} orgName={org.name} />
         <main className="flex-1 overflow-y-auto p-4 sm:p-5 bg-background">
           <AutoRefresh />
-          {children}
+          <NavProgressProvider>
+            {children}
+          </NavProgressProvider>
         </main>
       </div>
 
