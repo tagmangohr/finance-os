@@ -2,13 +2,12 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, DollarSign, Brain, Plug, Table2, Landmark, Sparkles, ArrowRight } from "lucide-react";
+import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, Brain, Plug, Table2, Landmark, Sparkles, ArrowRight } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard",             label: "War Room",      Icon: LayoutDashboard, hint: "⌘1" },
   { href: "/dashboard/revenue",     label: "Revenue",       Icon: TrendingUp,      hint: "⌘2" },
   { href: "/dashboard/cashflow",    label: "Cash Flow",     Icon: ArrowLeftRight,  hint: "⌘3" },
-  { href: "/dashboard/collections", label: "Collections",   Icon: DollarSign,      hint: "⌘4" },
   { href: "/dashboard/intelligence",label: "Intelligence",  Icon: Brain,           hint: "⌘5" },
   { href: "/dashboard/connectors",  label: "Connectors",    Icon: Plug,            hint: "⌘6" },
   { href: "/dashboard/data",        label: "Payments",      Icon: Table2,          hint: "⌘7" },

@@ -72,7 +72,7 @@ export async function addOrLinkMember(service: ServiceClient, input: AddMemberIn
   const email = input.email?.trim().toLowerCase();
   const fullName = input.full_name?.trim() || null;
   const role: Role = (ROLES as readonly string[]).includes(input.role ?? "") ? (input.role as Role) : "viewer";
-  const page_access = Array.isArray(input.page_access) ? input.page_access : ["dashboard", "revenue", "cashflow", "collections"];
+  const page_access = Array.isArray(input.page_access) ? input.page_access : ["dashboard", "revenue", "cashflow"];
   const payments_search_only =
     role !== "admin" && page_access.includes("data") && input.payments_search_only === true;
 

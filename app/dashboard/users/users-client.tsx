@@ -138,7 +138,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   const [email,      setEmail]      = React.useState(member?.invited_email ?? "");
   const [role,       setRole]       = React.useState<Role>(member?.role ?? "viewer");
   const [pageAccess, setPageAccess] = React.useState<string[]>(
-    member?.page_access ?? ["dashboard", "revenue", "cashflow", "collections"]
+    member?.page_access ?? ["dashboard", "revenue", "cashflow"]
   );
   // Search-only Payments (support/calling teams): they can look up a payment but
   // never browse the whole book. Only meaningful for restricted members with
@@ -461,7 +461,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
 
 // ─── Bulk add dialog (paste → per-user grid → credentials) ────────────────────
 
-const DEFAULT_PAGES = ["dashboard", "revenue", "cashflow", "collections"];
+const DEFAULT_PAGES = ["dashboard", "revenue", "cashflow"];
 
 type DraftRow = {
   email: string; full_name: string; role: Role;

@@ -239,10 +239,7 @@ export default async function DashboardPage() {
         <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
           <RevenueChart data={v.revenue} />
         </SectionCard>
-        <SectionCard title="Top Debtors"
-          action={!v.preview && v.debtors.length > 0 ? (
-            <Link href="/dashboard/collections" className="text-[10.5px] text-muted-foreground hover:text-primary transition-colors">View all →</Link>
-          ) : undefined}>
+        <SectionCard title="Top Debtors">
           {v.debtors.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-[200px] gap-2">
               <div className="h-9 w-9 rounded-full bg-success/10 border border-success/20 flex items-center justify-center">

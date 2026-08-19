@@ -29,7 +29,7 @@ export const SLUG_ROUTES: Record<string, string> = Object.fromEntries(
 // they can't see. Profile is the ultimate fallback: it has no access slug, so
 // it is ALWAYS reachable — a member with an empty/mismatched grant set lands
 // there instead of bouncing forever. PII pages sit last (least-surprising landing).
-const FALLBACK_ORDER = ["dashboard", "data", "revenue", "cashflow", "collections", "intelligence", "connectors", "subscriptions", "bank"];
+const FALLBACK_ORDER = ["dashboard", "data", "revenue", "cashflow", "intelligence", "connectors", "subscriptions", "bank"];
 const SAFE_FALLBACK  = "/dashboard/profile";
 
 function firstAllowedRoute(pageAccess: string[]): string {

@@ -403,65 +403,6 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string, opts?: {
   return { cashFlowData, monthlyData, forecasts, burnRate, cashBalance, categoryBreakdown, period: { from: cfFrom, to: cfToday } };
 }, ["cashflow-details"]);
 
-export async function getCollectionsData(orgId: string) {
-  const supabase = await createClient();
-
-  const [overdueResult, debtorsResult, snapshotResult] = await Promise.all([
-    supabase
-      .from("vw_overdue_invoices" as never)
-      .select("*")
-      .eq("org_id" as never, orgId)
-      .order("days_overdue" as never, { ascending: false }),
-    supabase
-      .from("entities")
-      .select("*")
-      .eq("org_id", orgId)
-      .eq("type", "customer")
-      .gt("outstanding_amount", 0)
-      .order("outstanding_amount", { ascending: false }),
-    supabase
-      .from("financial_snapshots")
-      .select("accounts_receivable, collection_rate")
-      .eq("org_id", orgId)
-      .order("snapshot_date", { ascending: false })
-      .limit(1)
-      .single(),
-  ]);
-
-  type OverdueRow = {
-    invoice_id: string;
-    entity_id: string;
-    entity_name: string;
-    entity_email: string;
-    invoice_number: string;
-    amount: number;
-    currency: string;
-    status: string;
-    due_date: string;
-    days_overdue: number;
-  };
-
-  const overdueInvoices = (overdueResult.data ?? []) as OverdueRow[];
-
-  // Aging buckets
-  const aging = {
-    current: overdueInvoices.filter((i) => i.days_overdue <= 0).reduce((s, i) => s + i.amount, 0),
-    overdue030: overdueInvoices.filter((i) => i.days_overdue > 0 && i.days_overdue <= 30).reduce((s, i) => s + i.amount, 0),
-    overdue3160: overdueInvoices.filter((i) => i.days_overdue > 30 && i.days_overdue <= 60).reduce((s, i) => s + i.amount, 0),
-    overdue6190: overdueInvoices.filter((i) => i.days_overdue > 60 && i.days_overdue <= 90).reduce((s, i) => s + i.amount, 0),
-    overdue90plus: overdueInvoices.filter((i) => i.days_overdue > 90).reduce((s, i) => s + i.amount, 0),
-  };
-  const totalOutstanding = snapshotResult.data?.accounts_receivable ?? overdueInvoices.reduce((s, i) => s + i.amount, 0);
-
-  return {
-    overdueInvoices,
-    debtors: debtorsResult.data ?? [],
-    aging,
-    totalOutstanding,
-    collectionRate: snapshotResult.data?.collection_rate ?? 0,
-  };
-}
-
 export async function getConnectors(orgId: string): Promise<Connector[]> {
   const supabase = await createClient();
   const { data } = await supabase

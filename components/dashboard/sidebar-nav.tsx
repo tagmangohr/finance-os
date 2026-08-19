@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Inbox, Activity, Sparkles, type LucideIcon,
+  Repeat, Activity, Sparkles, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,6 @@ const NAV_GROUPS: NavGroup[] = [
     { href: "/dashboard/data",          slug: "data",          label: "Payments",      Icon: Table2 },
     { href: "/dashboard/revenue",       slug: "revenue",       label: "Revenue",       Icon: TrendingUp },
     { href: "/dashboard/subscriptions", slug: "subscriptions", label: "Subscriptions", Icon: Repeat },
-    { href: "/dashboard/collections",   slug: "collections",   label: "Collections",   Icon: Inbox },
   ]},
   { label: "Money out", items: [
     // "bank" is a grantable (PII) slug now — visible to owners/admins and members granted it.
