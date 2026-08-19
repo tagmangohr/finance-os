@@ -22,7 +22,9 @@ import { GRANTABLE_PAGES } from "@/lib/org/pages";
 // modal's list. Subscriptions/Bank are grantable too (PII — flagged in the
 // registry; the org owner decides per member).
 export const SLUG_ROUTES: Record<string, string> = Object.fromEntries(
-  GRANTABLE_PAGES.map((p) => [p.slug, p.route])
+  // Routeless grants (e.g. the AI co-pilot capability) aren't navigable, so they
+  // don't belong in the slug→route map used for page gating.
+  GRANTABLE_PAGES.filter((p) => p.route).map((p) => [p.slug, p.route as string])
 );
 
 // Preference order for where to send a restricted member who lands on a page

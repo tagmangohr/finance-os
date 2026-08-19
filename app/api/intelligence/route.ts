@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/server";
+import { hasPageAccessForOrg } from "@/lib/org/page-access";
 import { getFinancialSummary } from "@/lib/intelligence/index";
 import { askFinancialQuestion, type ChatMessage } from "@/lib/intelligence/claude";
 
@@ -17,25 +18,14 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "org_id required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-
-    // Verify user has access to this org
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Co-pilot access = owner/admin, or a member granted the "intelligence" page.
+    if (!(await hasPageAccessForOrg(orgId, "intelligence"))) {
+      return NextResponse.json({ error: "Forbidden — no access to the AI co-pilot" }, { status: 403 });
     }
 
-    const { data: org } = await supabase
-      .from("organizations")
-      .select("id")
-      .eq("id", orgId)
-      .eq("owner_id", user.id)
-      .single();
-
-    if (!org) {
-      return NextResponse.json({ error: "Organization not found" }, { status: 404 });
-    }
-
+    // Access authorized above → read financial data with the service client so a
+    // granted non-owner member still gets a fully-populated context (not RLS-limited).
+    const supabase = await createServiceClient();
     const summary = await getFinancialSummary(orgId, supabase);
     return NextResponse.json(summary);
   } catch (err) {
@@ -60,25 +50,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "org_id and question required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
-
-    // Verify access
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Co-pilot access = owner/admin, or a member granted the "intelligence" page.
+    if (!(await hasPageAccessForOrg(org_id, "intelligence"))) {
+      return NextResponse.json({ error: "Forbidden — no access to the AI co-pilot" }, { status: 403 });
     }
 
-    const { data: org } = await supabase
-      .from("organizations")
-      .select("id")
-      .eq("id", org_id)
-      .eq("owner_id", user.id)
-      .single();
-
-    if (!org) {
-      return NextResponse.json({ error: "Organization not found" }, { status: 404 });
-    }
-
+    // Access authorized → read financial data with the service client (bypasses
+    // member RLS, which would otherwise starve the context for non-owners).
+    const supabase = await createServiceClient();
     const answer = await askFinancialQuestion(org_id, question, history, supabase);
     return NextResponse.json({ answer });
   } catch (err) {

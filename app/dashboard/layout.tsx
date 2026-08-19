@@ -98,8 +98,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
         </main>
       </div>
 
-      {/* AI Co-pilot — floating button + popup (bottom-right, all screens) */}
-      <CoPilot orgId={org.id} />
+      {/* AI Co-pilot — floating button + popup (bottom-right, all screens).
+          Shown to owners/admins (pageAccess === null) and members granted the
+          "intelligence" capability; hidden for everyone else. */}
+      {(pageAccess === null || pageAccess.includes("intelligence")) && (
+        <CoPilot orgId={org.id} />
+      )}
     </div>
   );
 }
