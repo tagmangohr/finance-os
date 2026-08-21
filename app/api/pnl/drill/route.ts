@@ -74,13 +74,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     else q = q.eq("category", key);
   }
 
+  // Exclude settlements/payouts everywhere (matches the rollup's _dm_excluded):
+  // they're PG→bank transfers, not revenue/refunds/fees/expense.
+  q = q
+    .or("category.is.null,category.neq.settlement")
+    .or("source.is.null,and(source.not.ilike.*settlement*,source.not.ilike.*payout*)");
+
   // Optional: restrict to one group (the expand step). Money-in lines group by
-  // gateway (source); expense lines by vendor (counterparty_name). '—' = the
-  // empty/null bucket.
+  // GATEWAY (source stem, e.g. `stripe` covers stripe + stripe_refund); expense
+  // lines by vendor (counterparty_name). '—' = the empty/null bucket.
+  const isGateway = key === "revenue" || key === "refunds" || key === "__pg_fees__";
   if (party != null) {
-    const field = key === "revenue" || key === "refunds" || key === "__pg_fees__" ? "source" : "counterparty_name";
-    if (party === "—") q = q.or(`${field}.is.null,${field}.eq.`);
-    else q = q.eq(field, party);
+    if (party === "—") {
+      const field = isGateway ? "source" : "counterparty_name";
+      q = q.or(`${field}.is.null,${field}.eq.`);
+    } else if (isGateway) {
+      q = q.ilike("source", `${party}%`);
+    } else {
+      q = q.eq("counterparty_name", party);
+    }
   }
 
   const { data, count, error } = await q.order("transaction_date", { ascending: false }).limit(LIMIT);

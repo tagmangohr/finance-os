@@ -149,6 +149,14 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     setTip(text ? { text, x: x ?? 0, y: y ?? 0 } : null);
   }, []);
 
+  // Freeze the last two rows (Net Profit, Net Margin) at the bottom. Net Margin
+  // pins to bottom:0; Net Profit pins just above it, offset by Net Margin's height.
+  const marginRowRef = React.useRef<HTMLTableRowElement>(null);
+  const [marginH, setMarginH] = React.useState(0);
+  React.useLayoutEffect(() => {
+    if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
+  }, [data, change]);
+
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
   // Display columns: month/year columns + a Total column (except annual mode).
@@ -278,15 +286,15 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         </div>
       )}
 
-      {/* grid */}
+      {/* grid — own scroll box so the header (top) and Net Profit/Margin (bottom) stay frozen */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[calc(100vh-215px)]">
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
+                <th className="sticky left-0 top-0 z-[6] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
                 {displayCols.map((c) => (
-                  <th key={c.key} className={cn("text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-border/60", c.key === "__total__" && "bg-muted/40 font-bold text-foreground")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-border/60", c.key === "__total__" && "font-bold text-foreground")}>{c.label}</th>
                 ))}
               </tr>
             </thead>
@@ -296,6 +304,10 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 const isCm = row.emphasis === "cm";
                 const isTotalRow = row.kind === "total";
                 const isMargin = row.kind === "margin";
+                const isNetProfit = row.id === "net_profit";
+                const isNetMargin = row.id === "net_margin";
+                const isFooter = isNetProfit || isNetMargin;
+                const footerBottom = isNetMargin ? 0 : marginH;
                 return (
                   <React.Fragment key={row.id}>
                     {row.section && (
@@ -303,18 +315,30 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                         <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
                       </tr>
                     )}
-                    <tr className={cn(
-                      "border-b border-border/50",
-                      strong && "bg-muted/40",
-                      isCm && "bg-primary/[0.055]",
-                      isTotalRow && "bg-primary/[0.09]"
-                    )}>
-                      <td className={cn(
-                        "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
-                        strong ? "bg-muted/60 font-bold text-foreground" : isCm ? "bg-primary/[0.055] font-semibold text-foreground" : "bg-card text-foreground/90",
-                        isTotalRow && "bg-primary/[0.09] font-bold",
-                        row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
-                      )}>{row.label}</td>
+                    <tr
+                      ref={isNetMargin ? marginRowRef : undefined}
+                      className={cn(
+                        "border-b border-border/50",
+                        !isFooter && strong && "bg-muted/40",
+                        !isFooter && isCm && "bg-primary/[0.055]",
+                        !isFooter && isTotalRow && "bg-primary/[0.09]",
+                        isNetProfit && "border-t-2 border-border"
+                      )}
+                    >
+                      <td
+                        style={isFooter ? { bottom: footerBottom } : undefined}
+                        className={cn(
+                          "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
+                          isFooter
+                            ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
+                            : cn(
+                                "z-[1]",
+                                strong ? "bg-muted/60 font-bold text-foreground" : isCm ? "bg-primary/[0.055] font-semibold text-foreground" : "bg-card text-foreground/90",
+                                isTotalRow && "bg-primary/[0.09] font-bold",
+                                row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+                              )
+                        )}
+                      >{row.label}</td>
                       {displayCols.map((col) => {
                         const v = aggVal(row, col);
                         const pct = pctVal(row, col);
@@ -333,7 +357,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                         return (
                           <td
                             key={col.key}
-                            className={cn("text-right px-3 py-2 num align-top border-l border-border/60", col.key === "__total__" && "bg-muted/30")}
+                            style={isFooter ? { bottom: footerBottom } : undefined}
+                            className={cn(
+                              "text-right px-3 py-2 num align-top border-l border-border/60",
+                              isFooter ? "sticky z-[3] bg-muted" : col.key === "__total__" && "bg-muted/30"
+                            )}
                             onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                             onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                             onMouseLeave={() => setTipCb(null)}
