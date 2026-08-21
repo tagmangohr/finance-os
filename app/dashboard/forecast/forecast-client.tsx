@@ -24,6 +24,14 @@ export function ForecastClient({ data }: { data: ForecastData }) {
   const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
   const setTipAt = (text: string | null, x = 0, y = 0) => setTip(text ? { text, x, y } : null);
 
+  // Freeze Net Profit + Net Margin at the bottom; Net Profit pins just above Net
+  // Margin, offset by its measured height.
+  const marginRowRef = React.useRef<HTMLTableRowElement>(null);
+  const [marginH, setMarginH] = React.useState(0);
+  React.useLayoutEffect(() => {
+    if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
+  }, [data, growth]);
+
   const reset = () => setGrowth(Object.fromEntries(data.components.map((c) => [c.slug, c.growthPct])));
 
   // projected value of a component at month index i (0-based)
@@ -105,14 +113,14 @@ export function ForecastClient({ data }: { data: ForecastData }) {
       )}
 
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="overflow-auto max-h-[calc(100vh-215px)]">
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
-                <th className="text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60 bg-muted/20">Growth /mo</th>
+                <th className="sticky left-0 top-0 z-[6] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
+                <th className="sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60">Growth /mo</th>
                 {months.map((m) => (
-                  <th key={m.key} className="text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60">{m.label}</th>
+                  <th key={m.key} className="sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60">{m.label}</th>
                 ))}
               </tr>
             </thead>
@@ -122,21 +130,45 @@ export function ForecastClient({ data }: { data: ForecastData }) {
                 const isCm = row.emphasis === "cm";
                 const isTotal = row.kind === "total";
                 const isMargin = row.kind === "margin";
+                const isNetProfit = row.id === "net_profit";
+                const isNetMargin = row.id === "net_margin";
+                const isFooter = isNetProfit || isNetMargin;
+                const footerBottom = isNetMargin ? 0 : marginH;
                 return (
                   <React.Fragment key={row.id}>
                     {row.section && (
                       <tr><td colSpan={months.length + 2} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td></tr>
                     )}
-                    <tr className={cn("border-b border-border/50", strong && "bg-muted/40", isCm && "bg-primary/[0.055]", isTotal && "bg-primary/[0.09]")}>
-                      <td className={cn(
-                        "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
-                        strong ? "bg-muted/60 font-bold text-foreground" : isCm ? "bg-primary/[0.055] font-semibold text-foreground" : "bg-card text-foreground/90",
-                        isTotal && "bg-primary/[0.09] font-bold",
-                        row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
-                      )}>{row.label}</td>
+                    <tr
+                      ref={isNetMargin ? marginRowRef : undefined}
+                      className={cn("border-b border-border/50",
+                        !isFooter && strong && "bg-muted/40",
+                        !isFooter && isCm && "bg-primary/[0.055]",
+                        !isFooter && isTotal && "bg-primary/[0.09]",
+                        isNetProfit && "border-t-2 border-border")}
+                    >
+                      <td
+                        style={isFooter ? { bottom: footerBottom } : undefined}
+                        className={cn(
+                          // opaque so right-scrolled month values don't bleed through
+                          "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
+                          isFooter
+                            ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
+                            : cn(
+                                "z-[1]",
+                                (strong || isCm || isTotal) ? "bg-muted" : "bg-card",
+                                strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
+                                isTotal && "font-bold",
+                                row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+                              )
+                        )}
+                      >{row.label}</td>
 
                       {/* editable growth */}
-                      <td className="text-right px-2 py-1.5 num border-l border-border/60 bg-muted/10">
+                      <td
+                        style={isFooter ? { bottom: footerBottom } : undefined}
+                        className={cn("text-right px-2 py-1.5 num border-l border-border/60", isFooter ? "sticky z-[3] bg-muted" : "bg-muted/10")}
+                      >
                         {row.comp ? (
                           <div className="inline-flex items-center gap-0.5">
                             <input
@@ -159,7 +191,9 @@ export function ForecastClient({ data }: { data: ForecastData }) {
                           : isCm ? (nr ? (v / nr) * 100 : null) : null;
                         const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
                         return (
-                          <td key={m.key} className="text-right px-3 py-2 num align-top border-l border-border/60"
+                          <td key={m.key}
+                            style={isFooter ? { bottom: footerBottom } : undefined}
+                            className={cn("text-right px-3 py-2 num align-top border-l border-border/60", isFooter && "sticky z-[3] bg-muted")}
                             onMouseEnter={(e) => v !== 0 && setTipAt(full, e.clientX, e.clientY)}
                             onMouseMove={(e) => v !== 0 && setTipAt(full, e.clientX, e.clientY)}
                             onMouseLeave={() => setTipAt(null)}>
