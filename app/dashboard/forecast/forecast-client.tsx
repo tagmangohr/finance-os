@@ -16,13 +16,29 @@ type Row =
   | { id: string; label: string; kind: RowKind; emphasis?: "strong" | "cm"; section?: string; comp: ForecastComponent }
   | { id: string; label: string; kind: RowKind; emphasis?: "strong" | "cm"; section?: string; comp?: undefined };
 
-export function ForecastClient({ data }: { data: ForecastData }) {
+export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: string }) {
   const bySlug = React.useMemo(() => Object.fromEntries(data.components.map((c) => [c.slug, c])), [data.components]);
   const [growth, setGrowth] = React.useState<Record<string, number>>(() =>
     Object.fromEntries(data.components.map((c) => [c.slug, c.growthPct]))
   );
+  const [saving, setSaving] = React.useState<string | null>(null);
   const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
   const setTipAt = (text: string | null, x = 0, y = 0) => setTip(text ? { text, x, y } : null);
+
+  // Persist a line's growth override (fires on blur). Preview data isn't saved.
+  const saveGrowth = React.useCallback(async (slug: string, pct: number) => {
+    if (data.preview) return;
+    setSaving(slug);
+    try {
+      await fetch("/api/forecast/growth", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ org: orgId, line_slug: slug, growth_pct: pct }),
+      });
+    } finally {
+      setSaving(null);
+    }
+  }, [orgId, data.preview]);
 
   // Freeze Net Profit + Net Margin at the bottom; Net Profit pins just above Net
   // Margin, offset by its measured height.
@@ -32,7 +48,11 @@ export function ForecastClient({ data }: { data: ForecastData }) {
     if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
   }, [data, growth]);
 
-  const reset = () => setGrowth(Object.fromEntries(data.components.map((c) => [c.slug, c.growthPct])));
+  // Reset reverts every line to its trend default AND clears saved overrides.
+  const reset = async () => {
+    setGrowth(Object.fromEntries(data.components.map((c) => [c.slug, c.trendPct])));
+    if (!data.preview) await fetch(`/api/forecast/growth?org=${orgId}`, { method: "DELETE" });
+  };
 
   // projected value of a component at month index i (0-based)
   const proj = (slug: string, i: number): number => {
@@ -99,6 +119,7 @@ export function ForecastClient({ data }: { data: ForecastData }) {
   return (
     <div className="space-y-3 max-w-[1400px]">
       <PageHeader title="Forecast" subtitle={`Projected P&L · from ${data.lastActualLabel} actuals · auto-seeded, editable`}>
+        {saving && <span className="text-[11px] text-muted-foreground">Saving…</span>}
         <button onClick={reset} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12px] font-medium hover:bg-muted">
           <RotateCcw className="h-3.5 w-3.5" /> Reset growth
         </button>
@@ -175,6 +196,7 @@ export function ForecastClient({ data }: { data: ForecastData }) {
                               type="number" step="0.5"
                               value={growth[row.comp.slug] ?? row.comp.growthPct}
                               onChange={(e) => setGrowth((g) => ({ ...g, [row.comp!.slug]: e.target.value === "" ? 0 : Number(e.target.value) }))}
+                              onBlur={(e) => saveGrowth(row.comp!.slug, e.target.value === "" ? 0 : Number(e.target.value))}
                               className="w-14 text-right bg-transparent border border-border rounded px-1 py-0.5 text-[12px] focus:outline-none focus:border-primary"
                             />
                             <span className="text-muted-foreground text-[11px]">%</span>

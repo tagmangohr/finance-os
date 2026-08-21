@@ -10,7 +10,8 @@ export interface ForecastComponent {
   label: string;
   kind: "revenue" | "deduction" | "expense";
   base: number;            // starting monthly level (trailing 3-month average, ₹)
-  growthPct: number;       // seeded monthly growth %, editable on the client
+  growthPct: number;       // effective monthly growth % (saved override, else trend)
+  trendPct: number;        // the trend default (from actuals) — used to Reset
 }
 
 export interface ForecastData {
@@ -102,13 +103,21 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
     e.values[k] = (e.values[k] ?? 0) + amt;
   }
 
+  // Saved per-line growth overrides (defaults still come from the trend below).
+  const overrides: Record<string, number> = {};
+  try {
+    const { data: ov } = await supabase.from("forecast_growth").select("line_slug, growth_pct").eq("org_id", orgId);
+    for (const r of (ov ?? []) as { line_slug: string; growth_pct: number }[]) overrides[r.line_slug] = Number(r.growth_pct);
+  } catch { /* table missing pre-migration → no overrides */ }
+
   const seriesOf = (m: Record<string, number>) => window.map((k) => m[k] ?? 0);
   const components: ForecastComponent[] = [];
   const pushComp = (slug: string, label: string, kind: ForecastComponent["kind"], m: Record<string, number>) => {
     const present = window.some((k) => (m[k] ?? 0) !== 0);
     if (!present) return;
-    const { base, growthPct } = computeSeed(seriesOf(m));
-    components.push({ slug, label, kind, base, growthPct });
+    const { base, growthPct: trendPct } = computeSeed(seriesOf(m));
+    const growthPct = overrides[slug] ?? trendPct;
+    components.push({ slug, label, kind, base, growthPct, trendPct });
   };
 
   pushComp("__gross__", "Gross Revenue", "revenue", gross);
@@ -128,19 +137,20 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
 // ─── Sample forecast (before any source is connected) ─────────────────────────
 export function sampleForecast(today = new Date()): ForecastData {
   const { months, lastActualLabel } = projectionMonths(today);
-  const components: ForecastComponent[] = [
-    { slug: "__gross__", label: "Gross Revenue", kind: "revenue", base: 24000000, growthPct: 4 },
-    { slug: "__refunds__", label: "Refunds", kind: "deduction", base: 480000, growthPct: 3 },
-    { slug: "__pg_fees__", label: "Payment Gateway Fees", kind: "deduction", base: 720000, growthPct: 4 },
-    { slug: "ai_model", label: "AI Model", kind: "expense", base: 5300000, growthPct: 3 },
-    { slug: "cloud_infra", label: "Cloud & Infrastructure", kind: "expense", base: 300000, growthPct: 2 },
-    { slug: "technical_expense", label: "Technical Expense", kind: "expense", base: 120000, growthPct: 1 },
-    { slug: "marketing", label: "Marketing & Advertising", kind: "expense", base: 2900000, growthPct: 5 },
-    { slug: "payroll", label: "Payroll", kind: "expense", base: 3400000, growthPct: 2 },
-    { slug: "contractors", label: "Contractors & Freelancers", kind: "expense", base: 700000, growthPct: 1 },
-    { slug: "professional", label: "Professional Services", kind: "expense", base: 600000, growthPct: 1 },
-    { slug: "travel", label: "Travel", kind: "expense", base: 250000, growthPct: 0 },
-    { slug: "software", label: "Software & SaaS", kind: "expense", base: 180000, growthPct: 1 },
+  const raw: [string, string, ForecastComponent["kind"], number, number][] = [
+    ["__gross__", "Gross Revenue", "revenue", 24000000, 4],
+    ["__refunds__", "Refunds", "deduction", 480000, 3],
+    ["__pg_fees__", "Payment Gateway Fees", "deduction", 720000, 4],
+    ["ai_model", "AI Model", "expense", 5300000, 3],
+    ["cloud_infra", "Cloud & Infrastructure", "expense", 300000, 2],
+    ["technical_expense", "Technical Expense", "expense", 120000, 1],
+    ["marketing", "Marketing & Advertising", "expense", 2900000, 5],
+    ["payroll", "Payroll", "expense", 3400000, 2],
+    ["contractors", "Contractors & Freelancers", "expense", 700000, 1],
+    ["professional", "Professional Services", "expense", 600000, 1],
+    ["travel", "Travel", "expense", 250000, 0],
+    ["software", "Software & SaaS", "expense", 180000, 1],
   ];
+  const components: ForecastComponent[] = raw.map(([slug, label, kind, base, g]) => ({ slug, label, kind, base, growthPct: g, trendPct: g }));
   return { months, components, lastActualLabel, hasData: true, preview: true };
 }

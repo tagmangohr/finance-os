@@ -14,5 +14,5 @@ export default async function ForecastPage() {
   const preview = !(await orgHasConnectors(orgId));
   const data = preview ? sampleForecast() : await getForecast(orgId);
 
-  return <ForecastClient data={data} />;
+  return <ForecastClient data={data} orgId={orgId} />;
 }
