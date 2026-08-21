@@ -214,7 +214,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   };
 
   const ModeBtn = ({ m, label }: { m: string; label: string }) => (
-    <button onClick={() => goMode(m)} className={cn("h-8 px-3 text-[12px] font-medium transition-colors", data.mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
+    <button onClick={() => goMode(m)} className={cn("h-8 px-3 text-[12px] font-medium transition-colors", data.mode === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
   );
 
   return (
@@ -266,7 +266,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         {/* change toggle */}
         <div className="inline-flex rounded-lg border border-border overflow-hidden">
           {(canMoM ? ([["abs", "Absolute"], ["mom", momLabel], ["yoy", "YoY %"]] as [Mode, string][]) : ([["abs", "Absolute"], ["yoy", "YoY %"]] as [Mode, string][])).map(([m, label]) => (
-            <button key={m} onClick={() => setChange(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", change === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
+            <button key={m} onClick={() => setChange(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", change === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
           ))}
         </div>
 

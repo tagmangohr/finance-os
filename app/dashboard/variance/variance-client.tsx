@@ -78,7 +78,7 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
         </div>
         <div className="inline-flex rounded-lg border border-border overflow-hidden">
           {([["actual", "Actual"], ["forecast", "Forecast"], ["var_abs", "Variance ₹"], ["var_pct", "Variance %"]] as [View, string][]).map(([m, label]) => (
-            <button key={m} onClick={() => setView(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", view === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
+            <button key={m} onClick={() => setView(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", view === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
           ))}
         </div>
         {!data.preview && (
