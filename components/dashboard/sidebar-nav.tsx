@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Activity, Sheet, type LucideIcon,
+  Repeat, Activity, Sheet, LineChart, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -23,6 +23,7 @@ const NAV_GROUPS: NavGroup[] = [
   { label: "Overview", items: [
     { href: "/dashboard",              slug: "dashboard",    label: "Dashboard",     Icon: LayoutDashboard, exact: true },
     { href: "/dashboard/pnl",          slug: "pnl",          label: "Profit & Loss", Icon: Sheet },
+    { href: "/dashboard/forecast",     slug: "forecast",     label: "Forecast",      Icon: LineChart },
   ]},
   { label: "Money in", items: [
     { href: "/dashboard/data",          slug: "data",          label: "Payments",      Icon: Table2 },

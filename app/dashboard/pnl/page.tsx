@@ -21,7 +21,7 @@ export default async function PnlPage({
   const currentFy = fyStartForDate(new Date());
   const parsed = Number(sp.fy);
   const fyStart = Number.isFinite(parsed) && parsed >= 2020 && parsed <= currentFy ? parsed : currentFy;
-  const mode: PnlMode = sp.mode === "annual" || sp.mode === "custom" ? sp.mode : "monthly";
+  const mode: PnlMode = sp.mode === "annual" || sp.mode === "custom" || sp.mode === "quarterly" ? sp.mode : "monthly";
 
   // Custom range defaults to the current FY-to-date if params are missing/invalid.
   const from = ISO(sp.from) ?? `${currentFy}-04-01`;

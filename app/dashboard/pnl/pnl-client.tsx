@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
 import { Download, Sparkles, Zap, X, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
+import { sourceLabel } from "@/lib/finance/transaction-status";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,6 +36,9 @@ const TipCtx = React.createContext<(text: string | null, x?: number, y?: number)
 type Group = { name: string; amount: number; txn_count: number };
 type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; fee: number | null };
 
+const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
+const groupDisplayName = (drillKey: string, name: string) => (GATEWAY_KEYS.has(drillKey) ? sourceLabel(name === "—" ? null : name) : name);
+
 function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
   const [open, setOpen] = React.useState(false);
   const [txns, setTxns] = React.useState<DrillTxn[] | null>(null);
@@ -58,7 +62,7 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
     <div className="border-b border-border/60">
       <button onClick={toggle} className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50 text-left">
         <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} />
-        <span className="text-[12.5px] text-foreground truncate flex-1">{g.name}</span>
+        <span className="text-[12.5px] text-foreground truncate flex-1">{groupDisplayName(drillKey, g.name)}</span>
         <span className="text-[10.5px] text-muted-foreground flex-shrink-0">{g.txn_count.toLocaleString("en-IN")}</span>
         <span className="num text-[12.5px] font-semibold text-foreground flex-shrink-0 w-[92px] text-right">{moneyFull(g.amount)}</span>
       </button>
@@ -112,7 +116,7 @@ function DrillDrawer({
           <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
             <div className="min-w-0">
               <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">{title}</Dialog.Title>
-              <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle} · by vendor / customer</p>
+              <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle} · by {drillKey && GATEWAY_KEYS.has(drillKey) ? "gateway" : "vendor / customer"}</p>
             </div>
             <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center flex-shrink-0"><X className="h-4 w-4" /></Dialog.Close>
           </div>
@@ -163,9 +167,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     const num = aggVal(rowsById[row.numeratorId ?? row.id], col);
     return base ? (num / base) * 100 : null;
   };
+  const periodShift = data.mode === "quarterly" ? -3 : data.mode === "annual" ? -12 : -1;
+  const momLabel = data.mode === "quarterly" ? "QoQ %" : "MoM %";
   const deltaVal = (row: PnlRow, col: PnlColumn): number | null => {
     if (change === "abs" || col.key === "__total__" || row.kind === "margin") return null;
-    const shift = change === "mom" ? -1 : -12;
+    const shift = change === "mom" ? periodShift : -12;
     const cur = aggVal(row, col);
     const base = col.monthKeys.reduce((a, k) => a + (row.monthly[addMonths(k, shift)] ?? 0), 0);
     if (!base) return null;
@@ -189,9 +195,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   // ── period controls ──
   const goMode = (mode: string) => {
-    if (mode === "monthly") navigate(`/dashboard/pnl?mode=monthly&fy=${data.fyStart}`);
-    else if (mode === "annual") navigate(`/dashboard/pnl?mode=annual&fy=${data.fyStart}`);
-    else navigate(`/dashboard/pnl?mode=custom&from=${data.from}&to=${data.to}`);
+    if (mode === "custom") navigate(`/dashboard/pnl?mode=custom&from=${data.from}&to=${data.to}`);
+    else navigate(`/dashboard/pnl?mode=${mode}&fy=${data.fyStart}`);
   };
   const today = new Date().toISOString().slice(0, 10);
   const exportHref = (fmt: string) => {
@@ -211,6 +216,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         {/* view mode */}
         <div className="inline-flex rounded-lg border border-border overflow-hidden">
           <ModeBtn m="monthly" label="Monthly" />
+          <ModeBtn m="quarterly" label="Quarterly" />
           <ModeBtn m="annual" label="Annual" />
           <ModeBtn m="custom" label="Custom" />
         </div>
@@ -251,7 +257,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
         {/* change toggle */}
         <div className="inline-flex rounded-lg border border-border overflow-hidden">
-          {(canMoM ? ([["abs", "Absolute"], ["mom", "MoM %"], ["yoy", "YoY %"]] as [Mode, string][]) : ([["abs", "Absolute"], ["yoy", "YoY %"]] as [Mode, string][])).map(([m, label]) => (
+          {(canMoM ? ([["abs", "Absolute"], ["mom", momLabel], ["yoy", "YoY %"]] as [Mode, string][]) : ([["abs", "Absolute"], ["yoy", "YoY %"]] as [Mode, string][])).map(([m, label]) => (
             <button key={m} onClick={() => setChange(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", change === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
           ))}
         </div>
@@ -278,7 +284,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Line item</th>
+                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
                 {displayCols.map((c) => (
                   <th key={c.key} className={cn("text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-border/60", c.key === "__total__" && "bg-muted/40 font-bold text-foreground")}>{c.label}</th>
                 ))}

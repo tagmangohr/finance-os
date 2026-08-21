@@ -1,7 +1,10 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { CM_CONFIG, CM_CAT_ORDER } from "@/lib/pnl-config";
+
+export { CM_CONFIG, CM_CAT_ORDER };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-export type PnlMode = "monthly" | "annual" | "custom";
+export type PnlMode = "monthly" | "quarterly" | "annual" | "custom";
 export type PnlRowKind = "revenue" | "deduction" | "subtotal" | "expense" | "cm" | "total" | "margin";
 
 export interface PnlRow {
@@ -35,15 +38,8 @@ export interface PnlData {
   preview: boolean;
 }
 
-// ─── Contribution-margin config (SaaS default; edit here to remap tiers) ──────
-// Each tier subtracts its cost bucket from the tier above. '__pg_fees__' is the
-// metadata.fee line; the rest are ledger_categories slugs.
-export const CM_CONFIG: { id: string; label: string; cats: string[] }[] = [
-  { id: "cm1", label: "CM1 · Gross Margin", cats: ["__pg_fees__", "ai_model", "cloud_infra", "technical_expense"] },
-  { id: "cm2", label: "CM2 · Post-Marketing", cats: ["marketing"] },
-  { id: "cm3", label: "CM3 · Post-People", cats: ["payroll", "contractors", "professional"] },
-];
-const CM_CAT_ORDER = CM_CONFIG.flatMap((t) => t.cats).filter((c) => c !== "__pg_fees__");
+// CM_CONFIG / CM_CAT_ORDER now live in lib/pnl-config.ts (imported + re-exported
+// above) so client components can use them without pulling in this server module.
 
 // ─── Month / FY helpers ────────────────────────────────────────────────────────
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -97,6 +93,19 @@ function buildColumns(params: PnlParams): { columns: PnlColumn[]; periodLabel: s
       cols.push({ key: `FY${fy}`, label: `FY ${fy}-${String((fy + 1) % 100).padStart(2, "0")}`, monthKeys: fyMonthKeys(fy) });
     }
     return { columns: cols, periodLabel: `${cols[0].label} → ${cols[cols.length - 1].label}` };
+  }
+  if (params.mode === "quarterly") {
+    const fy = params.fyStart;
+    const yy = String(fy).slice(2);
+    const defs: [string, number, number][] = [ // [label, year, startMonth1]
+      [`Q1 '${yy}`, fy, 4], [`Q2 '${yy}`, fy, 7], [`Q3 '${yy}`, fy, 10], [`Q4 '${yy}`, fy + 1, 1],
+    ];
+    const cols = defs.map(([label, year, m1]) => ({
+      key: `${year}Q${m1}`,
+      label,
+      monthKeys: [mk(year, m1), mk(year, m1 + 1), mk(year, m1 + 2)],
+    }));
+    return { columns: cols, periodLabel: fyLabel(fy) };
   }
   if (params.mode === "custom" && params.from && params.to) {
     const fromKey = params.from.slice(0, 7);

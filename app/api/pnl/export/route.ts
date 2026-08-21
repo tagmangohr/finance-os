@@ -21,7 +21,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const parsed = Number(req.nextUrl.searchParams.get("fy"));
   const fyStart = Number.isFinite(parsed) && parsed >= 2020 && parsed <= currentFy ? parsed : currentFy;
   const rawMode = req.nextUrl.searchParams.get("mode");
-  const mode: PnlMode = rawMode === "annual" || rawMode === "custom" ? rawMode : "monthly";
+  const mode: PnlMode = rawMode === "annual" || rawMode === "custom" || rawMode === "quarterly" ? rawMode : "monthly";
   const from = ISO(req.nextUrl.searchParams.get("from")) ?? `${currentFy}-04-01`;
   const to = ISO(req.nextUrl.searchParams.get("to")) ?? new Date().toISOString().slice(0, 10);
   const format = req.nextUrl.searchParams.get("format") ?? "csv";

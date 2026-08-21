@@ -74,11 +74,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     else q = q.eq("category", key);
   }
 
-  // Optional: restrict to one vendor/customer group (the expand step). '—' is the
-  // bucket for rows with no counterparty name.
+  // Optional: restrict to one group (the expand step). Money-in lines group by
+  // gateway (source); expense lines by vendor (counterparty_name). '—' = the
+  // empty/null bucket.
   if (party != null) {
-    if (party === "—") q = q.or("counterparty_name.is.null,counterparty_name.eq.");
-    else q = q.eq("counterparty_name", party);
+    const field = key === "revenue" || key === "refunds" || key === "__pg_fees__" ? "source" : "counterparty_name";
+    if (party === "—") q = q.or(`${field}.is.null,${field}.eq.`);
+    else q = q.eq(field, party);
   }
 
   const { data, count, error } = await q.order("transaction_date", { ascending: false }).limit(LIMIT);
