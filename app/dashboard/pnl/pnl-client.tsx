@@ -8,6 +8,7 @@ import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DateRangePicker } from "@/components/ui/date-range-picker";
 import type { PnlData, PnlRow, PnlColumn } from "@/lib/pnl";
 
 type Mode = "abs" | "mom" | "yoy";
@@ -138,8 +139,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const [change, setChange] = React.useState<Mode>("abs");
   const [fyOpen, setFyOpen] = React.useState(false);
   const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
-  const [customFrom, setCustomFrom] = React.useState(data.from ?? "");
-  const [customTo, setCustomTo] = React.useState(data.to ?? "");
   const [drill, setDrill] = React.useState<{ title: string; subtitle: string; key: string; from: string; to: string; total: number } | null>(null);
 
   const setTipCb = React.useCallback((text: string | null, x?: number, y?: number) => {
@@ -192,9 +191,9 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const goMode = (mode: string) => {
     if (mode === "monthly") navigate(`/dashboard/pnl?mode=monthly&fy=${data.fyStart}`);
     else if (mode === "annual") navigate(`/dashboard/pnl?mode=annual&fy=${data.fyStart}`);
-    else navigate(`/dashboard/pnl?mode=custom&from=${customFrom || data.from}&to=${customTo || data.to}`);
+    else navigate(`/dashboard/pnl?mode=custom&from=${data.from}&to=${data.to}`);
   };
-  const applyCustom = () => { if (customFrom && customTo) navigate(`/dashboard/pnl?mode=custom&from=${customFrom}&to=${customTo}`); };
+  const today = new Date().toISOString().slice(0, 10);
   const exportHref = (fmt: string) => {
     const q = new URLSearchParams({ mode: data.mode, fy: String(data.fyStart), format: fmt });
     if (data.mode === "custom") { q.set("from", data.from ?? ""); q.set("to", data.to ?? ""); }
@@ -239,14 +238,15 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           </div>
         )}
 
-        {/* custom range */}
+        {/* custom range — shared styled picker (presets + calendar), used across tabs */}
         {data.mode === "custom" && (
-          <div className="inline-flex items-center gap-1.5">
-            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-8 px-2 rounded-lg border border-border bg-card text-[12px]" />
-            <span className="text-muted-foreground text-[12px]">→</span>
-            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-8 px-2 rounded-lg border border-border bg-card text-[12px]" />
-            <button onClick={applyCustom} className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-[12px] font-medium hover:bg-primary/90">Apply</button>
-          </div>
+          <DateRangePicker
+            from={data.from ?? today}
+            to={data.to ?? today}
+            max={today}
+            align="end"
+            onChange={(f, t) => navigate(`/dashboard/pnl?mode=custom&from=${f}&to=${t}`)}
+          />
         )}
 
         {/* change toggle */}
