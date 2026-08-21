@@ -44,13 +44,13 @@
     --metric-cash:    217 91% 60%;
     --metric-runway:  330 81% 60%;
 
-    /* Sidebar — a COMMITTED dark surface in both themes (defined only here, not
-       overridden in .dark), so the nav rail stays dark navy on the light dashboard. */
-    --sidebar: 222 44% 10%;
-    --sidebar-foreground: 214 22% 82%;
-    --sidebar-muted: 216 14% 54%;
-    --sidebar-border: 220 28% 17%;
-    --sidebar-accent: 220 30% 15%;
+    /* Sidebar — a COMMITTED pure-black surface in both themes (defined only here,
+       not overridden in .dark), so the nav rail stays black with white text. */
+    --sidebar: 0 0% 0%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-muted: 0 0% 60%;
+    --sidebar-border: 0 0% 14%;
+    --sidebar-accent: 0 0% 12%;
 
     /* Theme-adaptive surface helpers */
     --scrollbar-thumb: 220 14% 75%;
