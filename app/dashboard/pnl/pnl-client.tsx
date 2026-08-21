@@ -328,13 +328,16 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       <td
                         style={isFooter ? { bottom: footerBottom } : undefined}
                         className={cn(
+                          // Sticky label column MUST be opaque or right-scrolled month
+                          // values bleed through the translucent tints.
                           "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
                           isFooter
                             ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
                             : cn(
                                 "z-[1]",
-                                strong ? "bg-muted/60 font-bold text-foreground" : isCm ? "bg-primary/[0.055] font-semibold text-foreground" : "bg-card text-foreground/90",
-                                isTotalRow && "bg-primary/[0.09] font-bold",
+                                (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
+                                strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
+                                isTotalRow && "font-bold",
                                 row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
                               )
                         )}
