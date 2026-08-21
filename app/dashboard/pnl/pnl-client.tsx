@@ -3,12 +3,12 @@
 import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { Download, Sparkles, Zap, X, ChevronDown, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Download, Sparkles, Zap, X, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PnlData, PnlRow } from "@/lib/pnl";
+import type { PnlData, PnlRow, PnlColumn } from "@/lib/pnl";
 
 type Mode = "abs" | "mom" | "yoy";
 
@@ -16,40 +16,68 @@ type Mode = "abs" | "mom" | "yoy";
 const money = (n: number) => formatCurrency(Math.abs(n), "INR", true);
 const moneyFull = (n: number) => formatCurrency(n, "INR", false);
 
-function prevMonthKey(k: string): string {
-  const [y, m] = k.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1, 1));
-  d.setUTCMonth(d.getUTCMonth() - 1);
+function addMonths(key: string, delta: number): string {
+  const [y, m] = key.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 }
-const prevYearKey = (k: string): string => {
-  const [y, m] = k.split("-");
-  return `${Number(y) - 1}-${m}`;
+const lastDayIso = (monthKey: string): string => {
+  const [y, m] = monthKey.split("-").map(Number);
+  return `${monthKey}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
 };
-function pct(cur: number, base: number): number | null {
-  if (!base) return null;
-  return ((cur - base) / Math.abs(base)) * 100;
+const sumKeys = (monthly: Record<string, number>, keys: string[]) => keys.reduce((a, k) => a + (monthly[k] ?? 0), 0);
+
+// ─── exact-figure tooltip (single fixed element, avoids table clipping) ────────
+const TipCtx = React.createContext<(text: string | null, x?: number, y?: number) => void>(() => {});
+
+// ─── Drill drawer (consolidated by vendor/customer, expandable) ────────────────
+type Group = { name: string; amount: number; txn_count: number };
+type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; fee: number | null };
+
+function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
+  const [open, setOpen] = React.useState(false);
+  const [txns, setTxns] = React.useState<DrillTxn[] | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && txns == null) {
+      setLoading(true);
+      const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
+      fetch(`/api/pnl/drill?${q}`)
+        .then((r) => r.json())
+        .then((d) => setTxns(d.rows ?? []))
+        .catch(() => setTxns([]))
+        .finally(() => setLoading(false));
+    }
+  };
+
+  return (
+    <div className="border-b border-border/60">
+      <button onClick={toggle} className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50 text-left">
+        <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} />
+        <span className="text-[12.5px] text-foreground truncate flex-1">{g.name}</span>
+        <span className="text-[10.5px] text-muted-foreground flex-shrink-0">{g.txn_count.toLocaleString("en-IN")}</span>
+        <span className="num text-[12.5px] font-semibold text-foreground flex-shrink-0 w-[92px] text-right">{moneyFull(g.amount)}</span>
+      </button>
+      {open && (
+        <div className="bg-muted/20">
+          {loading && <div className="px-4 py-2 space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 rounded" />)}</div>}
+          {txns?.map((t) => (
+            <div key={t.id} className="pl-10 pr-4 py-1.5 flex items-center gap-3 border-t border-border/40">
+              <div className="min-w-0 flex-1">
+                <p className="text-[11.5px] text-muted-foreground">{formatDate(t.transaction_date)}{t.source ? ` · ${t.source}` : ""}{t.status ? ` · ${t.status}` : ""}</p>
+              </div>
+              <p className="num text-[11.5px] text-foreground flex-shrink-0">{t.fee != null ? moneyFull(t.fee) : formatCurrency(t.amount, t.currency || "INR", false)}</p>
+            </div>
+          ))}
+          {txns && txns.length === 0 && !loading && <p className="pl-10 pr-4 py-2 text-[11px] text-muted-foreground">No transactions.</p>}
+        </div>
+      )}
+    </div>
+  );
 }
-
-// A row where "up" is a good thing (revenue, profit, margin) vs a cost row.
-const goodWhenUp = (r: PnlRow) => r.kind === "revenue" || r.kind === "subtotal" || r.kind === "total" || r.kind === "margin";
-const isDrillable = (r: PnlRow) => Boolean(r.drill);
-
-// Cell text for a value, respecting the row's presentation.
-function cellText(row: PnlRow, v: number): string {
-  if (row.kind === "margin") return `${v.toFixed(1)}%`;
-  if (v === 0) return "–";
-  if (row.kind === "deduction" || row.kind === "expense") return `−${money(v)}`;
-  if (v < 0) return `−${money(v)}`;
-  return money(v);
-}
-
-// ─── Drill drawer ──────────────────────────────────────────────────────────────
-type DrillTxn = {
-  id: string; transaction_date: string; counterparty_name: string | null;
-  amount: number; currency: string | null; source: string | null;
-  status: string | null; category: string | null; type: string; fee: number | null;
-};
 
 function DrillDrawer({
   orgId, open, onClose, title, subtitle, drillKey, from, to, expectedTotal,
@@ -58,77 +86,45 @@ function DrillDrawer({
   title: string; subtitle: string; drillKey: string | null; from: string; to: string; expectedTotal: number;
 }) {
   const [loading, setLoading] = React.useState(false);
-  const [rows, setRows] = React.useState<DrillTxn[]>([]);
-  const [count, setCount] = React.useState(0);
+  const [groups, setGroups] = React.useState<Group[]>([]);
+  const [hasMore, setHasMore] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!open || !drillKey) return;
     let cancelled = false;
-    setLoading(true); setErr(null); setRows([]);
+    setLoading(true); setErr(null); setGroups([]);
     const q = new URLSearchParams({ org: orgId, key: drillKey, from, to });
-    fetch(`/api/pnl/drill?${q}`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
-        return r.json();
-      })
-      .then((d) => { if (!cancelled) { setRows(d.rows ?? []); setCount(d.count ?? 0); } })
+    fetch(`/api/pnl/drill/groups?${q}`)
+      .then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`); return r.json(); })
+      .then((d) => { if (!cancelled) { setGroups(d.groups ?? []); setHasMore(Boolean(d.hasMore)); } })
       .catch((e) => { if (!cancelled) setErr(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, drillKey, orgId, from, to]);
 
-  const total = expectedTotal;
-
   return (
     <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[140] animate-in fade-in" />
+        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[140]" />
         <Dialog.Content className="fixed right-0 top-0 h-full w-full sm:w-[480px] bg-card border-l border-border z-[141] shadow-2xl flex flex-col focus:outline-none">
           <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
             <div className="min-w-0">
               <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">{title}</Dialog.Title>
-              <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle}</p>
+              <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle} · by vendor / customer</p>
             </div>
-            <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center flex-shrink-0">
-              <X className="h-4 w-4" />
-            </Dialog.Close>
+            <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center flex-shrink-0"><X className="h-4 w-4" /></Dialog.Close>
           </div>
-
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${count.toLocaleString("en-IN")} transactions`}</span>
-            <span className="num text-[13px] font-semibold text-foreground" title="Total from the P&L rollup">{moneyFull(total)}</span>
+            <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${groups.length}${hasMore ? "+" : ""} ${groups.length === 1 ? "party" : "parties"}`}</span>
+            <span className="num text-[13px] font-semibold text-foreground" title="Total from the P&L rollup">{moneyFull(expectedTotal)}</span>
           </div>
-
           <div className="flex-1 overflow-y-auto">
             {err && <p className="p-4 text-[12px] text-destructive">{err}</p>}
-            {loading && (
-              <div className="p-4 space-y-2">
-                {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
-              </div>
-            )}
-            {!loading && !err && rows.length === 0 && (
-              <p className="p-6 text-center text-[12px] text-muted-foreground">No transactions in this slice.</p>
-            )}
-            {!loading && rows.map((t) => (
-              <div key={t.id} className="px-4 py-2.5 border-b border-border/60 flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] text-foreground truncate">{t.counterparty_name || "—"}</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {formatDate(t.transaction_date)}{t.source ? ` · ${t.source}` : ""}{t.category ? ` · ${t.category}` : ""}
-                  </p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="num text-[12.5px] font-medium text-foreground">
-                    {t.fee != null ? moneyFull(t.fee) : formatCurrency(t.amount, t.currency || "INR", false)}
-                  </p>
-                  {t.status && <p className="text-[10.5px] text-muted-foreground">{t.status}</p>}
-                </div>
-              </div>
-            ))}
-            {!loading && count > rows.length && (
-              <p className="p-4 text-center text-[11px] text-muted-foreground">Showing first {rows.length} of {count.toLocaleString("en-IN")}.</p>
-            )}
+            {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>}
+            {!loading && !err && groups.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">Nothing in this slice.</p>}
+            {!loading && drillKey && groups.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
+            {hasMore && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
           </div>
         </Dialog.Content>
       </Dialog.Portal>
@@ -139,92 +135,131 @@ function DrillDrawer({
 // ─── Main ────────────────────────────────────────────────────────────────────
 export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string; years: number[] }) {
   const { navigate } = useNavProgress();
-  const [mode, setMode] = React.useState<Mode>("abs");
+  const [change, setChange] = React.useState<Mode>("abs");
   const [fyOpen, setFyOpen] = React.useState(false);
+  const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
+  const [customFrom, setCustomFrom] = React.useState(data.from ?? "");
+  const [customTo, setCustomTo] = React.useState(data.to ?? "");
   const [drill, setDrill] = React.useState<{ title: string; subtitle: string; key: string; from: string; to: string; total: number } | null>(null);
 
-  const monthKeys = data.months.map((m) => m.key);
-  const fyFrom = `${data.fyStart}-04-01`;
-  const fyTo = `${data.fyStart + 1}-03-31`;
+  const setTipCb = React.useCallback((text: string | null, x?: number, y?: number) => {
+    setTip(text ? { text, x: x ?? 0, y: y ?? 0 } : null);
+  }, []);
 
-  const lastDay = (k: string) => {
-    const [y, m] = k.split("-").map(Number);
-    return `${k}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
+  const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
+
+  // Display columns: month/year columns + a Total column (except annual mode).
+  const displayCols: PnlColumn[] = React.useMemo(() => {
+    if (data.mode === "annual") return data.columns;
+    const allKeys = data.columns.flatMap((c) => c.monthKeys);
+    return [...data.columns, { key: "__total__", label: "Total", monthKeys: allKeys }];
+  }, [data.columns, data.mode]);
+
+  const canMoM = data.mode !== "annual";
+
+  const aggVal = (row: PnlRow | undefined, col: PnlColumn) => (row ? sumKeys(row.monthly, col.monthKeys) : 0);
+  const pctVal = (row: PnlRow, col: PnlColumn): number | null => {
+    if (!row.pctBaseId) return null;
+    const base = aggVal(rowsById[row.pctBaseId], col);
+    const num = aggVal(rowsById[row.numeratorId ?? row.id], col);
+    return base ? (num / base) * 100 : null;
   };
+  const deltaVal = (row: PnlRow, col: PnlColumn): number | null => {
+    if (change === "abs" || col.key === "__total__" || row.kind === "margin") return null;
+    const shift = change === "mom" ? -1 : -12;
+    const cur = aggVal(row, col);
+    const base = col.monthKeys.reduce((a, k) => a + (row.monthly[addMonths(k, shift)] ?? 0), 0);
+    if (!base) return null;
+    return ((cur - base) / Math.abs(base)) * 100;
+  };
+  const goodWhenUp = (r: PnlRow) => r.kind === "revenue" || r.kind === "subtotal" || r.kind === "total" || r.kind === "cm" || r.kind === "margin";
 
-  function openDrill(row: PnlRow, monthKey: string | null) {
-    if (!row.drill) return;
-    const from = monthKey ? `${monthKey}-01` : fyFrom;
-    const to = monthKey ? lastDay(monthKey) : fyTo;
-    const when = monthKey ? (data.months.find((m) => m.key === monthKey)?.label ?? monthKey) : data.fyLabel;
-    const total = monthKey ? (row.values[monthKey] ?? 0) : row.total;
-    setDrill({ title: row.label, subtitle: when, key: row.drill, from, to, total });
+  function cellText(row: PnlRow, v: number): string {
+    if (row.kind === "margin") return "";
+    if (v === 0) return "–";
+    if (row.kind === "deduction" || row.kind === "expense") return v > 0 ? `−${money(v)}` : `+${money(-v)}`;
+    return v < 0 ? `−${money(v)}` : money(v);
   }
 
-  const changeFor = (row: PnlRow, k: string): number | null => {
-    if (mode === "abs" || row.kind === "margin") return null;
-    const cur = row.values[k] ?? 0;
-    const base = row.values[mode === "mom" ? prevMonthKey(k) : prevYearKey(k)] ?? 0;
-    return pct(cur, base);
+  function openDrill(row: PnlRow, col: PnlColumn) {
+    if (!row.drill) return;
+    const from = `${col.monthKeys[0]}-01`;
+    const to = lastDayIso(col.monthKeys[col.monthKeys.length - 1]);
+    setDrill({ title: row.label, subtitle: col.key === "__total__" ? data.periodLabel : col.label, key: row.drill, from, to, total: aggVal(row, col) });
+  }
+
+  // ── period controls ──
+  const goMode = (mode: string) => {
+    if (mode === "monthly") navigate(`/dashboard/pnl?mode=monthly&fy=${data.fyStart}`);
+    else if (mode === "annual") navigate(`/dashboard/pnl?mode=annual&fy=${data.fyStart}`);
+    else navigate(`/dashboard/pnl?mode=custom&from=${customFrom || data.from}&to=${customTo || data.to}`);
+  };
+  const applyCustom = () => { if (customFrom && customTo) navigate(`/dashboard/pnl?mode=custom&from=${customFrom}&to=${customTo}`); };
+  const exportHref = (fmt: string) => {
+    const q = new URLSearchParams({ mode: data.mode, fy: String(data.fyStart), format: fmt });
+    if (data.mode === "custom") { q.set("from", data.from ?? ""); q.set("to", data.to ?? ""); }
+    return `/api/pnl/export?${q}`;
   };
 
+  const ModeBtn = ({ m, label }: { m: string; label: string }) => (
+    <button onClick={() => goMode(m)} className={cn("h-8 px-3 text-[12px] font-medium transition-colors", data.mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
+  );
+
   return (
+    <TipCtx.Provider value={setTipCb}>
     <div className="space-y-3 max-w-[1400px]">
-      <PageHeader title="Profit & Loss" subtitle={`Month-wise P&L · ${data.fyLabel} (Apr–Mar)`}>
-        {/* FY selector */}
-        <div className="relative">
-          <button
-            onClick={() => setFyOpen((o) => !o)}
-            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12.5px] font-medium hover:bg-muted"
-          >
-            {data.fyLabel} <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-          {fyOpen && (
-            <>
-              <div className="fixed inset-0 z-[90]" onClick={() => setFyOpen(false)} />
-              <div className="absolute right-0 mt-1 w-40 rounded-lg border border-border bg-card shadow-lg z-[91] py-1">
-                {years.map((y) => (
-                  <button
-                    key={y}
-                    onClick={() => { setFyOpen(false); navigate(`/dashboard/pnl?fy=${y}`); }}
-                    className={cn(
-                      "w-full text-left px-3 py-1.5 text-[12.5px] hover:bg-muted",
-                      y === data.fyStart ? "text-primary font-semibold" : "text-foreground"
-                    )}
-                  >
-                    FY {y}-{String((y + 1) % 100).padStart(2, "0")}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+      <PageHeader title="Profit & Loss" subtitle={`Month-wise P&L · ${data.periodLabel}`}>
+        {/* view mode */}
+        <div className="inline-flex rounded-lg border border-border overflow-hidden">
+          <ModeBtn m="monthly" label="Monthly" />
+          <ModeBtn m="annual" label="Annual" />
+          <ModeBtn m="custom" label="Custom" />
         </div>
 
-        {/* Mode toggle */}
-        <div className="inline-flex rounded-lg border border-border overflow-hidden">
-          {([["abs", "Absolute"], ["mom", "MoM %"], ["yoy", "YoY %"]] as [Mode, string][]).map(([m, label]) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cn(
-                "h-8 px-2.5 text-[12px] font-medium transition-colors",
-                mode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
-              )}
-            >
-              {label}
+        {/* FY dropdown (monthly + annual) */}
+        {data.mode !== "custom" && (
+          <div className="relative">
+            <button onClick={() => setFyOpen((o) => !o)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12.5px] font-medium hover:bg-muted">
+              {data.mode === "annual" ? `ending FY ${data.fyStart}-${String((data.fyStart + 1) % 100).padStart(2, "0")}` : `FY ${data.fyStart}-${String((data.fyStart + 1) % 100).padStart(2, "0")}`}
+              <ChevronDown className="h-3.5 w-3.5" />
             </button>
+            {fyOpen && (
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setFyOpen(false)} />
+                <div className="absolute right-0 mt-1 w-44 rounded-lg border border-border bg-card shadow-lg z-[91] py-1">
+                  {years.map((y) => (
+                    <button key={y} onClick={() => { setFyOpen(false); navigate(`/dashboard/pnl?mode=${data.mode}&fy=${y}`); }}
+                      className={cn("w-full text-left px-3 py-1.5 text-[12.5px] hover:bg-muted", y === data.fyStart ? "text-primary font-semibold" : "text-foreground")}>
+                      FY {y}-{String((y + 1) % 100).padStart(2, "0")}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* custom range */}
+        {data.mode === "custom" && (
+          <div className="inline-flex items-center gap-1.5">
+            <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-8 px-2 rounded-lg border border-border bg-card text-[12px]" />
+            <span className="text-muted-foreground text-[12px]">→</span>
+            <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-8 px-2 rounded-lg border border-border bg-card text-[12px]" />
+            <button onClick={applyCustom} className="h-8 px-3 rounded-lg bg-primary text-primary-foreground text-[12px] font-medium hover:bg-primary/90">Apply</button>
+          </div>
+        )}
+
+        {/* change toggle */}
+        <div className="inline-flex rounded-lg border border-border overflow-hidden">
+          {(canMoM ? ([["abs", "Absolute"], ["mom", "MoM %"], ["yoy", "YoY %"]] as [Mode, string][]) : ([["abs", "Absolute"], ["yoy", "YoY %"]] as [Mode, string][])).map(([m, label]) => (
+            <button key={m} onClick={() => setChange(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", change === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>{label}</button>
           ))}
         </div>
 
-        {/* Export */}
         {!data.preview && (
           <div className="inline-flex gap-1.5">
-            <a href={`/api/pnl/export?fy=${data.fyStart}&format=csv`} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted">
-              <Download className="h-3.5 w-3.5" /> CSV
-            </a>
-            <a href={`/api/pnl/export?fy=${data.fyStart}&format=xlsx`} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted">
-              <Download className="h-3.5 w-3.5" /> Excel
-            </a>
+            <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> CSV</a>
+            <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> Excel</a>
           </div>
         )}
       </PageHeader>
@@ -232,106 +267,89 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       {data.preview && (
         <div className="flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/[0.06] px-4 py-2.5">
           <Sparkles className="h-4 w-4 text-primary flex-shrink-0" />
-          <p className="text-[12.5px] text-foreground/80 flex-1 min-w-0">
-            <span className="font-semibold text-foreground">Preview — sample data.</span>{" "}
-            Connect a source to replace this with your real P&L.
-          </p>
-          <Link href="/dashboard/connectors" className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 flex-shrink-0">
-            <Zap className="h-3.5 w-3.5" /> Connect
-          </Link>
+          <p className="text-[12.5px] text-foreground/80 flex-1 min-w-0"><span className="font-semibold text-foreground">Preview — sample data.</span> Connect a source to replace this with your real P&L.</p>
+          <Link href="/dashboard/connectors" className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-[12px] font-medium bg-primary text-primary-foreground hover:bg-primary/90 flex-shrink-0"><Zap className="h-3.5 w-3.5" /> Connect</Link>
         </div>
       )}
 
-      {/* The grid */}
+      {/* grid */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
-              <tr className="border-b border-border">
-                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[220px]">
-                  Line item
-                </th>
-                {data.months.map((m) => (
-                  <th key={m.key} className="text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px]">
-                    {m.label}
-                  </th>
+              <tr className="border-b-2 border-border">
+                <th className="sticky left-0 z-[2] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Line item</th>
+                {displayCols.map((c) => (
+                  <th key={c.key} className={cn("text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-border/60", c.key === "__total__" && "bg-muted/40 font-bold text-foreground")}>{c.label}</th>
                 ))}
-                <th className="text-right font-bold text-foreground px-3 py-2.5 whitespace-nowrap min-w-[100px] bg-muted/40 border-l border-border">
-                  Total
-                </th>
               </tr>
             </thead>
             <tbody>
               {data.rows.map((row) => {
-                const strong = row.kind === "subtotal" || row.kind === "total";
+                const strong = row.emphasis === "strong";
+                const isCm = row.emphasis === "cm";
                 const isTotalRow = row.kind === "total";
                 const isMargin = row.kind === "margin";
                 return (
-                  <tr
-                    key={row.id}
-                    className={cn(
-                      "border-b border-border/50 last:border-0",
-                      strong && "bg-muted/30",
-                      isTotalRow && "bg-primary/[0.05]"
+                  <React.Fragment key={row.id}>
+                    {row.section && (
+                      <tr>
+                        <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
+                      </tr>
                     )}
-                  >
-                    <td className={cn(
-                      "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap",
-                      strong ? "bg-muted/40 font-semibold text-foreground" : "bg-card text-foreground/90",
-                      isTotalRow && "bg-primary/[0.05] font-bold",
-                      row.kind === "expense" && "pl-6 text-muted-foreground"
+                    <tr className={cn(
+                      "border-b border-border/50",
+                      strong && "bg-muted/40",
+                      isCm && "bg-primary/[0.055]",
+                      isTotalRow && "bg-primary/[0.09]"
                     )}>
-                      {row.label}
-                    </td>
-                    {data.months.map((m) => {
-                      const v = row.values[m.key] ?? 0;
-                      const ch = changeFor(row, m.key);
-                      const drillable = isDrillable(row) && v !== 0;
-                      return (
-                        <td key={m.key} className="text-right px-3 py-2 num align-top">
-                          <button
-                            type="button"
-                            disabled={!drillable}
-                            onClick={() => openDrill(row, m.key)}
-                            title={isMargin ? `${v.toFixed(1)}%` : moneyFull(v)}
-                            className={cn(
-                              "inline-block leading-tight",
-                              drillable && "hover:underline decoration-dotted cursor-pointer",
-                              isTotalRow && (v < 0 ? "text-destructive font-bold" : "text-success font-bold"),
-                              isMargin && (v < 0 ? "text-destructive" : "text-foreground"),
-                              strong && !isTotalRow && "font-semibold"
-                            )}
+                      <td className={cn(
+                        "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
+                        strong ? "bg-muted/60 font-bold text-foreground" : isCm ? "bg-primary/[0.055] font-semibold text-foreground" : "bg-card text-foreground/90",
+                        isTotalRow && "bg-primary/[0.09] font-bold",
+                        row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+                      )}>{row.label}</td>
+                      {displayCols.map((col) => {
+                        const v = aggVal(row, col);
+                        const pct = pctVal(row, col);
+                        const delta = deltaVal(row, col);
+                        const drillable = Boolean(row.drill) && v !== 0;
+                        const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
+                        const valueCls = cn(
+                          "inline-block leading-tight",
+                          drillable && "hover:underline decoration-dotted cursor-pointer",
+                          isTotalRow && (v < 0 ? "text-destructive font-bold" : "text-success font-bold"),
+                          (strong || isCm) && !isTotalRow && "font-semibold"
+                        );
+                        const inner = isMargin
+                          ? (pct == null ? "–" : <span className={pct < 0 ? "text-destructive" : "text-foreground"}>{pct.toFixed(1)}%</span>)
+                          : cellText(row, v);
+                        return (
+                          <td
+                            key={col.key}
+                            className={cn("text-right px-3 py-2 num align-top border-l border-border/60", col.key === "__total__" && "bg-muted/30")}
+                            onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                            onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                            onMouseLeave={() => setTipCb(null)}
                           >
-                            {cellText(row, v)}
-                          </button>
-                          {ch != null && (
-                            <span className={cn(
-                              "flex items-center justify-end gap-0.5 text-[10px] mt-0.5",
-                              (ch >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive"
-                            )}>
-                              {ch >= 0 ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}
-                              {Math.abs(ch).toFixed(0)}%
-                            </span>
-                          )}
-                        </td>
-                      );
-                    })}
-                    <td className={cn(
-                      "text-right px-3 py-2 num bg-muted/40 border-l border-border align-top",
-                      strong ? "font-bold text-foreground" : "font-medium text-foreground/90",
-                      isTotalRow && (row.total < 0 ? "text-destructive" : "text-success")
-                    )}>
-                      <button
-                        type="button"
-                        disabled={!(isDrillable(row) && row.total !== 0)}
-                        onClick={() => openDrill(row, null)}
-                        title={isMargin ? `${row.total.toFixed(1)}%` : moneyFull(row.total)}
-                        className={cn(isDrillable(row) && row.total !== 0 && "hover:underline decoration-dotted cursor-pointer")}
-                      >
-                        {cellText(row, row.total)}
-                      </button>
-                    </td>
-                  </tr>
+                            {drillable ? (
+                              <button type="button" onClick={() => openDrill(row, col)} className={valueCls}>{inner}</button>
+                            ) : (
+                              <span className={valueCls}>{inner}</span>
+                            )}
+                            {isCm && pct != null && (
+                              <div className="text-[10px] text-primary/80 mt-0.5">{pct.toFixed(0)}% margin</div>
+                            )}
+                            {delta != null && (
+                              <span className={cn("flex items-center justify-end gap-0.5 text-[10px] mt-0.5", (delta >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive")}>
+                                {delta >= 0 ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}{Math.abs(delta).toFixed(0)}%
+                              </span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -340,21 +358,19 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       </div>
 
       <p className="text-[11px] text-muted-foreground px-1">
-        Revenue ties to your dashboard. <span className="font-medium text-foreground/70">Payment Gateway Fees</span> includes payment-gateway charges and Apple App Store commission.
-        Click any cell to see the underlying transactions.
+        Revenue ties to your dashboard. <span className="font-medium text-foreground/70">Payment Gateway Fees</span> includes gateway charges + Apple App Store commission.
+        CM tiers are % of Net Revenue. Click any cell to drill in by vendor/customer.
       </p>
 
-      <DrillDrawer
-        orgId={orgId}
-        open={drill != null}
-        onClose={() => setDrill(null)}
-        title={drill?.title ?? ""}
-        subtitle={drill?.subtitle ?? ""}
-        drillKey={drill?.key ?? null}
-        from={drill?.from ?? fyFrom}
-        to={drill?.to ?? fyTo}
-        expectedTotal={drill?.total ?? 0}
-      />
+      {/* exact-figure tooltip */}
+      {tip && (
+        <div className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ left: tip.x + 12, top: tip.y + 12 }}>{tip.text}</div>
+      )}
+
+      <DrillDrawer orgId={orgId} open={drill != null} onClose={() => setDrill(null)}
+        title={drill?.title ?? ""} subtitle={drill?.subtitle ?? ""} drillKey={drill?.key ?? null}
+        from={drill?.from ?? ""} to={drill?.to ?? ""} expectedTotal={drill?.total ?? 0} />
     </div>
+    </TipCtx.Provider>
   );
 }

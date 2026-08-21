@@ -1,81 +1,138 @@
 import { createServiceClient } from "@/lib/supabase/server";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-export type PnlRowKind = "revenue" | "deduction" | "subtotal" | "expense" | "total" | "margin";
+export type PnlMode = "monthly" | "annual" | "custom";
+export type PnlRowKind = "revenue" | "deduction" | "subtotal" | "expense" | "cm" | "total" | "margin";
 
 export interface PnlRow {
-  /** stable id for React keys */
   id: string;
   label: string;
   kind: PnlRowKind;
-  /** value shown in each cell, keyed by 'YYYY-MM' (covers the 24-month window) */
-  values: Record<string, number>;
-  /** sum across the 12 DISPLAYED months of the selected FY */
-  total: number;
-  /** slice key for cell drill-down; absent = not drillable (subtotals/margin) */
-  drill?: string;
+  emphasis?: "strong" | "cm";     // strong = anchor band; cm = contribution-margin tint
+  /** ₹ amount per month ('YYYY-MM') across the fetched window. Missing = 0. */
+  monthly: Record<string, number>;
+  drill?: string;                  // slice key for cell drill-down
+  pctBaseId?: string;              // if set, render a % = numerator / base
+  numeratorId?: string;            // numerator row for the %, defaults to self
+  section?: string;                // faint group heading rendered above this row
+}
+
+export interface PnlColumn {
+  key: string;                     // 'YYYY-MM' (month/custom) or 'FYyyyy' (annual)
+  label: string;
+  monthKeys: string[];             // months this column aggregates
 }
 
 export interface PnlData {
-  fyStart: number;                 // e.g. 2026 → FY Apr-2026 … Mar-2027
-  fyLabel: string;                 // "FY 2026-27"
-  months: { key: string; label: string }[];   // 12 displayed months (Apr…Mar)
+  mode: PnlMode;
+  periodLabel: string;
+  fyStart: number;                 // selected FY (monthly/annual anchor)
+  from?: string;                   // custom range echo
+  to?: string;
+  columns: PnlColumn[];
   rows: PnlRow[];
   hasData: boolean;
   preview: boolean;
 }
 
-// ─── FY helpers ───────────────────────────────────────────────────────────────
+// ─── Contribution-margin config (SaaS default; edit here to remap tiers) ──────
+// Each tier subtracts its cost bucket from the tier above. '__pg_fees__' is the
+// metadata.fee line; the rest are ledger_categories slugs.
+export const CM_CONFIG: { id: string; label: string; cats: string[] }[] = [
+  { id: "cm1", label: "CM1 · Gross Margin", cats: ["__pg_fees__", "ai_model", "cloud_infra", "technical_expense"] },
+  { id: "cm2", label: "CM2 · Post-Marketing", cats: ["marketing"] },
+  { id: "cm3", label: "CM3 · Post-People", cats: ["payroll", "contractors", "professional"] },
+];
+const CM_CAT_ORDER = CM_CONFIG.flatMap((t) => t.cats).filter((c) => c !== "__pg_fees__");
+
+// ─── Month / FY helpers ────────────────────────────────────────────────────────
 const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** The financial year (April-start) that a given IST date falls in. */
 export function fyStartForDate(d: Date): number {
-  // IST month (0-based). new Date() on the server is UTC; FY boundary tolerance
-  // of a few hours around Apr 1 midnight is immaterial for a yearly selector.
   const y = d.getUTCFullYear();
-  const m = d.getUTCMonth(); // 0 = Jan
-  return m >= 3 ? y : y - 1;  // Jan–Mar belong to the previous FY
+  const m = d.getUTCMonth();
+  return m >= 3 ? y : y - 1;
 }
-
 export function fyLabel(fyStart: number): string {
   return `FY ${fyStart}-${String((fyStart + 1) % 100).padStart(2, "0")}`;
 }
-
-/** 'YYYY-MM' for the given year/month(1-12). */
-function mk(year: number, month1: number): string {
-  return `${year}-${String(month1).padStart(2, "0")}`;
+const mk = (year: number, month1: number) => `${year}-${String(month1).padStart(2, "0")}`;
+const monthLabel = (key: string) => {
+  const [y, m] = key.split("-").map(Number);
+  return `${MONTH_ABBR[m - 1]} ${String(y).slice(2)}`;
+};
+function addMonths(key: string, delta: number): string {
+  const [y, m] = key.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
+  return mk(d.getUTCFullYear(), d.getUTCMonth() + 1);
 }
-
-/** The 12 displayed months of an FY: Apr(fyStart) … Mar(fyStart+1). */
-function fyMonths(fyStart: number): { key: string; label: string }[] {
-  const out: { key: string; label: string }[] = [];
+function monthSpan(fromKey: string, toKey: string): string[] {
+  const out: string[] = [];
+  let cur = fromKey;
+  for (let i = 0; i < 480 && cur <= toKey; i++) { out.push(cur); cur = addMonths(cur, 1); }
+  return out;
+}
+function fyMonthKeys(fyStart: number): string[] {
+  const out: string[] = [];
   for (let i = 0; i < 12; i++) {
-    const month0 = (3 + i) % 12;           // Apr=3 … Mar=2
+    const month0 = (3 + i) % 12;
     const year = 3 + i < 12 ? fyStart : fyStart + 1;
-    out.push({ key: mk(year, month0 + 1), label: `${MONTH_ABBR[month0]} ${String(year).slice(2)}` });
+    out.push(mk(year, month0 + 1));
   }
   return out;
 }
-
-const monthKeyFromDate = (iso: string): string => iso.slice(0, 7); // 'YYYY-MM-DD' → 'YYYY-MM'
-
-// ─── Row assembly helpers ─────────────────────────────────────────────────────
-function emptyValues(): Record<string, number> {
-  return {};
+function lastDayIso(monthKey: string): string {
+  const [y, m] = monthKey.split("-").map(Number);
+  return `${monthKey}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, "0")}`;
 }
-function sumDisplayed(values: Record<string, number>, displayed: string[]): number {
-  return displayed.reduce((a, k) => a + (values[k] ?? 0), 0);
+const monthKeyFromDate = (iso: string): string => iso.slice(0, 7);
+
+// ─── Column builders per mode ──────────────────────────────────────────────────
+function buildColumns(params: PnlParams): { columns: PnlColumn[]; periodLabel: string } {
+  if (params.mode === "annual") {
+    const end = params.fyStart;
+    const n = params.years ?? 5;
+    const cols: PnlColumn[] = [];
+    for (let fy = end - n + 1; fy <= end; fy++) {
+      cols.push({ key: `FY${fy}`, label: `FY ${fy}-${String((fy + 1) % 100).padStart(2, "0")}`, monthKeys: fyMonthKeys(fy) });
+    }
+    return { columns: cols, periodLabel: `${cols[0].label} → ${cols[cols.length - 1].label}` };
+  }
+  if (params.mode === "custom" && params.from && params.to) {
+    const fromKey = params.from.slice(0, 7);
+    const toKey = params.to.slice(0, 7);
+    let keys = monthSpan(fromKey, toKey);
+    if (keys.length > 36) keys = keys.slice(-36); // guard runaway width
+    const cols = keys.map((k) => ({ key: k, label: monthLabel(k), monthKeys: [k] }));
+    return { columns: cols, periodLabel: `${monthLabel(fromKey)} – ${monthLabel(toKey)}` };
+  }
+  // monthly (default)
+  const keys = fyMonthKeys(params.fyStart);
+  return { columns: keys.map((k) => ({ key: k, label: monthLabel(k), monthKeys: [k] })), periodLabel: fyLabel(params.fyStart) };
+}
+
+export interface PnlParams {
+  mode: PnlMode;
+  fyStart: number;
+  from?: string;
+  to?: string;
+  years?: number;
+}
+
+// aggregate a row's monthly series over a set of month keys
+export function aggregate(row: PnlRow | undefined, monthKeys: string[]): number {
+  if (!row) return 0;
+  return monthKeys.reduce((a, k) => a + (row.monthly[k] ?? 0), 0);
 }
 
 // ─── Main loader ──────────────────────────────────────────────────────────────
-export async function getPnl(orgId: string, fyStart: number): Promise<PnlData> {
-  const months = fyMonths(fyStart);
-  const displayedKeys = months.map((m) => m.key);
-
-  // Fetch a 24-month window: prior FY + selected FY, so the client has the
-  // previous month (for April's MoM) and same-month-last-year (for YoY).
-  const from = `${fyStart - 1}-04-01`;
-  const to = `${fyStart + 1}-03-31`;
+export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData> {
+  const { columns, periodLabel } = buildColumns(params);
+  const allKeys = columns.flatMap((c) => c.monthKeys);
+  const minKey = allKeys.reduce((a, b) => (a < b ? a : b));
+  const maxKey = allKeys.reduce((a, b) => (a > b ? a : b));
+  const from = `${addMonths(minKey, -12)}-01`;   // extra year back for YoY/MoM bases
+  const to = lastDayIso(maxKey);
 
   const supabase = await createServiceClient();
   const [monthlyRes, pnlRes] = await Promise.all([
@@ -83,131 +140,171 @@ export async function getPnl(orgId: string, fyStart: number): Promise<PnlData> {
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
   ]);
 
-  type MonthlyRow = { month: string; gross_revenue: number; refunds: number; expense_total: number };
+  type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
   type PnlCatRow = { month: string; category: string; label: string; amount: number };
-
   const monthly: MonthlyRow[] = (monthlyRes.data as MonthlyRow[]) ?? [];
   const catRows: PnlCatRow[] = (pnlRes.data as PnlCatRow[]) ?? [];
 
-  // Revenue / refunds keyed by month.
-  const gross = emptyValues();
-  const refunds = emptyValues();
+  const gross: Record<string, number> = {};
+  const refunds: Record<string, number> = {};
   for (const r of monthly) {
     const k = monthKeyFromDate(r.month);
     gross[k] = Number(r.gross_revenue) || 0;
     refunds[k] = Number(r.refunds) || 0;
   }
 
-  // Fees + expense categories from the P&L rollup.
-  const fees = emptyValues();
-  // slug → { label, values }
+  const fees: Record<string, number> = {};
   const cats = new Map<string, { label: string; values: Record<string, number> }>();
   for (const c of catRows) {
     const k = monthKeyFromDate(c.month);
     const amt = Number(c.amount) || 0;
-    if (c.category === "__pg_fees__") {
-      fees[k] = (fees[k] ?? 0) + amt;
-      continue;
-    }
-    let entry = cats.get(c.category);
-    if (!entry) {
-      entry = { label: c.label || c.category, values: emptyValues() };
-      cats.set(c.category, entry);
-    }
-    entry.values[k] = (entry.values[k] ?? 0) + amt;
+    if (c.category === "__pg_fees__") { fees[k] = (fees[k] ?? 0) + amt; continue; }
+    let e = cats.get(c.category);
+    if (!e) { e = { label: c.label || c.category, values: {} }; cats.set(c.category, e); }
+    e.values[k] = (e.values[k] ?? 0) + amt;
   }
 
-  // Derived series.
-  const netRevenue = emptyValues();
-  const grossProfit = emptyValues();
-  const totalOpex = emptyValues();
-  const netProfit = emptyValues();
-  const margin = emptyValues();
-
-  const allKeys = new Set<string>([
+  const windowKeys = new Set<string>([
     ...Object.keys(gross), ...Object.keys(refunds), ...Object.keys(fees),
     ...[...cats.values()].flatMap((c) => Object.keys(c.values)),
   ]);
-  for (const k of allKeys) {
-    const g = gross[k] ?? 0;
-    const rf = refunds[k] ?? 0;
-    const fe = fees[k] ?? 0;
-    const opex = [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
+  const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
+
+  // Derived monthly series.
+  const netRevenue: Record<string, number> = {};
+  const totalOpex: Record<string, number> = {};
+  const netProfit: Record<string, number> = {};
+  const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
+  for (const k of windowKeys) {
+    const g = gross[k] ?? 0, rf = refunds[k] ?? 0;
     const nr = g - rf;
-    const gp = nr - fe;
-    const np = gp - opex;
     netRevenue[k] = nr;
-    grossProfit[k] = gp;
+    const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex;
-    netProfit[k] = np;
-    margin[k] = nr !== 0 ? (np / nr) * 100 : 0;
+    netProfit[k] = nr - opex;
+    let running = nr;
+    for (const t of CM_CONFIG) {
+      running -= t.cats.reduce((a, slug) => a + catVal(slug, k), 0);
+      cm[t.id][k] = running;
+    }
   }
 
-  // Order expense categories by descending total over the displayed FY.
-  const catList = [...cats.entries()]
-    .map(([slug, c]) => ({ slug, label: c.label, values: c.values, total: sumDisplayed(c.values, displayedKeys) }))
-    .sort((a, b) => b.total - a.total);
-
+  const present = (slug: string) => [...windowKeys].some((k) => catVal(slug, k) !== 0);
   const rows: PnlRow[] = [];
-  const push = (id: string, label: string, kind: PnlRowKind, values: Record<string, number>, drill?: string) =>
-    rows.push({ id, label, kind, values, total: sumDisplayed(values, displayedKeys), drill });
+  const add = (r: PnlRow) => rows.push(r);
+  const catRow = (slug: string, section?: string): PnlRow | null => {
+    if (slug !== "__pg_fees__" && !cats.has(slug)) return null;
+    if (!present(slug)) return null;
+    const label = slug === "__pg_fees__" ? "Payment Gateway Fees" : (cats.get(slug)?.label ?? slug);
+    const monthlyVals = slug === "__pg_fees__" ? fees : (cats.get(slug)?.values ?? {});
+    return { id: `exp_${slug}`, label, kind: slug === "__pg_fees__" ? "deduction" : "expense", monthly: monthlyVals, drill: slug, section };
+  };
 
-  push("gross_revenue", "Gross Revenue", "revenue", gross, "revenue");
-  push("refunds", "Refunds", "deduction", refunds, "refunds");
-  push("net_revenue", "Net Revenue", "subtotal", netRevenue);
-  push("pg_fees", "Payment Gateway Fees", "deduction", fees, "__pg_fees__");
-  push("gross_profit", "Gross Profit", "subtotal", grossProfit);
-  for (const c of catList) push(`exp_${c.slug}`, c.label, "expense", c.values, c.slug);
-  push("total_opex", "Total Operating Expenses", "subtotal", totalOpex);
-  push("net_profit", "Net Profit / (Loss)", "total", netProfit);
-  push("margin", "Net Margin %", "margin", margin);
+  add({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
+  add({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
+  add({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
 
-  const hasData = monthly.length > 0 || catRows.length > 0;
+  // CM1 bucket (Cost of Revenue): fees + cogs categories, then CM1
+  let firstCogs = true;
+  const cogsSlugs = ["__pg_fees__", ...CM_CONFIG[0].cats.filter((c) => c !== "__pg_fees__")];
+  for (const slug of cogsSlugs) {
+    const r = catRow(slug, firstCogs ? "Cost of Revenue" : undefined);
+    if (r) { add(r); firstCogs = false; }
+  }
+  add({ id: "cm1", label: CM_CONFIG[0].label, kind: "cm", emphasis: "cm", monthly: cm.cm1, pctBaseId: "net_revenue" });
+
+  // CM2 bucket (Sales & Marketing)
+  let firstSm = true;
+  for (const slug of CM_CONFIG[1].cats) {
+    const r = catRow(slug, firstSm ? "Sales & Marketing" : undefined);
+    if (r) { add(r); firstSm = false; }
+  }
+  add({ id: "cm2", label: CM_CONFIG[1].label, kind: "cm", emphasis: "cm", monthly: cm.cm2, pctBaseId: "net_revenue" });
+
+  // CM3 bucket (People)
+  let firstP = true;
+  for (const slug of CM_CONFIG[2].cats) {
+    const r = catRow(slug, firstP ? "People" : undefined);
+    if (r) { add(r); firstP = false; }
+  }
+  add({ id: "cm3", label: CM_CONFIG[2].label, kind: "cm", emphasis: "cm", monthly: cm.cm3, pctBaseId: "net_revenue" });
+
+  // Remaining opex categories (anything not in a CM bucket), largest first.
+  const bucketed = new Set(["__pg_fees__", ...CM_CAT_ORDER]);
+  const others = [...cats.entries()]
+    .filter(([slug]) => !bucketed.has(slug) && present(slug))
+    .map(([slug, c]) => ({ slug, total: [...windowKeys].reduce((a, k) => a + (c.values[k] ?? 0), 0) }))
+    .sort((a, b) => b.total - a.total);
+  let firstOther = true;
+  for (const o of others) {
+    const r = catRow(o.slug, firstOther ? "Other Operating" : undefined);
+    if (r) { add(r); firstOther = false; }
+  }
+
+  add({ id: "total_opex", label: "Total Operating Expenses", kind: "subtotal", emphasis: "strong", monthly: totalOpex });
+  add({ id: "net_profit", label: "Net Profit / (Loss)", kind: "total", emphasis: "strong", monthly: netProfit });
+  add({ id: "net_margin", label: "Net Margin %", kind: "margin", monthly: {}, pctBaseId: "net_revenue", numeratorId: "net_profit" });
 
   return {
-    fyStart,
-    fyLabel: fyLabel(fyStart),
-    months,
+    mode: params.mode,
+    periodLabel,
+    fyStart: params.fyStart,
+    from: params.from,
+    to: params.to,
+    columns,
     rows,
-    hasData,
+    hasData: monthly.length > 0 || catRows.length > 0,
     preview: false,
   };
 }
 
 // ─── Sample P&L (shown before any source is connected) ────────────────────────
-export function samplePnl(fyStart: number): PnlData {
-  const months = fyMonths(fyStart);
-  const keys = months.map((m) => m.key);
-  const seedRev = [820000, 860000, 910000, 880000, 940000, 1010000, 990000, 1060000, 1120000, 1090000, 1180000, 1250000];
-  const mkVals = (fn: (i: number) => number) => Object.fromEntries(keys.map((k, i) => [k, Math.round(fn(i))]));
+export function samplePnl(params: PnlParams): PnlData {
+  const { columns, periodLabel } = buildColumns(params);
+  const keys = [...new Set(columns.flatMap((c) => c.monthKeys))].sort();
+  const seed = (i: number, base: number, drift: number) => Math.round(base * (1 + drift * i));
+  const mkS = (base: number, drift: number) => Object.fromEntries(keys.map((k, i) => [k, seed(i, base, drift)]));
 
-  const gross = mkVals((i) => seedRev[i]);
-  const refunds = mkVals((i) => seedRev[i] * 0.02);
-  const fees = mkVals((i) => seedRev[i] * 0.025);
-  const catDefs: [string, number][] = [
-    ["People", 0.34], ["Marketing", 0.18], ["Infrastructure", 0.09], ["Software", 0.05], ["Operations", 0.04],
+  const gross = mkS(9000000, 0.03);
+  const refunds = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.02)]));
+  const fees = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.03)]));
+  const catDefs: [string, string, number][] = [
+    ["ai_model", "AI Model", 0.22], ["cloud_infra", "Cloud & Infrastructure", 0.04], ["technical_expense", "Technical Expense", 0.02],
+    ["marketing", "Marketing & Advertising", 0.12], ["payroll", "Payroll", 0.14], ["contractors", "Contractors & Freelancers", 0.03],
+    ["professional", "Professional Services", 0.03], ["travel", "Travel", 0.02], ["software", "Software & SaaS", 0.02],
   ];
-  const cats = catDefs.map(([label, frac]) => ({ label, slug: label.toLowerCase(), values: mkVals((i) => seedRev[i] * frac) }));
+  const cats = new Map(catDefs.map(([slug, label, frac]) => [slug, { label, values: Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * frac)])) }]));
 
-  const derive = (fn: (i: number) => number) => mkVals(fn);
-  const netRevenue = derive((i) => gross[keys[i]] - refunds[keys[i]]);
-  const grossProfit = derive((i) => netRevenue[keys[i]] - fees[keys[i]]);
-  const totalOpex = derive((i) => cats.reduce((a, c) => a + c.values[keys[i]], 0));
-  const netProfit = derive((i) => grossProfit[keys[i]] - totalOpex[keys[i]]);
-  const margin = Object.fromEntries(keys.map((k) => [k, netRevenue[k] !== 0 ? (netProfit[k] / netRevenue[k]) * 100 : 0]));
+  const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
+  const netRevenue: Record<string, number> = {}, totalOpex: Record<string, number> = {}, netProfit: Record<string, number> = {};
+  const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
+  for (const k of keys) {
+    const nr = (gross[k] ?? 0) - (refunds[k] ?? 0);
+    netRevenue[k] = nr;
+    const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
+    totalOpex[k] = opex; netProfit[k] = nr - opex;
+    let running = nr;
+    for (const t of CM_CONFIG) { running -= t.cats.reduce((a, s) => a + catVal(s, k), 0); cm[t.id][k] = running; }
+  }
 
-  const sum = (v: Record<string, number>) => keys.reduce((a, k) => a + (v[k] ?? 0), 0);
-  const rows: PnlRow[] = [
-    { id: "gross_revenue", label: "Gross Revenue", kind: "revenue", values: gross, total: sum(gross) },
-    { id: "refunds", label: "Refunds", kind: "deduction", values: refunds, total: sum(refunds) },
-    { id: "net_revenue", label: "Net Revenue", kind: "subtotal", values: netRevenue, total: sum(netRevenue) },
-    { id: "pg_fees", label: "Payment Gateway Fees", kind: "deduction", values: fees, total: sum(fees) },
-    { id: "gross_profit", label: "Gross Profit", kind: "subtotal", values: grossProfit, total: sum(grossProfit) },
-    ...cats.map((c) => ({ id: `exp_${c.slug}`, label: c.label, kind: "expense" as const, values: c.values, total: sum(c.values) })),
-    { id: "total_opex", label: "Total Operating Expenses", kind: "subtotal", values: totalOpex, total: sum(totalOpex) },
-    { id: "net_profit", label: "Net Profit / (Loss)", kind: "total", values: netProfit, total: sum(netProfit) },
-    { id: "margin", label: "Net Margin %", kind: "margin", values: margin, total: netRevenue && sum(netRevenue) !== 0 ? (sum(netProfit) / sum(netRevenue)) * 100 : 0 },
-  ];
+  const rows: PnlRow[] = [];
+  rows.push({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
+  rows.push({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
+  rows.push({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
+  const sampleCat = (slug: string, section?: string): PnlRow => ({
+    id: `exp_${slug}`, label: slug === "__pg_fees__" ? "Payment Gateway Fees" : (cats.get(slug)?.label ?? slug),
+    kind: slug === "__pg_fees__" ? "deduction" : "expense", monthly: slug === "__pg_fees__" ? fees : (cats.get(slug)?.values ?? {}), drill: slug, section,
+  });
+  rows.push(sampleCat("__pg_fees__", "Cost of Revenue"), sampleCat("ai_model"), sampleCat("cloud_infra"), sampleCat("technical_expense"));
+  rows.push({ id: "cm1", label: CM_CONFIG[0].label, kind: "cm", emphasis: "cm", monthly: cm.cm1, pctBaseId: "net_revenue" });
+  rows.push(sampleCat("marketing", "Sales & Marketing"));
+  rows.push({ id: "cm2", label: CM_CONFIG[1].label, kind: "cm", emphasis: "cm", monthly: cm.cm2, pctBaseId: "net_revenue" });
+  rows.push(sampleCat("payroll", "People"), sampleCat("contractors"), sampleCat("professional"));
+  rows.push({ id: "cm3", label: CM_CONFIG[2].label, kind: "cm", emphasis: "cm", monthly: cm.cm3, pctBaseId: "net_revenue" });
+  rows.push(sampleCat("travel", "Other Operating"), sampleCat("software"));
+  rows.push({ id: "total_opex", label: "Total Operating Expenses", kind: "subtotal", emphasis: "strong", monthly: totalOpex });
+  rows.push({ id: "net_profit", label: "Net Profit / (Loss)", kind: "total", emphasis: "strong", monthly: netProfit });
+  rows.push({ id: "net_margin", label: "Net Margin %", kind: "margin", monthly: {}, pctBaseId: "net_revenue", numeratorId: "net_profit" });
 
-  return { fyStart, fyLabel: fyLabel(fyStart), months, rows, hasData: true, preview: true };
+  return { mode: params.mode, periodLabel, fyStart: params.fyStart, from: params.from, to: params.to, columns, rows, hasData: true, preview: true };
 }

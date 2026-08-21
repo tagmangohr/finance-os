@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
-import { getPnl, fyStartForDate } from "@/lib/pnl";
+import { getPnl, aggregate, fyStartForDate, type PnlMode, type PnlColumn } from "@/lib/pnl";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const ISO = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+
 /**
- * GET /api/pnl/export?fy=YYYY&format=csv|xlsx
- * Exports the exact month-wise P&L grid for a financial year. Gated on the "pnl"
- * page grant (owner/admin always). Money rows are whole rupees; the margin row is
- * a percentage.
+ * GET /api/pnl/export?mode=&fy=&from=&to=&format=csv|xlsx
+ * Exports the P&L grid for the current view. Gated on the "pnl" page grant.
+ * Money rows are whole rupees; the Net Margin row is a percentage.
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
@@ -19,23 +20,36 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const currentFy = fyStartForDate(new Date());
   const parsed = Number(req.nextUrl.searchParams.get("fy"));
   const fyStart = Number.isFinite(parsed) && parsed >= 2020 && parsed <= currentFy ? parsed : currentFy;
+  const rawMode = req.nextUrl.searchParams.get("mode");
+  const mode: PnlMode = rawMode === "annual" || rawMode === "custom" ? rawMode : "monthly";
+  const from = ISO(req.nextUrl.searchParams.get("from")) ?? `${currentFy}-04-01`;
+  const to = ISO(req.nextUrl.searchParams.get("to")) ?? new Date().toISOString().slice(0, 10);
   const format = req.nextUrl.searchParams.get("format") ?? "csv";
 
-  const data = await getPnl(org.id, fyStart);
+  const data = await getPnl(org.id, { mode, fyStart, from, to, years: 5 });
 
-  const header = ["Line item", ...data.months.map((m) => m.label), "Total"];
+  const cols: PnlColumn[] = mode === "annual"
+    ? data.columns
+    : [...data.columns, { key: "__total__", label: "Total", monthKeys: data.columns.flatMap((c) => c.monthKeys) }];
+  const rowsById = Object.fromEntries(data.rows.map((r) => [r.id, r]));
+
+  const header = ["Line item", ...cols.map((c) => c.label)];
   const round = (n: number, dp = 0) => Number(n.toFixed(dp));
   const aoa: (string | number)[][] = [header];
   for (const row of data.rows) {
-    const dp = row.kind === "margin" ? 1 : 0;
-    aoa.push([
-      row.label,
-      ...data.months.map((m) => round(row.values[m.key] ?? 0, dp)),
-      round(row.total, dp),
-    ]);
+    if (row.kind === "margin") {
+      aoa.push([row.label, ...cols.map((c) => {
+        const base = aggregate(rowsById[row.pctBaseId ?? ""], c.monthKeys);
+        const num = aggregate(rowsById[row.numeratorId ?? row.id], c.monthKeys);
+        return base ? round((num / base) * 100, 1) : 0;
+      })]);
+    } else {
+      aoa.push([row.label, ...cols.map((c) => round(aggregate(row, c.monthKeys)))]);
+    }
   }
 
-  const filename = `pnl_FY${fyStart}-${String((fyStart + 1) % 100).padStart(2, "0")}`;
+  const stamp = mode === "custom" ? `${from}_${to}` : `FY${fyStart}-${String((fyStart + 1) % 100).padStart(2, "0")}`;
+  const filename = `pnl_${mode}_${stamp}`;
 
   if (format === "xlsx") {
     const XLSX = await import("xlsx");

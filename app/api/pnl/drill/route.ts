@@ -45,6 +45,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const key = req.nextUrl.searchParams.get("key");
   const from = ISO(req.nextUrl.searchParams.get("from"));
   const to = ISO(req.nextUrl.searchParams.get("to"));
+  const party = req.nextUrl.searchParams.get("party"); // optional: one vendor/customer group
   if (!org || !key || !from || !to) return NextResponse.json({ error: "org, key, from, to required" }, { status: 400 });
 
   if (!(await hasPageAccessForOrg(org, "pnl"))) {
@@ -71,6 +72,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     q = q.in("status", ["completed", "refunded"]).or("and(ledger.eq.bank,pnl_treatment.eq.expense),and(ledger.eq.payments,type.eq.debit)");
     if (key === "uncategorized") q = q.or("category.is.null,category.eq.");
     else q = q.eq("category", key);
+  }
+
+  // Optional: restrict to one vendor/customer group (the expand step). '—' is the
+  // bucket for rows with no counterparty name.
+  if (party != null) {
+    if (party === "—") q = q.or("counterparty_name.is.null,counterparty_name.eq.");
+    else q = q.eq("counterparty_name", party);
   }
 
   const { data, count, error } = await q.order("transaction_date", { ascending: false }).limit(LIMIT);
