@@ -292,9 +292,9 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
                 {displayCols.map((c) => (
-                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-border/60", c.key === "__total__" && "font-bold text-foreground")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-white/10", c.key === "__total__" && "font-bold text-white")}>{c.label}</th>
                 ))}
               </tr>
             </thead>

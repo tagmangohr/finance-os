@@ -138,10 +138,10 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-card text-left font-semibold text-muted-foreground px-3 py-2.5 min-w-[240px] border-r border-border">Particulars</th>
-                <th className="sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60">Growth /mo</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
+                <th className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">Growth /mo</th>
                 {months.map((m) => (
-                  <th key={m.key} className="sticky top-0 z-[4] bg-card text-right font-semibold text-muted-foreground px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-border/60">{m.label}</th>
+                  <th key={m.key} className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">{m.label}</th>
                 ))}
               </tr>
             </thead>
