@@ -39,10 +39,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const from = sp.get("from");
   const to = sp.get("to");
 
-  // Search-only: no term (or too short) → never dump the whole history.
-  if (!search || search.trim().length < 3) {
+  // Search-only: no term, too short, or no real characters → never dump history.
+  if (!search || search.trim().length < 3 || !/[a-z0-9]/i.test(search)) {
     return NextResponse.json({ data: [], total: 0, limit, offset, note: "Provide a `search` term of at least 3 characters." });
   }
+
+  // Escape LIKE wildcards so the term is matched LITERALLY. Without this a partner
+  // could pass `___` or `%` to match every row — this is a search-ONLY endpoint.
+  // Underscores inside real ids (pay_…, cf_pay_…) stay searchable (matched literally).
+  const likeTerm = search.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
   let query = supabase
     .from("transactions")
@@ -58,7 +63,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   if (to) query = query.lte("transaction_date", to.slice(0, 10));
 
   query = query
-    .ilike("search_text", `%${search}%`)
+    .ilike("search_text", `%${likeTerm}%`)
     .order("transaction_date", { ascending: false })
     .order("transaction_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
