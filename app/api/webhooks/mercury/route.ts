@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import crypto from "crypto";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { enqueueIncremental, drainSyncJobs } from "@/lib/connectors/jobs";
 import { captureEvent } from "@/lib/events/capture";
@@ -57,14 +58,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createServiceClient();
   const rawBody = await req.text();
 
-  // Match the Mercury connector (sole active one, or the ?c= override).
+  // Match the Mercury connector: ?c=<token> (new) → sole active → ?c=<id> (legacy).
   const cParam = req.nextUrl.searchParams.get("c");
-  let cq = supabase.from("connectors").select("id, org_id, type, config").eq("type", "mercury").eq("status", "active");
-  if (cParam) cq = cq.eq("id", cParam);
-  const { data: conns } = await cq;
-  const list = conns ?? [];
-  const connector = (cParam ? list[0] : list.length === 1 ? list[0] : null) as
-    | { id: string; org_id: string; config: Record<string, unknown> | null } | null;
+  const tokenConn = await connectorByToken(supabase, "mercury", cParam);
+  let connector: { id: string; org_id: string; config: Record<string, unknown> | null } | null =
+    tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id, config: tokenConn.config } : null;
+  if (!connector) {
+    let cq = supabase.from("connectors").select("id, org_id, config").eq("type", "mercury").eq("status", "active");
+    if (cParam) cq = cq.eq("id", cParam); // backward-compat: old ?c=<connector id> URLs
+    const { data: conns } = await cq;
+    const list = conns ?? [];
+    connector = (cParam ? list[0] : list.length === 1 ? list[0] : null) as
+      | { id: string; org_id: string; config: Record<string, unknown> | null } | null;
+  }
 
   if (!connector) {
     await logWebhook(supabase, { outcome: "unmatched", signature_ok: false, event_type: peekType(rawBody) });

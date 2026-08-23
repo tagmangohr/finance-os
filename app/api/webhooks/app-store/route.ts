@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SignedDataVerifier, Environment } from "@apple/app-store-server-library";
 import { createServiceClient } from "@/lib/supabase/server";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { captureEvent } from "@/lib/events/capture";
 import { APPLE_ROOT_CERTIFICATES } from "@/lib/apple/root-ca";
@@ -98,21 +99,27 @@ function toEnvironment(env: string | null): Environment {
  */
 async function handleFiestaRelay(
   supabase: SupabaseLike,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  token: string | null
 ): Promise<NextResponse> {
   const notificationType = typeof body.notificationType === "string" ? body.notificationType : null;
   const subtype = typeof body.subtype === "string" ? body.subtype : null;
   const eventType = subtype ? `${notificationType}.${subtype}` : notificationType;
   const transaction = (body.transaction ?? null) as AppStoreTransactionInfo | null;
 
-  // Open endpoint + one App Store connector → no bundle routing; take the active one.
-  const { data: connectors } = await supabase
-    .from("connectors")
-    .select("id, org_id")
-    .eq("type", "app_store")
-    .eq("status", "active")
-    .limit(1);
-  const matched = connectors?.[0] as { id: string; org_id: string } | undefined;
+  // Prefer the token-pinned connector (?c=<token>, multi-account safe); else the
+  // sole active App Store connector.
+  const tokenConn = await connectorByToken(supabase, "app_store", token);
+  let matched: { id: string; org_id: string } | undefined = tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id } : undefined;
+  if (!matched) {
+    const { data: connectors } = await supabase
+      .from("connectors")
+      .select("id, org_id")
+      .eq("type", "app_store")
+      .eq("status", "active")
+      .limit(1);
+    matched = connectors?.[0] as { id: string; org_id: string } | undefined;
+  }
   if (!matched) {
     // No connector yet — keep the full body so we can replay it once one exists.
     await logWebhook(supabase, {
@@ -196,7 +203,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let parsed: Record<string, unknown> | null = null;
   try { parsed = JSON.parse(rawBody) as Record<string, unknown>; } catch { parsed = null; }
   if (parsed && !parsed.signedPayload && ("transaction" in parsed || "notificationType" in parsed)) {
-    return handleFiestaRelay(supabase, parsed);
+    return handleFiestaRelay(supabase, parsed, req.nextUrl.searchParams.get("c"));
   }
 
   // Apple direct path: reuse the body already parsed above (reaching here means it either

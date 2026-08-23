@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { captureEvent } from "@/lib/events/capture";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { normalizeCashfreeWebhookEvent, extractCashfreeSubscription, applyCashfreeCustomer, type CashfreeWebhookPayload } from "@/lib/normalizer";
@@ -80,18 +81,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .eq("status", "active");
 
   // The connector whose client_secret reproduces the signature is the sender.
+  // A ?c=<token> URL pins ONE connector: verify with just its secret (multi-account
+  // safe); otherwise trial every active connector's secret (legacy).
   const signed = `${timestamp}${rawBody}`;
-  let matched: { id: string; org_id: string } | null = null;
-  for (const c of connectors ?? []) {
-    const cfg = decryptConfigSecrets((c.config ?? {}) as Record<string, string>);
-    const secret = cfg.client_secret;
-    if (!secret) continue;
+  const verifySig = (secret: string | undefined): boolean => {
+    if (!secret) return false;
     const expected = crypto.createHmac("sha256", secret).update(signed).digest("base64");
     const a = Buffer.from(signature);
     const b = Buffer.from(expected);
-    if (a.length === b.length && crypto.timingSafeEqual(a, b)) {
-      matched = { id: c.id, org_id: c.org_id };
-      break;
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
+  const tokenConn = await connectorByToken(supabase, "cashfree", req.nextUrl.searchParams.get("c"));
+  let matched: { id: string; org_id: string } | null = null;
+  if (tokenConn) {
+    if (verifySig(tokenConn.config.client_secret as string | undefined)) matched = { id: tokenConn.id, org_id: tokenConn.org_id };
+  } else {
+    for (const c of connectors ?? []) {
+      const cfg = decryptConfigSecrets((c.config ?? {}) as Record<string, string>);
+      if (verifySig(cfg.client_secret)) { matched = { id: c.id, org_id: c.org_id }; break; }
     }
   }
   if (!matched) {

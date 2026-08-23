@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { captureEvent } from "@/lib/events/capture";
 import {
   normalizeStripeCharge,
@@ -63,7 +64,10 @@ function isTagMangoStripeMeta(m?: Stripe.Metadata | null): boolean {
  * events log renewal/dunning subscription_events.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const supabase = await createServiceClient();
+  // Per-account routing: ?c=<token> pins the connector and its own signing secret.
+  const tokenConn = await connectorByToken(supabase, "stripe", req.nextUrl.searchParams.get("c"));
+  const webhookSecret = (tokenConn?.config.webhook_secret as string | undefined) || process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
     console.error("[stripe webhook] STRIPE_WEBHOOK_SECRET not configured");
     return NextResponse.json({ error: "Webhook not configured" }, { status: 500 });
@@ -106,26 +110,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, ignored: event.type }, { status: 200 });
   }
 
-  const supabase = await createServiceClient();
-  const { data: connectors } = await supabase
-    .from("connectors")
-    .select("id, org_id, config")
-    .eq("type", "stripe")
-    .eq("status", "active");
-
-  // event.account is set only for Connect; match it against the connector's stored
-  // account id (mid, unencrypted). Otherwise fall back to the sole active connector.
-  const list = connectors ?? [];
-  const account = event.account;
-  let matched: { id: string; org_id: string } | null = null;
-  if (account) {
-    const m = list.filter((c) => (c.config as Record<string, string>)?.mid === account);
-    if (m.length === 1) matched = m[0];
+  // Prefer the token-pinned connector; else match event.account (Connect) → mid, else sole active.
+  let matched: { id: string; org_id: string } | null = tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id } : null;
+  if (!matched) {
+    const { data: connectors } = await supabase
+      .from("connectors")
+      .select("id, org_id, config")
+      .eq("type", "stripe")
+      .eq("status", "active");
+    const list = connectors ?? [];
+    const account = event.account;
+    if (account) {
+      const m = list.filter((c) => (c.config as Record<string, string>)?.mid === account);
+      if (m.length === 1) matched = m[0];
+    }
+    if (!matched && list.length === 1) matched = list[0];
   }
-  if (!matched && list.length === 1) matched = list[0];
 
   if (!matched) {
-    console.warn(`[stripe webhook] no unique connector match (account=${account ?? "none"}); ${event.type} skipped`);
+    console.warn(`[stripe webhook] no unique connector match (account=${event.account ?? "none"}); ${event.type} skipped`);
     return NextResponse.json({ received: true, unmatched: true }, { status: 200 });
   }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { captureEvent } from "@/lib/events/capture";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
 import { upsertRazorpayInvoice } from "@/lib/subscriptions/invoices";
@@ -61,8 +62,13 @@ const peekType = (raw: string): string | null => {
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createServiceClient();
-  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   const rawBody = await req.text();
+
+  // Per-account routing: ?c=<token> pins the exact connector (multi-account safe),
+  // and its own webhook secret verifies the signature. Falls back to the global env
+  // secret for legacy token-less URLs.
+  const tokenConn = await connectorByToken(supabase, "razorpay", req.nextUrl.searchParams.get("c"));
+  const webhookSecret = (tokenConn?.config.webhook_secret as string | undefined) || process.env.RAZORPAY_WEBHOOK_SECRET;
 
   if (!webhookSecret) {
     console.error("[razorpay webhook] RAZORPAY_WEBHOOK_SECRET not configured");
@@ -87,14 +93,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const type = event.event ?? "";
   const payload = event.payload ?? {};
 
-  // Match the connector by its public key_id (not a secret), else the sole active one.
-  const { data: connectors } = await supabase
-    .from("connectors").select("id, org_id, config").eq("type", "razorpay").eq("status", "active");
+  // Prefer the token-pinned connector; else match by public key_id, else sole active.
   const keyId = req.headers.get("x-razorpay-key-id");
-  const list = connectors ?? [];
-  let matched: { id: string; org_id: string } | null = null;
-  if (keyId) { const m = list.filter((c) => (c.config as Record<string, string>)?.key_id === keyId); if (m.length === 1) matched = m[0]; }
-  if (!matched && list.length === 1) matched = list[0];
+  let matched: { id: string; org_id: string } | null = tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id } : null;
+  if (!matched) {
+    const { data: connectors } = await supabase
+      .from("connectors").select("id, org_id, config").eq("type", "razorpay").eq("status", "active");
+    const list = connectors ?? [];
+    if (keyId) { const m = list.filter((c) => (c.config as Record<string, string>)?.key_id === keyId); if (m.length === 1) matched = m[0]; }
+    if (!matched && list.length === 1) matched = list[0];
+  }
   if (!matched) {
     await logWebhook(supabase, { outcome: "unmatched", signature_ok: true, event_type: type, order_id: keyId });
     return NextResponse.json({ received: true, unmatched: true }, { status: 200 });

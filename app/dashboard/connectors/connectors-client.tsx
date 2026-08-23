@@ -15,6 +15,9 @@ import {
   Landmark,
   FileSpreadsheet,
   GripVertical,
+  Copy,
+  Check,
+  Webhook,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -116,6 +119,7 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     fields: [
       { key: "key_id",         label: "Key ID",                   placeholder: "rzp_live_..." },
       { key: "key_secret",     label: "Key Secret",               isPassword: true, placeholder: "••••••••••••••••" },
+      { key: "webhook_secret", label: "Webhook Secret",           isPassword: true, isOptional: true, placeholder: "the secret you set on this account's Razorpay webhook" },
       { key: "account_number", label: "RazorpayX Account No.", placeholder: "RazorpayX only — leave blank if unused", isOptional: true },
       { key: "email",          label: "Account Email",            placeholder: "you@company.com", isOptional: true },
       { key: "mid",            label: "Merchant ID (MID)",        placeholder: "MID12345", isOptional: true },
@@ -127,9 +131,10 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Charges, payouts, and invoices",
     icon: <SiIcon slug="stripe" bg="#635BFF" />,
     fields: [
-      { key: "secret_key", label: "Secret Key", isPassword: true, placeholder: "sk_live_..." },
-      { key: "email",      label: "Account Email", placeholder: "you@company.com", isOptional: true },
-      { key: "mid",        label: "Account ID",    placeholder: "acct_xxx", isOptional: true },
+      { key: "secret_key",     label: "Secret Key", isPassword: true, placeholder: "sk_live_..." },
+      { key: "webhook_secret", label: "Webhook Signing Secret", isPassword: true, isOptional: true, placeholder: "whsec_… from this account's Stripe webhook" },
+      { key: "email",          label: "Account Email", placeholder: "you@company.com", isOptional: true },
+      { key: "mid",            label: "Account ID",    placeholder: "acct_xxx", isOptional: true },
     ],
   },
   {
@@ -358,6 +363,110 @@ interface ConnectorsClientProps {
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
+
+// Per-gateway webhook endpoint reference: the path, the events to subscribe to,
+// and how the signature is verified. The connectors page shows each connected
+// account's tokenized URL (…?c=<webhook_token>) so events route to that account.
+const WEBHOOK_INFO: Record<string, { path: string; events: string[]; note: string }> = {
+  razorpay: {
+    path: "/api/webhooks/razorpay",
+    events: ["payment.captured", "payment.failed", "payment.authorized", "refund.created", "refund.processed", "payment.dispute.created", "payment.dispute.won", "payment.dispute.lost", "settlement.processed", "invoice.paid", "subscription.activated", "subscription.charged", "subscription.completed", "subscription.cancelled", "subscription.halted"],
+    note: "In the Razorpay dashboard set a webhook to this URL, choose a secret, and paste the same secret into this connector's Webhook Secret field.",
+  },
+  stripe: {
+    path: "/api/webhooks/stripe",
+    events: ["charge.succeeded", "charge.refunded", "charge.dispute.created", "charge.dispute.closed", "payout.paid", "invoice.paid", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"],
+    note: "Add this URL as a Stripe webhook endpoint and paste its signing secret (whsec_…) into this connector's Webhook Signing Secret field.",
+  },
+  cashfree: {
+    path: "/api/webhooks/cashfree",
+    events: ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK", "REFUND_STATUS_WEBHOOK", "SUBSCRIPTION_STATUS_CHANGE", "SUBSCRIPTION_PAYMENT_SUCCESS", "SUBSCRIPTION_PAYMENT_DECLINED"],
+    note: "Verified with your Cashfree client secret — no extra secret to enter.",
+  },
+  payu: {
+    path: "/api/webhooks/payu",
+    events: ["Successful transaction", "Failed transaction", "Refund"],
+    note: "Verified with your PayU salt — no extra secret to enter.",
+  },
+  paytm: {
+    path: "/api/webhooks/paytm",
+    events: ["Transaction status (success / failure)", "Refund status"],
+    note: "Verified with your Paytm merchant key — no extra secret to enter.",
+  },
+  easebuzz: {
+    path: "/api/webhooks/easebuzz",
+    events: ["Successful transaction", "Failed transaction", "Refund"],
+    note: "Verified with your Easebuzz salt — no extra secret to enter.",
+  },
+  app_store: {
+    path: "/api/webhooks/app-store",
+    events: ["App Store Server Notifications V2 — all types (subscribe once)"],
+    note: "No secret — verified against Apple's certificate. Set this as the Version 2 Production (and Sandbox) URL.",
+  },
+  mercury: {
+    path: "/api/webhooks/mercury",
+    events: ["transaction.created / updated"],
+    note: "Paste Mercury's signing secret into this connector's Webhook Signing Secret field.",
+  },
+};
+
+function CopyField({ value }: { value: string }) {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <div className="flex items-center gap-1.5">
+      <code className="flex-1 min-w-0 text-[11px] break-all rounded bg-background/60 border border-border px-2 py-1.5 text-foreground select-all">{value}</code>
+      <button
+        type="button"
+        onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        className="p-1.5 rounded-lg border border-border hover:bg-accent flex-shrink-0"
+        title="Copy"
+      >
+        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
+      </button>
+    </div>
+  );
+}
+
+/** Per-account webhook endpoints (URL + events) for every connected PG connector. */
+function WebhookEndpoints({ connectors }: { connectors: Connector[] }) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const webhookConns = connectors.filter((c) => WEBHOOK_INFO[c.type]);
+  if (webhookConns.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Webhook className="h-3.5 w-3.5 text-muted-foreground/70" />
+        <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Webhook endpoints</span>
+        <div className="flex-1 h-px bg-accent/40" />
+      </div>
+      <p className="text-xs text-muted-foreground/70">
+        Paste each account&apos;s URL into that gateway&apos;s dashboard and subscribe to the listed events. Every account has its own URL, so events route to the right connector.
+      </p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {webhookConns.map((c) => {
+          const info = WEBHOOK_INFO[c.type];
+          const token = (c as { webhook_token?: string }).webhook_token;
+          const url = `${origin}${info.path}${token ? `?c=${token}` : ""}`;
+          return (
+            <div key={c.id} className="rounded-xl border border-border bg-accent/30 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-foreground truncate">{c.name}</span>
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60 flex-shrink-0">{c.type}</span>
+              </div>
+              <CopyField value={url} />
+              <div className="flex flex-wrap gap-1">
+                {info.events.map((e) => (
+                  <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
+                ))}
+              </div>
+              <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">{info.note}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
@@ -1194,6 +1303,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           {notConnectedDefs.map((def, i) => renderCard(def, i))}
         </div>
       </div>
+
+      {/* ── Webhook endpoints (per-account URL + events) ──────────────────── */}
+      <WebhookEndpoints connectors={activeConnectors} />
 
       {/* ── Cloud storage section (injected from page.tsx) ─────────────────── */}
       {children && (

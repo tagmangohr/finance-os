@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
+import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { captureEvent } from "@/lib/events/capture";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
@@ -37,7 +38,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .eq("type", "easebuzz")
     .eq("status", "active");
 
-  const conn = (connectors ?? []).find((c) => (c.config as Record<string, string>)?.key === key);
+  // Prefer the token-pinned connector (?c=<token>); else match by public key.
+  const tokenConn = await connectorByToken(supabase, "easebuzz", req.nextUrl.searchParams.get("c"));
+  const conn = tokenConn
+    ? { id: tokenConn.id, org_id: tokenConn.org_id, config: tokenConn.config }
+    : (connectors ?? []).find((c) => (c.config as Record<string, string>)?.key === key);
   if (!conn) {
     return NextResponse.json({ received: true, unmatched: true }, { status: 200 });
   }
