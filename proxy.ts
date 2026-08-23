@@ -31,11 +31,13 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
-  // Public routes
+  // Public routes — no user session required. /api/v1 is the partner API,
+  // authenticated by an org API key (Bearer) inside the route, not a login cookie.
   if (
     pathname.startsWith("/auth") ||
     pathname.startsWith("/api/webhooks") ||
-    pathname.startsWith("/api/cron")
+    pathname.startsWith("/api/cron") ||
+    pathname.startsWith("/api/v1")
   ) {
     return supabaseResponse;
   }

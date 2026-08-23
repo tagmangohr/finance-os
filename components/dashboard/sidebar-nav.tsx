@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Activity, Sheet, LineChart, Scale, type LucideIcon,
+  Repeat, Activity, Sheet, LineChart, Scale, Settings, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,7 @@ const SETUP_NAV: NavItem[] = [
   { href: "/dashboard/connectors", slug: "connectors", label: "Connectors", Icon: Plug },
   { href: "/dashboard/profile",    label: "Profile",   Icon: User },
   { href: "/dashboard/users",      label: "Team",      Icon: Users, ownerOnly: true },
+  { href: "/dashboard/settings",   label: "Settings",  Icon: Settings, ownerOnly: true },
 ];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
