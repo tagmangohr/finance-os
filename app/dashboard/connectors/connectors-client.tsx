@@ -319,6 +319,37 @@ const RESUMABLE_CONNECTORS = new Set<Connector["type"]>(["stripe", "razorpay"]);
 // re-reading + mirroring it. One simple "Sync now" action (no date range).
 const LINK_CONNECTORS = new Set<Connector["type"]>(["google_sheets", "excel"]);
 
+// ─── Google Sheets per-tab parse config (mirrors lib/connectors/csv-parser) ────
+type SheetFormat = "single" | "split" | "matrix";
+// Auto-detected spec returned by /api/connectors/sheet-tabs.
+type TabSpec = {
+  format?: SheetFormat;
+  dateCol?: string; amountCol?: string; typeCol?: string;
+  descriptionCol?: string; counterpartyCol?: string; currencyCol?: string;
+  direction?: "auto" | "debit" | "credit";
+  debitCol?: string; creditCol?: string;
+  labelCol?: string; valueCols?: string[]; matrixDirection?: "debit" | "credit";
+};
+type SheetTabDetected = { name: string; rowCount: number; headers: string[] };
+// Working (UI) config for one tab.
+type SheetTabUi = {
+  import: boolean;
+  ledger: "bank" | "payments";
+  format?: SheetFormat; // undefined until detected/chosen → falls back to "single"
+  dateCol?: string; amountCol?: string;
+  direction?: "auto" | "debit" | "credit";
+  debitCol?: string; creditCol?: string;
+  descriptionCol?: string; counterpartyCol?: string;
+  labelCol?: string; valueCols?: string[]; matrixDirection?: "debit" | "credit";
+};
+// Shape persisted into connector config.tabs[] (a subset per format).
+type SheetTabPersisted = {
+  name: string; import: boolean; ledger: "bank" | "payments"; format: SheetFormat;
+  dateCol?: string; amountCol?: string; direction?: "auto" | "debit" | "credit";
+  debitCol?: string; creditCol?: string; descriptionCol?: string; counterpartyCol?: string;
+  labelCol?: string; valueCols?: string[]; matrixDirection?: "debit" | "credit";
+};
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // A fetch that fails because the user navigated away (request aborted / tab
@@ -478,9 +509,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // formValues persists across modal open/close — cleared only on confirm/cancel
   const [formValues, setFormValues] = React.useState<Record<string, string>>({});
 
-  // Google Sheets multi-tab setup: detected tabs + per-tab destination (import? / ledger).
-  const [sheetTabs, setSheetTabs] = React.useState<{ name: string; rowCount: number }[] | null>(null);
-  const [tabCfg, setTabCfg] = React.useState<Record<string, { import: boolean; ledger: "bank" | "payments" }>>({});
+  // Google Sheets multi-tab setup: detected tabs (with headers) + per-tab parse config.
+  const [sheetTabs, setSheetTabs] = React.useState<SheetTabDetected[] | null>(null);
+  const [tabCfg, setTabCfg] = React.useState<Record<string, SheetTabUi>>({});
   const [detectingTabs, setDetectingTabs] = React.useState(false);
 
   const detectSheetTabs = async () => {
@@ -491,11 +522,33 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       const res = await fetch(`/api/connectors/sheet-tabs?url=${encodeURIComponent(url)}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Couldn't read the sheet");
-      const tabs = (data.tabs ?? []) as { name: string; rowCount: number }[];
-      setSheetTabs(tabs.map((t) => ({ name: t.name, rowCount: t.rowCount })));
+      const tabs = (data.tabs ?? []) as { name: string; rowCount: number; headers?: string[]; suggested?: TabSpec }[];
+      setSheetTabs(tabs.map((t) => ({ name: t.name, rowCount: t.rowCount, headers: t.headers ?? [] })));
       setTabCfg((prev) => {
         const next = { ...prev };
-        for (const t of tabs) if (!next[t.name]) next[t.name] = { import: true, ledger: "payments" };
+        for (const t of tabs) {
+          const s = t.suggested ?? { format: "single" as const };
+          const ex = next[t.name]; // an existing (e.g. saved-on-edit) config, if any
+          // Fill any UNSET field from the auto-detected suggestion while keeping the
+          // user's explicit choices — so re-detecting an old config picks up split/
+          // matrix detection without clobbering anything the user set.
+          next[t.name] = {
+            import: ex?.import ?? true,
+            // Split/matrix layouts are bank statements/registers → default to Bank.
+            ledger: ex?.ledger ?? (s.format === "split" || s.format === "matrix" ? "bank" : "payments"),
+            format: ex?.format ?? s.format ?? "single",
+            dateCol: ex?.dateCol ?? s.dateCol,
+            amountCol: ex?.amountCol ?? s.amountCol,
+            direction: ex?.direction ?? s.direction ?? "auto",
+            debitCol: ex?.debitCol ?? s.debitCol,
+            creditCol: ex?.creditCol ?? s.creditCol,
+            descriptionCol: ex?.descriptionCol ?? s.descriptionCol,
+            counterpartyCol: ex?.counterpartyCol ?? s.counterpartyCol,
+            labelCol: ex?.labelCol ?? s.labelCol,
+            valueCols: ex?.valueCols ?? s.valueCols,
+            matrixDirection: ex?.matrixDirection ?? s.matrixDirection ?? "debit",
+          };
+        }
         return next;
       });
     } catch (e) {
@@ -505,10 +558,27 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
   };
 
-  const buildSheetTabs = () =>
+  // Emit the persisted config.tabs[] — only the fields relevant to each tab's format.
+  const buildSheetTabs = (): SheetTabPersisted[] | undefined =>
     sheetTabs
-      ? sheetTabs.map((t) => ({ name: t.name, import: tabCfg[t.name]?.import ?? true, ledger: tabCfg[t.name]?.ledger ?? "payments" }))
+      ? sheetTabs.map((t) => {
+          const c = tabCfg[t.name] ?? { import: true, ledger: "payments" as const, format: "single" as const };
+          const base = {
+            name: t.name,
+            import: c.import ?? true,
+            ledger: c.ledger ?? "payments",
+            format: c.format ?? "single",
+          };
+          if (base.format === "split")
+            return { ...base, dateCol: c.dateCol, debitCol: c.debitCol, creditCol: c.creditCol, descriptionCol: c.descriptionCol, counterpartyCol: c.counterpartyCol };
+          if (base.format === "matrix")
+            return { ...base, labelCol: c.labelCol, valueCols: c.valueCols, matrixDirection: c.matrixDirection ?? "debit" };
+          return { ...base, dateCol: c.dateCol, amountCol: c.amountCol, direction: c.direction ?? "auto", descriptionCol: c.descriptionCol, counterpartyCol: c.counterpartyCol };
+        })
       : undefined;
+
+  const setTab = (name: string, patch: Partial<SheetTabUi>) =>
+    setTabCfg((p) => ({ ...p, [name]: { ...(p[name] ?? { import: true, ledger: "payments", format: "single" }), ...patch } }));
 
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
@@ -675,12 +745,24 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     setFormValues(prefilled);
 
     // Google Sheets: seed the tab config from what was saved, so edit shows it.
+    // Headers are unknown until "Detect tabs" is clicked again (re-reads the sheet),
+    // so column pickers stay hidden until then — the saved mapping is preserved.
     if (inst.type === "google_sheets") {
       const savedTabs = Array.isArray((cfg as { tabs?: unknown }).tabs)
-        ? ((cfg as unknown as { tabs: { name: string; import?: boolean; ledger?: "bank" | "payments" }[] }).tabs)
+        ? ((cfg as unknown as { tabs: (SheetTabPersisted & { valueCols?: string[] })[] }).tabs)
         : [];
-      setSheetTabs(savedTabs.length ? savedTabs.map((t) => ({ name: t.name, rowCount: 0 })) : null);
-      setTabCfg(Object.fromEntries(savedTabs.map((t) => [t.name, { import: t.import ?? true, ledger: t.ledger ?? "payments" }])));
+      setSheetTabs(savedTabs.length ? savedTabs.map((t) => ({ name: t.name, rowCount: 0, headers: [] })) : null);
+      setTabCfg(Object.fromEntries(savedTabs.map((t) => [t.name, {
+        import: t.import ?? true,
+        ledger: t.ledger ?? "payments",
+        // Leave format/direction UNSET when the saved config predates them, so a
+        // re-detect fills them from auto-detection (see detectSheetTabs).
+        format: t.format,
+        dateCol: t.dateCol, amountCol: t.amountCol, direction: t.direction,
+        debitCol: t.debitCol, creditCol: t.creditCol,
+        descriptionCol: t.descriptionCol, counterpartyCol: t.counterpartyCol,
+        labelCol: t.labelCol, valueCols: t.valueCols, matrixDirection: t.matrixDirection,
+      } as SheetTabUi])));
     } else {
       setSheetTabs(null);
       setTabCfg({});
@@ -1509,32 +1591,135 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         </button>
                       </div>
                       <p className="text-[11px] text-muted-foreground/80 leading-relaxed">
-                        Paste the sheet link above (shared as “Anyone with the link → Viewer”), then detect its tabs and choose where each goes. Bank tabs land in Review until categorised.
+                        Paste the sheet link above (shared as “Anyone with the link → Viewer”), then detect its tabs. For each, pick where it goes and how to read it — a single amount column, a two-column bank statement (withdrawal + deposit), or a period grid (e.g. payroll). Bank tabs land in Review until categorised.
                       </p>
                       {sheetTabs && sheetTabs.length > 0 && (
-                        <div className="space-y-1.5">
-                          {sheetTabs.map((t) => (
-                            <div key={t.name} className="flex items-center gap-2">
-                              <input
-                                type="checkbox"
-                                checked={tabCfg[t.name]?.import ?? true}
-                                onChange={(e) => setTabCfg((p) => ({ ...p, [t.name]: { ledger: p[t.name]?.ledger ?? "payments", import: e.target.checked } }))}
-                                className="h-3.5 w-3.5"
-                              />
-                              <span className="flex-1 min-w-0 text-[12px] text-foreground truncate">
-                                {t.name}{t.rowCount ? <span className="text-muted-foreground/60"> ({t.rowCount})</span> : null}
-                              </span>
-                              <select
-                                value={tabCfg[t.name]?.ledger ?? "payments"}
-                                onChange={(e) => setTabCfg((p) => ({ ...p, [t.name]: { import: p[t.name]?.import ?? true, ledger: e.target.value as "bank" | "payments" } }))}
-                                disabled={!(tabCfg[t.name]?.import ?? true)}
-                                className="h-7 px-2 rounded-md border border-border bg-background text-[11.5px] disabled:opacity-50"
-                              >
-                                <option value="payments">Payments</option>
-                                <option value="bank">Bank</option>
+                        <div className="space-y-2">
+                          {sheetTabs.map((t) => {
+                            const c = tabCfg[t.name] ?? { import: true, ledger: "payments" as const, format: "single" as const };
+                            const on = c.import ?? true;
+                            const headers = t.headers ?? [];
+                            const hasHeaders = headers.length > 0;
+                            const selCls = "h-7 px-1.5 rounded-md border border-border bg-background text-[11px] min-w-0 flex-1 disabled:opacity-50";
+                            const lblCls = "w-[86px] shrink-0 text-[10.5px] text-muted-foreground";
+                            const colSelect = (value: string | undefined, onPick: (v: string) => void, placeholder: string) => (
+                              <select value={value ?? ""} onChange={(e) => onPick(e.target.value)} className={selCls}>
+                                <option value="">{placeholder}</option>
+                                {headers.map((h) => <option key={h} value={h}>{h}</option>)}
                               </select>
-                            </div>
-                          ))}
+                            );
+                            return (
+                              <div key={t.name} className="rounded-md border border-border/70 bg-background/40 p-2 space-y-1.5">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={(e) => setTab(t.name, { import: e.target.checked })}
+                                    className="h-3.5 w-3.5"
+                                  />
+                                  <span className="flex-1 min-w-0 text-[12px] font-medium text-foreground truncate">
+                                    {t.name}{t.rowCount ? <span className="text-muted-foreground/60 font-normal"> ({t.rowCount})</span> : null}
+                                  </span>
+                                  <select
+                                    value={c.ledger ?? "payments"}
+                                    onChange={(e) => setTab(t.name, { ledger: e.target.value as "bank" | "payments" })}
+                                    disabled={!on}
+                                    className="h-7 px-2 rounded-md border border-border bg-background text-[11.5px] disabled:opacity-50"
+                                  >
+                                    <option value="payments">Payments</option>
+                                    <option value="bank">Bank</option>
+                                  </select>
+                                </div>
+
+                                {on && hasHeaders && (
+                                  <div className="space-y-1 pl-5">
+                                    <div className="flex items-center gap-2">
+                                      <label className={lblCls}>Layout</label>
+                                      <select
+                                        value={c.format ?? "single"}
+                                        onChange={(e) => setTab(t.name, { format: e.target.value as SheetFormat })}
+                                        className={selCls}
+                                      >
+                                        <option value="single">Single amount column</option>
+                                        <option value="split">Two columns (withdrawal + deposit)</option>
+                                        <option value="matrix">Matrix grid (e.g. payroll)</option>
+                                      </select>
+                                    </div>
+
+                                    {(c.format ?? "single") === "single" && (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Date</label>
+                                          {colSelect(c.dateCol, (v) => setTab(t.name, { dateCol: v }), "Select date column…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Amount</label>
+                                          {colSelect(c.amountCol, (v) => setTab(t.name, { amountCol: v }), "Select amount column…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Direction</label>
+                                          <select value={c.direction ?? "auto"} onChange={(e) => setTab(t.name, { direction: e.target.value as "auto" | "debit" | "credit" })} className={selCls}>
+                                            <option value="auto">Auto (by sign / type column)</option>
+                                            <option value="debit">All debits (money out / expense)</option>
+                                            <option value="credit">All credits (money in / income)</option>
+                                          </select>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Payee</label>
+                                          {colSelect(c.counterpartyCol, (v) => setTab(t.name, { counterpartyCol: v }), "(optional) counterparty column…")}
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {(c.format ?? "single") === "split" && (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Date</label>
+                                          {colSelect(c.dateCol, (v) => setTab(t.name, { dateCol: v }), "Select date column…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Withdrawal</label>
+                                          {colSelect(c.debitCol, (v) => setTab(t.name, { debitCol: v }), "Debit / money-out column…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Deposit</label>
+                                          {colSelect(c.creditCol, (v) => setTab(t.name, { creditCol: v }), "Credit / money-in column…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Description</label>
+                                          {colSelect(c.descriptionCol, (v) => setTab(t.name, { descriptionCol: v }), "(optional) remarks column…")}
+                                        </div>
+                                      </>
+                                    )}
+
+                                    {(c.format ?? "single") === "matrix" && (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Label</label>
+                                          {colSelect(c.labelCol, (v) => setTab(t.name, { labelCol: v }), "Row label (e.g. employee)…")}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <label className={lblCls}>Direction</label>
+                                          <select value={c.matrixDirection ?? "debit"} onChange={(e) => setTab(t.name, { matrixDirection: e.target.value as "debit" | "credit" })} className={selCls}>
+                                            <option value="debit">All debits (money out / expense)</option>
+                                            <option value="credit">All credits (money in / income)</option>
+                                          </select>
+                                        </div>
+                                        <p className="text-[10.5px] text-muted-foreground/70">
+                                          {(c.valueCols?.length ?? 0) > 0
+                                            ? `${c.valueCols?.length} period columns detected — each non-zero cell becomes one transaction dated to that period.`
+                                            : "Period columns are auto-detected from month-name headers."}
+                                        </p>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                                {on && !hasHeaders && (
+                                  <p className="pl-5 text-[10.5px] text-muted-foreground/70">Click “Detect tabs” to edit its column mapping.</p>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                       {sheetTabs && sheetTabs.length === 0 && (

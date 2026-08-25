@@ -4,16 +4,56 @@ import { createHash } from "crypto";
 import type { createServiceClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 import type { NormalizedTransaction, CsvColumnMapping } from "@/lib/normalizer";
-import { parseCsvFile, parseExcelFile, autoDetectMapping, extractWorksheet, transactionsFromRows } from "@/lib/connectors/csv-parser";
+import { parseCsvFile, parseExcelFile, autoDetectMapping, extractWorksheet, buildTabTransactions, suggestTabSpec, type TabParseSpec } from "@/lib/connectors/csv-parser";
 import { replaceConnectorTransactions, mergeConnectorTransactions } from "@/lib/connectors/sync";
 
-/** Per-tab import config stored on a google_sheets connector: config.tabs[]. */
+/** Per-tab import config stored on a google_sheets connector: config.tabs[].
+ *  Beyond destination (import/ledger) it carries the parse spec so bank statements
+ *  (split Withdrawal/Deposit), all-expense registers (fixed direction) and payroll
+ *  grids (matrix) each read correctly. Anything left unset falls back to the
+ *  auto-detected suggestTabSpec() for that tab's headers. */
 export type SheetTabConfig = {
   name: string;                      // worksheet (tab) name
   import?: boolean;                  // false = skip this tab
   ledger?: "bank" | "payments";      // destination; bank → lands uncategorized in Review
-  mapping?: Partial<CsvColumnMapping>;
+  format?: "single" | "split" | "matrix";
+  // single + split column mapping (flat):
+  dateCol?: string;
+  amountCol?: string;
+  typeCol?: string;
+  descriptionCol?: string;
+  counterpartyCol?: string;
+  currencyCol?: string;
+  direction?: "auto" | "debit" | "credit"; // single: force the sign
+  debitCol?: string;                 // split: withdrawal → debit
+  creditCol?: string;                // split: deposit → credit
+  labelCol?: string;                 // matrix: label/counterparty column
+  valueCols?: string[];              // matrix: period value columns
+  matrixDirection?: "debit" | "credit";
+  mapping?: Partial<CsvColumnMapping>; // legacy (older configs) — still honoured
 };
+
+/** Resolve a tab's saved config into a concrete parse spec, filling any unset
+ *  field from the header-based auto-detection so old/partial configs still work. */
+function resolveTabSpec(tab: SheetTabConfig, headers: string[]): TabParseSpec {
+  const s = suggestTabSpec(headers);
+  const legacy = (tab.mapping ?? {}) as Partial<CsvColumnMapping>;
+  return {
+    format: tab.format ?? s.format,
+    dateCol: tab.dateCol ?? legacy.dateCol ?? s.dateCol,
+    amountCol: tab.amountCol ?? legacy.amountCol ?? s.amountCol,
+    typeCol: tab.typeCol ?? legacy.typeCol ?? s.typeCol,
+    descriptionCol: tab.descriptionCol ?? legacy.descriptionCol ?? s.descriptionCol,
+    counterpartyCol: tab.counterpartyCol ?? legacy.counterpartyCol ?? s.counterpartyCol,
+    currencyCol: tab.currencyCol ?? legacy.currencyCol ?? s.currencyCol,
+    direction: tab.direction ?? s.direction ?? "auto",
+    debitCol: tab.debitCol ?? s.debitCol,
+    creditCol: tab.creditCol ?? s.creditCol,
+    labelCol: tab.labelCol ?? s.labelCol,
+    valueCols: tab.valueCols ?? s.valueCols,
+    matrixDirection: tab.matrixDirection ?? s.matrixDirection ?? "debit",
+  };
+}
 
 type SupabaseLike = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
@@ -88,13 +128,13 @@ function sheetExternalId(tab: string, raw: unknown): string {
 /** List every tab in a Google Sheet with headers + an auto-suggested mapping.
  *  Powers the per-tab "which sub-sheet goes where" setup screen. */
 export async function listSheetTabs(sheetUrl: string): Promise<
-  { name: string; rowCount: number; headers: string[]; suggested: Partial<CsvColumnMapping> }[]
+  { name: string; rowCount: number; headers: string[]; suggested: TabParseSpec }[]
 > {
   const buf = await fetchBytes(googleSheetXlsxUrl(sheetUrl));
   const wb = XLSX.read(buf, { type: "array", cellDates: true });
   return wb.SheetNames.map((name) => {
     const { headers, rows } = extractWorksheet(wb.Sheets[name]);
-    return { name, rowCount: rows.length, headers, suggested: autoDetectMapping(headers) };
+    return { name, rowCount: rows.length, headers, suggested: suggestTabSpec(headers) };
   });
 }
 
@@ -199,9 +239,9 @@ export async function fetchLinkTransactions(
         const ws = wb.Sheets[tab.name];
         if (!ws) continue;
         const { headers, rows: tabRows } = extractWorksheet(ws);
-        const mapping = finalizeMapping(headers, tab.mapping ?? {});
+        const spec = resolveTabSpec(tab, headers);
         const ledger: "bank" | "payments" = tab.ledger === "bank" ? "bank" : "payments";
-        for (const t of transactionsFromRows(tabRows, mapping)) {
+        for (const t of buildTabTransactions(tabRows, headers, spec)) {
           if (!validDate(t.transaction_date)) continue;
           rows.push({
             ...t,

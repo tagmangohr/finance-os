@@ -631,9 +631,10 @@ export async function replaceConnectorTransactions(
  * of the destructive replace. New rows (by external_id) are inserted; existing rows
  * have only their SOURCE fields refreshed — user-owned fields (pnl_treatment,
  * category, category_confidence) are PRESERVED, so categorizing a bank row in
- * Review survives the next sync. Rows absent from the source are NOT deleted.
- * Requires stable external_ids; legacy rows with a null external_id for this
- * connector (old mirror artifacts) are cleared once so they don't duplicate.
+ * Review survives the next sync. Rows absent from the source ARE deleted (the
+ * sheet is the source of truth) EXCEPT ones the user has categorized or edited,
+ * which are kept. Requires stable external_ids; legacy rows with a null
+ * external_id for this connector (old mirror artifacts) are cleared once.
  */
 export async function mergeConnectorTransactions(
   supabase: ServiceClient,
@@ -651,6 +652,32 @@ export async function mergeConnectorTransactions(
   await supabase.from("transactions").delete().eq("org_id", orgId).eq("connector_id", connectorId).is("external_id", null);
 
   const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
+
+  // Delete-absent: the sheet is the source of truth, so rows this connector
+  // produced before but the current parse no longer yields are stale (e.g. a
+  // corrected column mapping / format change re-keys rows). Drop them so a fix
+  // self-heals — but NEVER delete a row the user has already worked (categorized
+  // or manually edited); those survive even if their source row changed.
+  const incoming = new Set(externalIds);
+  const { data: allExisting } = await supabase
+    .from("transactions")
+    .select("id, external_id, category, pnl_treatment, metadata")
+    .eq("org_id", orgId)
+    .eq("connector_id", connectorId);
+  const staleIds = (allExisting ?? [])
+    .filter((r) => {
+      if (r.external_id && incoming.has(r.external_id as string)) return false; // still produced
+      const meta = (r.metadata ?? {}) as Record<string, unknown>;
+      const hasManual = Array.isArray(meta.manual_fields) && (meta.manual_fields as unknown[]).length > 0;
+      const hasCategory = !!r.category || (r.pnl_treatment != null && r.pnl_treatment !== "uncategorized");
+      return !hasManual && !hasCategory; // only remove untouched stale rows
+    })
+    .map((r) => r.id as string);
+  for (let i = 0; i < staleIds.length; i += 500) {
+    const { error } = await supabase.from("transactions").delete().in("id", staleIds.slice(i, i + 500)).eq("org_id", orgId);
+    if (error) throw new Error(`Merge delete-absent failed: ${error.message}`);
+  }
+
   const existing = externalIds.length
     ? await getExistingTransactionsByExternalId(supabase, orgId, externalIds)
     : new Map();

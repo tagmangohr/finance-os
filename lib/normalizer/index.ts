@@ -227,6 +227,13 @@ const DATE_FORMATS = [
   "yyyy/MM/dd",
   "d/M/yyyy",
   "d-M-yyyy",
+  // Bank-statement / register formats seen in Indian sheets:
+  //   "05/Sep/2025" (ICICI statement), "1 Jul 2026" (expense register).
+  "dd/MMM/yyyy",
+  "d/MMM/yyyy",
+  "d MMM yyyy",
+  "d MMMM yyyy",
+  "dd-MMM-yyyy",
 ];
 
 // Month+year only (payroll etc.) → the 1st of that month, so it still buckets
@@ -248,20 +255,32 @@ function monthYearToFirst(raw: string): string | null {
   return null;
 }
 
+// Format a parsed calendar date as YYYY-MM-DD from its LOCAL components. Using
+// toISOString() here would convert local-midnight to UTC and shift the date back
+// a day on any server east of UTC (e.g. "August 2025" → 2025-07-31 in IST) — a
+// silent off-by-one that lands rows in the wrong month. Local components keep the
+// calendar date exactly as parsed, independent of the server timezone.
+function toYmdLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 export function parseDateString(raw: string): string {
   const trimmed = raw.trim();
 
   // Try native Date first (handles ISO strings with time)
   const native = new Date(trimmed);
   if (isValid(native) && trimmed.length > 6) {
-    return native.toISOString().slice(0, 10);
+    return toYmdLocal(native);
   }
 
   // Try known FULL-date formats
   for (const fmt of DATE_FORMATS) {
     const parsed = parse(trimmed, fmt, new Date());
     if (isValid(parsed)) {
-      return parsed.toISOString().slice(0, 10);
+      return toYmdLocal(parsed);
     }
   }
 
