@@ -667,16 +667,26 @@ export async function mergeConnectorTransactions(
     inserted = count ?? newRows.length;
   }
 
-  // Refresh source fields only — never category/pnl_treatment (user-owned).
+  // Refresh source fields only — never category/pnl_treatment (user-owned). Also
+  // skip any field the user manually edited in-app (metadata.manual_fields), so
+  // inline edits survive the sync.
   for (const r of updRows) {
     const dupes = existing.get(r.external_id as string) ?? [];
-    const refresh = {
-      type: r.type, amount: r.amount, currency: r.currency,
-      counterparty_name: r.counterparty_name, description: r.description,
-      transaction_date: r.transaction_date, metadata: r.metadata, raw: r.raw,
-      ledger: r.ledger, amount_base: r.amount_base, base_currency: r.base_currency, fx_rate: r.fx_rate,
-    };
     for (const e of dupes) {
+      const eMeta = (e as { metadata?: Record<string, unknown> | null }).metadata ?? {};
+      const manual = Array.isArray(eMeta.manual_fields) ? (eMeta.manual_fields as string[]) : [];
+      const refresh: Record<string, unknown> = {
+        type: r.type, amount: r.amount, currency: r.currency,
+        counterparty_name: r.counterparty_name, description: r.description,
+        transaction_date: r.transaction_date, metadata: r.metadata, raw: r.raw,
+        ledger: r.ledger, amount_base: r.amount_base, base_currency: r.base_currency, fx_rate: r.fx_rate,
+      };
+      if (manual.length > 0) {
+        for (const f of manual) delete refresh[f];
+        if (manual.includes("amount")) { delete refresh.amount_base; delete refresh.base_currency; delete refresh.fx_rate; }
+        // preserve the manual-fields marker so future syncs keep skipping them
+        refresh.metadata = { ...((r.metadata ?? {}) as Record<string, unknown>), manual_fields: manual };
+      }
       const { error } = await supabase.from("transactions").update(refresh).eq("id", e.id).eq("org_id", orgId);
       if (error) throw new Error(`Merge update failed for ${r.external_id}: ${error.message}`);
       updated++;

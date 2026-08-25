@@ -3,9 +3,10 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   Landmark, Search, Download, Sparkles, Wand2, TrendingUp, TrendingDown,
-  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug,
+  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X,
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -73,6 +74,50 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Inline field editor (date / counterparty / description / amount / type).
+  const [editRow, setEditRow] = useState<BankTxn | null>(null);
+  const [editForm, setEditForm] = useState<{ transaction_date: string; counterparty_name: string; description: string; amount: string; type: "credit" | "debit" }>(
+    { transaction_date: "", counterparty_name: "", description: "", amount: "", type: "debit" }
+  );
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  function openEdit(t: BankTxn) {
+    setEditRow(t);
+    setEditForm({
+      transaction_date: t.transaction_date?.slice(0, 10) ?? "",
+      counterparty_name: t.counterparty_name ?? "",
+      description: t.description ?? "",
+      amount: String(t.amount ?? ""),
+      type: t.type,
+    });
+  }
+
+  async function saveEdit() {
+    if (!editRow) return;
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/transactions/${editRow.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_date: editForm.transaction_date,
+          counterparty_name: editForm.counterparty_name,
+          description: editForm.description,
+          amount: editForm.amount === "" ? undefined : Number(editForm.amount),
+          type: editForm.type,
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed to save");
+      setEditRow(null);
+      router.refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
 
   // Category options grouped by P&L treatment for the inline picker.
   const grouped = useMemo(() => {
@@ -350,10 +395,11 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
               <th className="font-medium">Category</th>
               <th className="font-medium">P&L</th>
               <th className="font-medium">By</th>
+              <th className="font-medium"></th>
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={12} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={13} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
@@ -406,6 +452,15 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                       </span>
                     )}
                   </td>
+                  <td className="text-right">
+                    <button
+                      onClick={() => openEdit(t)}
+                      title="Edit fields"
+                      className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent"
+                    >
+                      <Pencil className="size-3.5" />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -432,6 +487,58 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
           </div>
         )}
       </SectionCard>
+
+      {/* Inline field editor — edits are marked manual so a sheet re-sync won't overwrite them. */}
+      <Dialog.Root open={editRow != null} onOpenChange={(o) => !o && setEditRow(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[150]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-[440px] bg-card border border-border rounded-xl z-[151] shadow-2xl focus:outline-none">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+              <Dialog.Title className="text-sm font-semibold text-foreground">Edit transaction</Dialog.Title>
+              <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center"><X className="h-4 w-4" /></Dialog.Close>
+            </div>
+            <div className="p-4 space-y-3">
+              <label className="block">
+                <span className="text-[11px] font-medium text-muted-foreground">Date</span>
+                <input type="date" value={editForm.transaction_date} onChange={(e) => setEditForm((f) => ({ ...f, transaction_date: e.target.value }))}
+                  className="mt-1 w-full h-9 px-2 rounded-lg border border-border bg-background text-[13px]" />
+              </label>
+              <label className="block">
+                <span className="text-[11px] font-medium text-muted-foreground">Counterparty</span>
+                <input value={editForm.counterparty_name} onChange={(e) => setEditForm((f) => ({ ...f, counterparty_name: e.target.value }))}
+                  placeholder="—" className="mt-1 w-full h-9 px-2 rounded-lg border border-border bg-background text-[13px]" />
+              </label>
+              <label className="block">
+                <span className="text-[11px] font-medium text-muted-foreground">Description</span>
+                <input value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))}
+                  placeholder="—" className="mt-1 w-full h-9 px-2 rounded-lg border border-border bg-background text-[13px]" />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-[11px] font-medium text-muted-foreground">Amount</span>
+                  <input type="number" step="0.01" value={editForm.amount} onChange={(e) => setEditForm((f) => ({ ...f, amount: e.target.value }))}
+                    className="mt-1 w-full h-9 px-2 rounded-lg border border-border bg-background text-[13px] num" />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-medium text-muted-foreground">Direction</span>
+                  <select value={editForm.type} onChange={(e) => setEditForm((f) => ({ ...f, type: e.target.value as "credit" | "debit" }))}
+                    className="mt-1 w-full h-9 px-2 rounded-lg border border-border bg-background text-[13px]">
+                    <option value="debit">Debit (out)</option>
+                    <option value="credit">Credit (in)</option>
+                  </select>
+                </label>
+              </div>
+              <p className="text-[11px] text-muted-foreground/70">Set the category from the row after saving. Manual edits are kept even when the sheet re-syncs.</p>
+            </div>
+            <div className="flex gap-2 px-4 py-3 border-t border-border">
+              <Dialog.Close className="flex-1 h-9 rounded-lg border border-border text-[13px] font-medium hover:bg-muted">Cancel</Dialog.Close>
+              <button onClick={saveEdit} disabled={savingEdit} className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary/90 disabled:opacity-60">
+                {savingEdit ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }
