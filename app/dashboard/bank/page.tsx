@@ -19,30 +19,12 @@ export default async function BankPage({ searchParams }: { searchParams: Promise
   if (!org) redirect("/auth/login");
   await requireRouteAccess("bank"); // owners/admins, or members granted the page
 
+  // Date-range from the URL (?from=YYYY-MM-DD&to=YYYY-MM-DD); default = current FY
+  // (getBankOverview falls back to fyStartISO when from is undefined).
   const sp = await searchParams;
   const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const range = { from: isDate(sp.from) ? sp.from : undefined, to: isDate(sp.to) ? sp.to : undefined };
   const sb = await createServiceClient();
-
-  // Default the range to cover ALL bank history (earliest bank row → today, capped
-  // to 5 years) so nothing that needs review is hidden. The user can narrow with the
-  // date picker for period analysis. Explicit ?from/?to always win.
-  let from = isDate(sp.from) ? sp.from : undefined;
-  const to = isDate(sp.to) ? sp.to : undefined;
-  if (!from) {
-    const floor = new Date(); floor.setFullYear(floor.getFullYear() - 5);
-    const floorIso = floor.toISOString().slice(0, 10);
-    const { data: earliest } = await sb
-      .from("transactions")
-      .select("transaction_date")
-      .eq("org_id", org.id)
-      .eq("ledger", "bank")
-      .order("transaction_date", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const e = earliest?.transaction_date as string | undefined;
-    from = e ? (e < floorIso ? floorIso : e) : undefined; // undefined → getBankOverview falls back to FY start
-  }
-  const range = { from, to };
 
   const [data, connectorCount] = await Promise.all([
     getBankOverviewCached(org.id, range),
