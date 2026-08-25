@@ -478,6 +478,38 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // formValues persists across modal open/close — cleared only on confirm/cancel
   const [formValues, setFormValues] = React.useState<Record<string, string>>({});
 
+  // Google Sheets multi-tab setup: detected tabs + per-tab destination (import? / ledger).
+  const [sheetTabs, setSheetTabs] = React.useState<{ name: string; rowCount: number }[] | null>(null);
+  const [tabCfg, setTabCfg] = React.useState<Record<string, { import: boolean; ledger: "bank" | "payments" }>>({});
+  const [detectingTabs, setDetectingTabs] = React.useState(false);
+
+  const detectSheetTabs = async () => {
+    const url = formValues.sheet_url?.trim();
+    if (!url) return;
+    setDetectingTabs(true);
+    try {
+      const res = await fetch(`/api/connectors/sheet-tabs?url=${encodeURIComponent(url)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Couldn't read the sheet");
+      const tabs = (data.tabs ?? []) as { name: string; rowCount: number }[];
+      setSheetTabs(tabs.map((t) => ({ name: t.name, rowCount: t.rowCount })));
+      setTabCfg((prev) => {
+        const next = { ...prev };
+        for (const t of tabs) if (!next[t.name]) next[t.name] = { import: true, ledger: "payments" };
+        return next;
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't read the sheet");
+    } finally {
+      setDetectingTabs(false);
+    }
+  };
+
+  const buildSheetTabs = () =>
+    sheetTabs
+      ? sheetTabs.map((t) => ({ name: t.name, import: tabCfg[t.name]?.import ?? true, ledger: tabCfg[t.name]?.ledger ?? "payments" }))
+      : undefined;
+
   const [loading, setLoading] = React.useState(false);
   const [syncingId, setSyncingId] = React.useState<string | null>(null);
   // Progress is rendered as a filling bar (jobsProgress + syncingId); this state is
@@ -641,11 +673,26 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       // Password fields intentionally left blank — placeholder explains
     }
     setFormValues(prefilled);
+
+    // Google Sheets: seed the tab config from what was saved, so edit shows it.
+    if (inst.type === "google_sheets") {
+      const savedTabs = Array.isArray((cfg as { tabs?: unknown }).tabs)
+        ? ((cfg as unknown as { tabs: { name: string; import?: boolean; ledger?: "bank" | "payments" }[] }).tabs)
+        : [];
+      setSheetTabs(savedTabs.length ? savedTabs.map((t) => ({ name: t.name, rowCount: 0 })) : null);
+      setTabCfg(Object.fromEntries(savedTabs.map((t) => [t.name, { import: t.import ?? true, ledger: t.ledger ?? "payments" }])));
+    } else {
+      setSheetTabs(null);
+      setTabCfg({});
+    }
   };
 
   const handleCloseModal = () => {
     setOpenModal(null);
     setEditingConnector(null);
+    setSheetTabs(null);
+    setTabCfg({});
+    setDetectingTabs(false);
   };
 
   // ── CSV upload ─────────────────────────────────────────────────────────────
@@ -751,12 +798,15 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           }
         }
 
+        const editCfg: Record<string, unknown> = { ...updatedCfg };
+        if (editingConnector.type === "google_sheets" && buildSheetTabs()) editCfg.tabs = buildSheetTabs();
+
         const res = await fetch(`/api/connectors/manage?id=${editingConnector.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: connectorName?.trim() || editingConnector.name,
-            config: updatedCfg,
+            config: editCfg,
             status: "active",
           }),
         });
@@ -771,6 +821,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         toast.success("Connector updated");
       } else {
         // ── POST: create new connector ──
+        const createCfg: Record<string, unknown> = { ...credFields };
+        if (openModal.type === "google_sheets" && buildSheetTabs()) createCfg.tabs = buildSheetTabs();
+
         const res = await fetch("/api/connectors/manage", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -778,7 +831,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
             org_id: orgId,
             type: openModal.type,
             name: connectorName?.trim() || openModal.name,
-            config: credFields,
+            config: createCfg,
             status: "active",
           }),
         });
@@ -1439,6 +1492,55 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         />
                       ))}
                     </>
+                  )}
+
+                  {/* Google Sheets: detect tabs (sub-sheets) and route each to Bank/Payments. */}
+                  {openModal?.type === "google_sheets" && (
+                    <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Sub-sheets (tabs)</p>
+                        <button
+                          type="button"
+                          onClick={detectSheetTabs}
+                          disabled={!formValues.sheet_url?.trim() || detectingTabs}
+                          className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-border text-[11px] font-medium hover:bg-accent disabled:opacity-50"
+                        >
+                          {detectingTabs ? "Detecting…" : "Detect tabs"}
+                        </button>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground/80 leading-relaxed">
+                        Paste the sheet link above (shared as “Anyone with the link → Viewer”), then detect its tabs and choose where each goes. Bank tabs land in Review until categorised.
+                      </p>
+                      {sheetTabs && sheetTabs.length > 0 && (
+                        <div className="space-y-1.5">
+                          {sheetTabs.map((t) => (
+                            <div key={t.name} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={tabCfg[t.name]?.import ?? true}
+                                onChange={(e) => setTabCfg((p) => ({ ...p, [t.name]: { ledger: p[t.name]?.ledger ?? "payments", import: e.target.checked } }))}
+                                className="h-3.5 w-3.5"
+                              />
+                              <span className="flex-1 min-w-0 text-[12px] text-foreground truncate">
+                                {t.name}{t.rowCount ? <span className="text-muted-foreground/60"> ({t.rowCount})</span> : null}
+                              </span>
+                              <select
+                                value={tabCfg[t.name]?.ledger ?? "payments"}
+                                onChange={(e) => setTabCfg((p) => ({ ...p, [t.name]: { import: p[t.name]?.import ?? true, ledger: e.target.value as "bank" | "payments" } }))}
+                                disabled={!(tabCfg[t.name]?.import ?? true)}
+                                className="h-7 px-2 rounded-md border border-border bg-background text-[11.5px] disabled:opacity-50"
+                              >
+                                <option value="payments">Payments</option>
+                                <option value="bank">Bank</option>
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {sheetTabs && sheetTabs.length === 0 && (
+                        <p className="text-[11px] text-muted-foreground">No tabs found in that sheet.</p>
+                      )}
+                    </div>
                   )}
 
                   {/* Webhook-only connector: show the endpoint URL to register with the provider. */}

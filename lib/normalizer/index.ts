@@ -229,6 +229,25 @@ const DATE_FORMATS = [
   "d-M-yyyy",
 ];
 
+// Month+year only (payroll etc.) → the 1st of that month, so it still buckets
+// into the right month everywhere (P&L/Bank/expenses are month-grained).
+const MONTH_YEAR_FORMATS = [
+  "yyyy-MM", "yyyy/MM", "MM/yyyy", "M/yyyy", "MM-yyyy", "M-yyyy",
+  "MMM yyyy", "MMMM yyyy", "MMM-yyyy", "MMMM-yyyy", "MMM yy", "MMM-yy", "MMMM yy",
+];
+function monthYearToFirst(raw: string): string | null {
+  const t = raw.replace(/\bsept\b/i, "Sep").trim(); // "Sept" → "Sep" (date-fns uses MMM=Sep)
+  for (const fmt of MONTH_YEAR_FORMATS) {
+    const d = parse(t, fmt, new Date(2000, 0, 1));
+    if (isValid(d)) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      return `${y}-${m}-01`;
+    }
+  }
+  return null;
+}
+
 export function parseDateString(raw: string): string {
   const trimmed = raw.trim();
 
@@ -238,13 +257,17 @@ export function parseDateString(raw: string): string {
     return native.toISOString().slice(0, 10);
   }
 
-  // Try known formats
+  // Try known FULL-date formats
   for (const fmt of DATE_FORMATS) {
     const parsed = parse(trimmed, fmt, new Date());
     if (isValid(parsed)) {
       return parsed.toISOString().slice(0, 10);
     }
   }
+
+  // Month+year only → 1st of month (checked after full dates so a real date wins)
+  const monthly = monthYearToFirst(trimmed);
+  if (monthly) return monthly;
 
   // Fallback: return trimmed value (will surface as invalid date to caller)
   return trimmed;

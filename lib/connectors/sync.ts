@@ -626,6 +626,67 @@ export async function replaceConnectorTransactions(
   return { inserted: count ?? rows.length };
 }
 
+/**
+ * MERGE a connector's transactions from a re-readable source (link/sheet), instead
+ * of the destructive replace. New rows (by external_id) are inserted; existing rows
+ * have only their SOURCE fields refreshed — user-owned fields (pnl_treatment,
+ * category, category_confidence) are PRESERVED, so categorizing a bank row in
+ * Review survives the next sync. Rows absent from the source are NOT deleted.
+ * Requires stable external_ids; legacy rows with a null external_id for this
+ * connector (old mirror artifacts) are cleared once so they don't duplicate.
+ */
+export async function mergeConnectorTransactions(
+  supabase: ServiceClient,
+  orgId: string,
+  connectorId: string,
+  transactions: NormalizedTransaction[]
+): Promise<{ inserted: number; updated: number }> {
+  if (transactions.length === 0) return { inserted: 0, updated: 0 };
+
+  const rows = toInsertRows(orgId, connectorId, transactions);
+  await enrichRowsWithFx(rows);
+
+  // One-time cleanup: drop legacy null-external_id rows for this connector (they
+  // can't be merged and would otherwise co-exist with the new keyed rows).
+  await supabase.from("transactions").delete().eq("org_id", orgId).eq("connector_id", connectorId).is("external_id", null);
+
+  const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
+  const existing = externalIds.length
+    ? await getExistingTransactionsByExternalId(supabase, orgId, externalIds)
+    : new Map();
+
+  const newRows = rows.filter((r) => !r.external_id || !existing.has(r.external_id));
+  const updRows = rows.filter((r) => r.external_id && existing.has(r.external_id));
+
+  let inserted = 0;
+  let updated = 0;
+
+  if (newRows.length > 0) {
+    const { error, count } = await supabase.from("transactions").insert(newRows, { count: "exact" });
+    if (error) throw new Error(`Merge insert failed: ${error.message}`);
+    inserted = count ?? newRows.length;
+  }
+
+  // Refresh source fields only — never category/pnl_treatment (user-owned).
+  for (const r of updRows) {
+    const dupes = existing.get(r.external_id as string) ?? [];
+    const refresh = {
+      type: r.type, amount: r.amount, currency: r.currency,
+      counterparty_name: r.counterparty_name, description: r.description,
+      transaction_date: r.transaction_date, metadata: r.metadata, raw: r.raw,
+      ledger: r.ledger, amount_base: r.amount_base, base_currency: r.base_currency, fx_rate: r.fx_rate,
+    };
+    for (const e of dupes) {
+      const { error } = await supabase.from("transactions").update(refresh).eq("id", e.id).eq("org_id", orgId);
+      if (error) throw new Error(`Merge update failed for ${r.external_id}: ${error.message}`);
+      updated++;
+    }
+  }
+
+  await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connectorId);
+  return { inserted, updated };
+}
+
 export async function syncConnectorTransactions({
   supabase,
   connector,

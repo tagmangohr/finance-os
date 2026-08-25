@@ -58,6 +58,32 @@ export function autoDetectMapping(
   return mapping;
 }
 
+// ─── Worksheet → header + row objects (for multi-tab spreadsheet import) ──────
+
+export function extractWorksheet(
+  ws: XLSX.WorkSheet
+): { headers: string[]; rows: Record<string, string>[] } {
+  const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, {
+    header: 1, defval: "", raw: false, dateNF: "yyyy-mm-dd",
+  });
+  if (aoa.length < 1) return { headers: [], rows: [] };
+  const headers = (aoa[0] as unknown[]).map((h) => String(h ?? "").trim());
+  const rows = aoa.slice(1).map((r) => {
+    const obj: Record<string, string> = {};
+    headers.forEach((h, i) => { obj[h] = String((r as unknown[])[i] ?? "").trim(); });
+    return obj;
+  });
+  return { headers, rows };
+}
+
+/** Public wrapper so link/sheet importers can normalize pre-extracted rows. */
+export function transactionsFromRows(
+  rows: Record<string, string>[],
+  mapping: CsvColumnMapping
+): NormalizedTransaction[] {
+  return rowsToTransactions(rows, mapping);
+}
+
 // ─── Parse CSV rows into NormalizedTransaction[] ──────────────────────────────
 
 function rowsToTransactions(

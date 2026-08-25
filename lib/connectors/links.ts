@@ -1,10 +1,19 @@
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { createHash } from "crypto";
 import type { createServiceClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 import type { NormalizedTransaction, CsvColumnMapping } from "@/lib/normalizer";
-import { parseCsvFile, parseExcelFile, autoDetectMapping } from "@/lib/connectors/csv-parser";
-import { replaceConnectorTransactions } from "@/lib/connectors/sync";
+import { parseCsvFile, parseExcelFile, autoDetectMapping, extractWorksheet, transactionsFromRows } from "@/lib/connectors/csv-parser";
+import { replaceConnectorTransactions, mergeConnectorTransactions } from "@/lib/connectors/sync";
+
+/** Per-tab import config stored on a google_sheets connector: config.tabs[]. */
+export type SheetTabConfig = {
+  name: string;                      // worksheet (tab) name
+  import?: boolean;                  // false = skip this tab
+  ledger?: "bank" | "payments";      // destination; bank → lands uncategorized in Review
+  mapping?: Partial<CsvColumnMapping>;
+};
 
 type SupabaseLike = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
@@ -59,6 +68,34 @@ export function googleSheetCsvUrl(sheetUrl: string): string {
   const params = new URLSearchParams({ format: "csv" });
   if (gid) params.set("gid", gid);
   return `https://docs.google.com/spreadsheets/d/${id}/export?${params.toString()}`;
+}
+
+/** Whole-spreadsheet XLSX export (contains ALL tabs) — used for multi-tab import. */
+export function googleSheetXlsxUrl(sheetUrl: string): string {
+  const u = safeUrl(sheetUrl);
+  if (u.hostname !== "docs.google.com") throw new Error("That isn't a Google Sheets link.");
+  const m = u.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (!m) throw new Error("Couldn't find the spreadsheet ID in that link.");
+  return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=xlsx`;
+}
+
+/** Stable id for a sheet row so merge-sync can preserve edits/categorization. */
+function sheetExternalId(tab: string, raw: unknown): string {
+  const h = createHash("sha256").update(`${tab}|${JSON.stringify(raw ?? {})}`).digest("hex").slice(0, 24);
+  return `gsheet_${h}`;
+}
+
+/** List every tab in a Google Sheet with headers + an auto-suggested mapping.
+ *  Powers the per-tab "which sub-sheet goes where" setup screen. */
+export async function listSheetTabs(sheetUrl: string): Promise<
+  { name: string; rowCount: number; headers: string[]; suggested: Partial<CsvColumnMapping> }[]
+> {
+  const buf = await fetchBytes(googleSheetXlsxUrl(sheetUrl));
+  const wb = XLSX.read(buf, { type: "array", cellDates: true });
+  return wb.SheetNames.map((name) => {
+    const { headers, rows } = extractWorksheet(wb.Sheets[name]);
+    return { name, rowCount: rows.length, headers, suggested: autoDetectMapping(headers) };
+  });
 }
 
 // ─── Excel share link → direct-download URL ───────────────────────────────────
@@ -144,10 +181,39 @@ export async function fetchLinkTransactions(
   const cfg = (connector.config ?? {}) as Record<string, unknown>;
   const override = (cfg.mapping && typeof cfg.mapping === "object" ? cfg.mapping : {}) as Partial<CsvColumnMapping>;
 
+  const validDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d); // drop unparseable dates (can't store)
+
   let rows: NormalizedTransaction[];
   if (connector.type === "google_sheets") {
-    const text = await fetchText(googleSheetCsvUrl(String(cfg.sheet_url ?? "")));
-    rows = await parseCsvFile(text, finalizeMapping(csvHeaders(text), override));
+    const sheetUrl = String(cfg.sheet_url ?? "");
+    const tabsCfg = Array.isArray((cfg as { tabs?: unknown }).tabs) ? ((cfg as { tabs: SheetTabConfig[] }).tabs) : null;
+
+    if (tabsCfg && tabsCfg.some((t) => t.import !== false)) {
+      // Multi-tab: read the whole spreadsheet as XLSX, import each selected tab to
+      // its chosen ledger (bank tabs land uncategorized → Review). Stable id per row.
+      const buf = await fetchBytes(googleSheetXlsxUrl(sheetUrl));
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      rows = [];
+      for (const tab of tabsCfg) {
+        if (tab.import === false) continue;
+        const ws = wb.Sheets[tab.name];
+        if (!ws) continue;
+        const { headers, rows: tabRows } = extractWorksheet(ws);
+        const mapping = finalizeMapping(headers, tab.mapping ?? {});
+        const ledger: "bank" | "payments" = tab.ledger === "bank" ? "bank" : "payments";
+        for (const t of transactionsFromRows(tabRows, mapping)) {
+          if (!validDate(t.transaction_date)) continue;
+          rows.push({ ...t, ledger, external_id: sheetExternalId(tab.name, t.raw) });
+        }
+      }
+    } else {
+      // Legacy single-tab (no per-tab config) — still stamp a stable id so merge works.
+      const text = await fetchText(googleSheetCsvUrl(sheetUrl));
+      const parsed = await parseCsvFile(text, finalizeMapping(csvHeaders(text), override));
+      rows = parsed
+        .filter((t) => validDate(t.transaction_date))
+        .map((t) => ({ ...t, external_id: sheetExternalId("__single__", t.raw) }));
+    }
   } else if (connector.type === "excel") {
     const buf = await fetchBytes(excelDownloadUrl(String(cfg.file_url ?? "")));
     rows = await parseExcelFile(buf, finalizeMapping(excelHeaders(buf), override));
@@ -165,11 +231,16 @@ export async function syncLinkConnector(
   connector: ConnectorRow
 ): Promise<{ inserted: number; fetched: number }> {
   const transactions = await fetchLinkTransactions(connector);
+  // Google Sheets: MERGE (stable ids) so in-app edits/categorization survive re-sync.
+  // Excel links have no stable id yet → keep the mirror (replace) behavior.
+  if (connector.type === "google_sheets") {
+    const { inserted, updated } = await mergeConnectorTransactions(
+      supabase, connector.org_id, connector.id, transactions
+    );
+    return { inserted: inserted + updated, fetched: transactions.length };
+  }
   const { inserted } = await replaceConnectorTransactions(
-    supabase,
-    connector.org_id,
-    connector.id,
-    transactions
+    supabase, connector.org_id, connector.id, transactions
   );
   return { inserted, fetched: transactions.length };
 }
