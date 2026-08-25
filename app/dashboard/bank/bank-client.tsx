@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -16,7 +16,6 @@ import type { BankOverview, BankTxn } from "@/lib/expenses/reports";
 import type { LedgerCategory } from "@/lib/expenses/types";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 
-const s = (v: unknown) => (v == null ? "" : String(v));
 const inr = (n: number, compact = false) => formatCurrency(n, "INR", compact);
 const runwayLabel = (days: number) => (days >= 9999 ? "∞" : days >= 365 ? `${(days / 365).toFixed(1)} yr` : days >= 60 ? `${Math.round(days / 30)} mo` : `${days} d`);
 
@@ -53,24 +52,47 @@ const PAGE = 50;
 export function BankClient({ data, hasBankConnector }: { data: BankOverview; hasBankConnector: boolean }) {
   const router = useRouter();
   const { navigate } = useNavProgress();
-  const { totals, categories, byCategory, byCard, monthly, runway } = data;
-  const [q, setQ] = useState("");
+  const { totals, categories, byCategory, byCard, monthly, runway, accountTypes, cards, reviewCount } = data;
+  const [qInput, setQInput] = useState(""); // immediate input value
+  const [q, setQ] = useState("");           // debounced term used for fetching
   const [filter, setFilter] = useState<Filter>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "completed" | "pending" | "failed" | "refunded">("all");
   const [accountFilter, setAccountFilter] = useState<string>("all");
   const [cardFilter, setCardFilter] = useState<string>("all");
   const [page, setPage] = useState(0);
 
-  // Distinct Mercury account types present, for the Account filter.
-  const accountTypes = useMemo(
-    () => Array.from(new Set(data.transactions.map((t) => t.account_type).filter((x): x is string => !!x))).sort(),
-    [data.transactions]
-  );
-  // Distinct cards present (last4), for the Card filter.
-  const cards = useMemo(
-    () => Array.from(new Set(data.transactions.map((t) => t.card_last4).filter((x): x is string => !!x))).sort(),
-    [data.transactions]
-  );
+  // Server-driven transaction table: the page ships only aggregates (a few KB); the
+  // rows are fetched here one bounded page at a time, so the ledger can grow without
+  // limit. Debounce the search so typing doesn't fire a request per keystroke.
+  const [rows, setRows] = useState<BankTxn[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingRows, setLoadingRows] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => { setQ(qInput); setPage(0); }, 350);
+    return () => clearTimeout(t);
+  }, [qInput]);
+
+  const fetchRows = useCallback(async () => {
+    setLoadingRows(true);
+    try {
+      const params = new URLSearchParams({
+        from: data.period.from, to: data.period.to,
+        view: filter, status: statusFilter, account: accountFilter, card: cardFilter,
+        search: q, page: String(page), pageSize: String(PAGE),
+      });
+      const res = await fetch(`/api/bank/transactions?${params.toString()}`);
+      const j = await res.json();
+      if (res.ok) { setRows(j.rows ?? []); setTotal(j.total ?? 0); }
+      else setMsg(j.error ?? "Failed to load transactions");
+    } catch {
+      setMsg("Failed to load transactions");
+    } finally {
+      setLoadingRows(false);
+    }
+  }, [data.period.from, data.period.to, filter, statusFilter, accountFilter, cardFilter, q, page]);
+
+  useEffect(() => { fetchRows(); }, [fetchRows]);
+
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -111,6 +133,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Failed to save");
       setEditRow(null);
+      await fetchRows();
       router.refresh();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Failed to save");
@@ -130,26 +153,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
     !t.pnl_treatment || t.pnl_treatment === "uncategorized" ||
     (t.category_source === "ai" && (t.category_confidence ?? 1) < 0.6);
 
-  const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return data.transactions.filter((r) => {
-      if (statusFilter !== "all" && r.status !== statusFilter) return false;
-      if (accountFilter !== "all" && r.account_type !== accountFilter) return false;
-      if (cardFilter !== "all" && r.card_last4 !== cardFilter) return false;
-      if (filter === "review" && !needsReview(r)) return false;
-      if (filter !== "all" && filter !== "review" && (r.pnl_treatment ?? "uncategorized") !== filter) return false;
-      if (!t) return true;
-      return [r.counterparty_name, r.description, r.category, r.external_id, r.card_last4, r.card_holder].some((v) => s(v).toLowerCase().includes(t));
-    }).sort((a, b) => {
-      // Newest first by precise timestamp; fall back to date when transaction_at is null.
-      const ta = a.transaction_at ? Date.parse(a.transaction_at) : Date.parse(a.transaction_date);
-      const tb = b.transaction_at ? Date.parse(b.transaction_at) : Date.parse(b.transaction_date);
-      return tb - ta;
-    });
-  }, [data.transactions, q, filter, statusFilter, accountFilter, cardFilter]);
-
-  const pageRows = filtered.slice(page * PAGE, page * PAGE + PAGE);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
+  // Rows are the server page; pagination is driven by the server total.
+  const pageRows = rows;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE));
 
   async function assign(id: string, slug: string) {
     if (!slug) return;
@@ -163,7 +169,8 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Failed");
       if (j.backfilled > 0) setMsg(`Applied to ${j.backfilled} more transaction(s) from the same counterparty.`);
-      router.refresh();
+      await fetchRows();   // refresh the visible page
+      router.refresh();    // refresh the aggregates (cards/charts/totals)
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Failed to categorize");
     } finally {
@@ -193,7 +200,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   }
 
   // ── Empty state: no bank feed connected yet ──
-  if (!hasBankConnector && data.transactions.length === 0) {
+  if (!hasBankConnector && totals.txnCount === 0) {
     return (
       <div className="max-w-[1400px]">
         <div className="rounded-xl border border-border bg-card p-10 text-center animate-enter">
@@ -213,10 +220,8 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
   const maxCat = Math.max(1, ...byCategory.map((c) => c.amount));
   const maxCard = Math.max(1, ...byCard.map((c) => Math.abs(c.amount)));
-  // Count "needs review" with the SAME predicate as the row badge + filter (no
-  // status gate), so the metric, the "Needs review" filter, and the highlighted
-  // rows always agree — including pending-uncategorized and low-confidence AI.
-  const reviewCount = data.transactions.filter(needsReview).length;
+  // reviewCount comes from the server aggregate (computed over ALL rows in range),
+  // matching the row badge + "Needs review" filter.
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -344,12 +349,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       {/* Transactions */}
       <SectionCard
         title="Transactions"
-        subtitle={`${filtered.length.toLocaleString("en-IN")} shown`}
+        subtitle={`${total.toLocaleString("en-IN")} match${loadingRows ? " · loading…" : ""}`}
         action={
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1">
               <Search className="size-3.5 text-muted-foreground" />
-              <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search counterparty, memo…" className="bg-transparent text-xs outline-none w-40" />
+              <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Search counterparty, memo…" className="bg-transparent text-xs outline-none w-40" />
             </div>
             <select value={filter} onChange={(e) => { setFilter(e.target.value as Filter); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
               <option value="all">All</option>
@@ -399,7 +404,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={13} className="py-8 text-center text-muted-foreground">No transactions match.</td></tr>
+                <tr><td colSpan={13} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
@@ -469,7 +474,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
         {pageCount > 1 && (
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 text-xs text-muted-foreground">
-            <span>{filtered.length.toLocaleString("en-IN")} rows · page {page + 1} of {pageCount}</span>
+            <span>{total.toLocaleString("en-IN")} rows · page {page + 1} of {pageCount}</span>
             <div className="flex items-center gap-1">
               <button disabled={page === 0} onClick={() => setPage(0)} className="rounded border border-border px-2 py-1 disabled:opacity-40">« First</button>
               <button disabled={page === 0} onClick={() => setPage((p) => p - 1)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Prev</button>

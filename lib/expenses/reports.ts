@@ -28,8 +28,15 @@ export type BankTxn = {
   external_id: string | null;
 };
 
+/**
+ * Bank dashboard AGGREGATES — deliberately does NOT include the raw transaction
+ * rows. The rows are fetched separately + paginated (getBankTransactions / the
+ * /api/bank/transactions endpoint) so the page never computes on or ships tens of
+ * thousands of rows: this object stays a few KB no matter how large the ledger, and
+ * the transaction table pages server-side. Aggregates are still computed over ALL
+ * rows in the range (in SQL-order-independent JS over a keyset drain).
+ */
 export type BankOverview = {
-  transactions: BankTxn[];
   categories: LedgerCategory[];
   monthly: { month: string; expenses: number; otherIncome: number; collections: number; net: number }[];
   totals: {
@@ -43,9 +50,26 @@ export type BankOverview = {
   };
   byCategory: { category: string; label: string; treatment: string; amount: number; count: number }[];
   byCard: { last4: string; holder: string | null; amount: number; count: number }[];
+  accountTypes: string[]; // distinct account_type values (for the Account filter)
+  cards: string[];        // distinct card_last4 values (for the Card filter)
+  reviewCount: number;    // rows needing review (same predicate as the row badge)
   runway: { cashBalance: number; burnRate: number; runwayDays: number };
   period: { from: string; to: string };
 };
+
+/** Narrow projection used for the aggregate drain (rows are summed, never returned). */
+type BankAggRow = Pick<
+  BankTxn,
+  "id" | "transaction_date" | "type" | "amount" | "currency" | "amount_base" | "category"
+  | "pnl_treatment" | "category_source" | "category_confidence" | "account_type" | "card_last4" | "card_holder" | "status"
+>;
+
+/** A row needs review if uncategorized or a low-confidence AI guess. Shared by the
+ *  aggregate reviewCount and the per-row badge so they always agree. */
+function bankRowNeedsReview(t: { pnl_treatment: string | null; category_source: string | null; category_confidence: number | null }): boolean {
+  return !t.pnl_treatment || t.pnl_treatment === "uncategorized" ||
+    (t.category_source === "ai" && (t.category_confidence ?? 1) < 0.6);
+}
 
 /**
  * Everything the Bank dashboard renders, scoped to the current financial year.
@@ -72,11 +96,14 @@ export async function getBankOverview(
     // ledger grows (verified: 11-15s → ~0.4s). The client re-sorts by transaction_at
     // for display (bank-client.tsx) and every aggregate below is order-independent,
     // so id-ascending drain order is fine.
-    selectAllKeyset<BankTxn>((afterId, limit) => {
+    selectAllKeyset<BankAggRow>((afterId, limit) => {
+      // Aggregation-only columns (no counterparty/description/external_id/
+      // transaction_at) — the rows are NOT returned to the client, only summed, so
+      // keep them narrow. The paginated table fetches the display columns itself.
       let q = supabase
         .from("transactions")
         .select(
-          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id"
+          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
@@ -109,11 +136,20 @@ export async function getBankOverview(
   const monthly = new Map<string, { expenses: number; otherIncome: number }>();
   const byCat = new Map<string, { label: string; treatment: string; amount: number; count: number }>();
   const byCardMap = new Map<string, { holder: string | null; amount: number; count: number }>();
+  const accountTypeSet = new Set<string>();
+  const cardSet = new Set<string>();
+  let reviewCount = 0;
   const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.length };
 
   for (const t of transactions) {
+    // Distinct filter options + review backlog are computed over ALL rows (any
+    // status), matching the table filters + the "Needs review" badge/metric.
+    if (t.account_type) accountTypeSet.add(t.account_type);
+    if (t.card_last4) cardSet.add(t.card_last4);
+    if (bankRowNeedsReview(t)) reviewCount += 1;
+
     // Only POSTED transactions hit the P&L — failed/pending are shown in the table
-    // (fetched above) but never counted as expense/income/excluded.
+    // but never counted as expense/income/excluded.
     if (t.status !== "completed" && t.status !== "refunded") continue;
     const amt = baseAmt(t);
 
@@ -168,15 +204,95 @@ export async function getBankOverview(
     .sort((a, b) => b.amount - a.amount);
 
   return {
-    transactions,
     categories,
     byCard,
     monthly: monthlySeries,
     totals,
     byCategory,
+    accountTypes: Array.from(accountTypeSet).sort(),
+    cards: Array.from(cardSet).sort(),
+    reviewCount,
     runway: { cashBalance: runwayRes.cash_balance, burnRate: runwayRes.burn_rate, runwayDays: runwayRes.runway_days },
     period: { from: periodFrom, to: periodTo },
   };
+}
+
+// ─── Paginated transaction table (server-side) ────────────────────────────────
+
+export type BankTxnFilters = {
+  from?: string;
+  to?: string;
+  search?: string;
+  status?: string;                    // completed | pending | failed | refunded
+  account?: string;                   // account_type
+  card?: string;                      // card_last4
+  view?: "all" | "expense" | "income" | "excluded" | "review";
+  page?: number;                      // 0-based
+  pageSize?: number;
+};
+
+export type BankTxnPage = { rows: BankTxn[]; total: number; page: number; pageSize: number };
+
+/**
+ * One page of bank transactions for the table — filtered + searched + paginated in
+ * Postgres so the client never loads the whole ledger. Newest first. MUST use the
+ * service client (bank rows aren't client-readable). Scales: each page is a bounded
+ * LIMIT over the partial bank index, independent of ledger size.
+ */
+export async function getBankTransactions(
+  orgId: string,
+  supabase: SupabaseClient,
+  f: BankTxnFilters
+): Promise<BankTxnPage> {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = f.from || fyStartISO(new Date());
+  const to = f.to || today;
+  const page = Math.max(0, f.page ?? 0);
+  const pageSize = Math.min(200, Math.max(1, f.pageSize ?? 50));
+
+  const cols =
+    "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id";
+
+  // Apply the identical filter set to a query builder. Typed loosely because the
+  // count query and the rows query have different builder result types but share
+  // exactly these predicate calls.
+  type FilterBuilder = {
+    eq: (c: string, v: string) => FilterBuilder;
+    gte: (c: string, v: string) => FilterBuilder;
+    lte: (c: string, v: string) => FilterBuilder;
+    ilike: (c: string, v: string) => FilterBuilder;
+    or: (v: string) => FilterBuilder;
+  };
+  const applyFilters = (q: FilterBuilder): FilterBuilder => {
+    let out = q.eq("org_id", orgId).eq("ledger", "bank").gte("transaction_date", from).lte("transaction_date", to);
+    if (f.status && f.status !== "all") out = out.eq("status", f.status);
+    if (f.account && f.account !== "all") out = out.eq("account_type", f.account);
+    if (f.card && f.card !== "all") out = out.eq("card_last4", f.card);
+    if (f.view === "expense" || f.view === "income" || f.view === "excluded") out = out.eq("pnl_treatment", f.view);
+    else if (f.view === "review") out = out.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized,and(category_source.eq.ai,category_confidence.lt.0.6)");
+    if (f.search && f.search.trim()) {
+      const term = f.search.trim().replace(/[\\%_]/g, (ch) => `\\${ch}`);
+      out = out.ilike("search_text", `%${term}%`);
+    }
+    return out;
+  };
+
+  const countQuery = supabase.from("transactions").select("id", { count: "exact", head: true });
+  const rowsQuery = supabase.from("transactions").select(cols);
+  applyFilters(countQuery as unknown as FilterBuilder);
+  applyFilters(rowsQuery as unknown as FilterBuilder);
+
+  const [countRes, rowsRes] = await Promise.all([
+    countQuery,
+    rowsQuery
+      .order("transaction_date", { ascending: false })
+      .order("id", { ascending: false })
+      .range(page * pageSize, page * pageSize + pageSize - 1),
+  ]);
+
+  if (countRes.error) throw new Error(`Bank txn count failed: ${countRes.error.message}`);
+  if (rowsRes.error) throw new Error(`Bank txn page failed: ${rowsRes.error.message}`);
+  return { rows: (rowsRes.data ?? []) as BankTxn[], total: countRes.count ?? 0, page, pageSize };
 }
 
 /**
