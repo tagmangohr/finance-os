@@ -37,7 +37,9 @@ type Group = { name: string; amount: number; txn_count: number };
 type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; fee: number | null };
 
 const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
-const groupDisplayName = (drillKey: string, name: string) => (GATEWAY_KEYS.has(drillKey) ? sourceLabel(name === "—" ? null : name) : name);
+const groupDisplayName = (drillKey: string, name: string) =>
+  name === "__bank_collections__" ? "Bank Collections" // customer payments folded into Gross Revenue
+  : (GATEWAY_KEYS.has(drillKey) ? sourceLabel(name === "—" ? null : name) : name);
 
 function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
   const [open, setOpen] = React.useState(false);
@@ -148,14 +150,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const setTipCb = React.useCallback((text: string | null, x?: number, y?: number) => {
     setTip(text ? { text, x: x ?? 0, y: y ?? 0 } : null);
   }, []);
-
-  // Freeze the last two rows (Net Profit, Net Margin) at the bottom. Net Margin
-  // pins to bottom:0; Net Profit pins just above it, offset by Net Margin's height.
-  const marginRowRef = React.useRef<HTMLTableRowElement>(null);
-  const [marginH, setMarginH] = React.useState(0);
-  React.useLayoutEffect(() => {
-    if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
-  }, [data, change]);
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
@@ -286,7 +280,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         </div>
       )}
 
-      {/* grid — own scroll box so the header (top) and Net Profit/Margin (bottom) stay frozen */}
+      {/* grid — own scroll box; the header row (top) + line-item column (left) stay frozen */}
       <div className="rounded-xl border border-border bg-card overflow-hidden">
         <div className="overflow-auto max-h-[calc(100vh-215px)]">
           <table className="w-full border-collapse text-[12.5px]">
@@ -305,9 +299,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 const isTotalRow = row.kind === "total";
                 const isMargin = row.kind === "margin";
                 const isNetProfit = row.id === "net_profit";
-                const isNetMargin = row.id === "net_margin";
-                const isFooter = isNetProfit || isNetMargin;
-                const footerBottom = isNetMargin ? 0 : marginH;
                 return (
                   <React.Fragment key={row.id}>
                     {row.section && (
@@ -316,30 +307,23 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       </tr>
                     )}
                     <tr
-                      ref={isNetMargin ? marginRowRef : undefined}
                       className={cn(
                         "border-b border-border/50",
-                        !isFooter && strong && "bg-muted/40",
-                        !isFooter && isCm && "bg-primary/[0.055]",
-                        !isFooter && isTotalRow && "bg-primary/[0.09]",
+                        strong && "bg-muted/40",
+                        isCm && "bg-primary/[0.055]",
+                        isTotalRow && "bg-primary/[0.09]",
                         isNetProfit && "border-t-2 border-border"
                       )}
                     >
                       <td
-                        style={isFooter ? { bottom: footerBottom } : undefined}
                         className={cn(
                           // Sticky label column MUST be opaque or right-scrolled month
                           // values bleed through the translucent tints.
-                          "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
-                          isFooter
-                            ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
-                            : cn(
-                                "z-[1]",
-                                (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
-                                strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
-                                isTotalRow && "font-bold",
-                                row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
-                              )
+                          "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
+                          (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
+                          strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
+                          isTotalRow && "font-bold",
+                          row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
                         )}
                       >{row.label}</td>
                       {displayCols.map((col) => {
@@ -360,10 +344,9 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                         return (
                           <td
                             key={col.key}
-                            style={isFooter ? { bottom: footerBottom } : undefined}
                             className={cn(
                               "text-right px-3 py-2 num align-top border-l border-border/60",
-                              isFooter ? "sticky z-[3] bg-muted" : col.key === "__total__" && "bg-muted/30"
+                              col.key === "__total__" && "bg-muted/30"
                             )}
                             onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                             onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}

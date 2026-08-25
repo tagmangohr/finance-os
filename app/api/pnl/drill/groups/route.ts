@@ -59,6 +59,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   } as never);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Gross Revenue also includes bank-collected customer payments — surface them as
+  // one "Bank Collections" group (sentinel name) so the cell's breakup is complete.
+  if (key === "revenue") {
+    const { data: bank } = await supabase
+      .from("transactions")
+      .select("amount, amount_base, type")
+      .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment")
+      .in("status", ["completed", "refunded"])
+      .gte("transaction_date", from).lte("transaction_date", to)
+      .limit(20000);
+    let amt = 0, n = 0;
+    for (const r of (bank ?? []) as { amount: number | null; amount_base: number | null; type: string }[]) {
+      const base = Number(r.amount_base ?? r.amount) || 0;
+      amt += r.type === "credit" ? base : -base; n += 1;
+    }
+    const gw = ((data ?? []) as { name: string; amount: number; txn_count: number }[]).map((g) => ({ name: g.name, amount: Number(g.amount) || 0, txn_count: Number(g.txn_count) || 0 }));
+    if (n > 0) gw.push({ name: "__bank_collections__", amount: amt, txn_count: n });
+    gw.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    return NextResponse.json({ groups: gw.slice(0, LIMIT), hasMore: gw.length > LIMIT });
+  }
+
   const rows = ((data ?? []) as { name: string; amount: number; txn_count: number }[]).map((g) => ({
     name: g.name,
     amount: Number(g.amount) || 0,

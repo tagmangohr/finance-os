@@ -203,6 +203,9 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     gross[k] = Number(r.gross_revenue) || 0;
     refunds[k] = Number(r.refunds) || 0;
   }
+  // Fold bank-collected customer payments straight INTO Gross Revenue (one number).
+  // The split (PG gateways vs bank) is visible when drilling into the cell.
+  for (const [k, v] of Object.entries(bankRevenue)) gross[k] = (gross[k] ?? 0) + v;
 
   const fees: Record<string, number> = {};
   const cats = new Map<string, { label: string; values: Record<string, number> }>();
@@ -231,10 +234,10 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
   const netProfit: Record<string, number> = {};
   const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of windowKeys) {
+    // Gross already includes bank customer payments (folded in above), so Net
+    // Revenue = Gross − Refunds and they flow through every CM tier + Net Profit.
     const g = gross[k] ?? 0, rf = refunds[k] ?? 0;
-    // Net Revenue includes bank-collected customer payments (operating revenue), so
-    // they flow through every CM tier and Net Profit.
-    const nr = g - rf + (bankRevenue[k] ?? 0);
+    const nr = g - rf;
     netRevenue[k] = nr;
     const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex;
@@ -260,11 +263,9 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     return { id: `exp_${slug}`, label, kind: slug === "__pg_fees__" ? "deduction" : "expense", monthly: monthlyVals, drill: slug, section };
   };
 
+  // Gross Revenue includes bank-collected customer payments; the drill splits it by
+  // gateway + bank so the breakup is visible on the cell.
   add({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
-  // Bank-collected customer payments (outside a PG) — operating revenue, drillable.
-  if ([...windowKeys].some((k) => (bankRevenue[k] ?? 0) !== 0)) {
-    add({ id: "bank_collections", label: "Customer Payments (Bank)", kind: "revenue", monthly: bankRevenue, drill: "income:customer_payment" });
-  }
   add({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
   add({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
 
@@ -353,15 +354,15 @@ export function samplePnl(params: PnlParams): PnlData {
   ];
   const cats = new Map(catDefs.map(([slug, label, frac]) => [slug, { label, values: Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * frac)])) }]));
 
-  // Sample bank-collected customer payments (→ revenue) + other income (→ net profit).
-  const bankRevenue = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.05)]));
+  // Sample other income (→ net profit). Customer payments are folded into Gross.
+  for (const k of keys) gross[k] = (gross[k] ?? 0) + Math.round((gross[k] ?? 0) * 0.05);
   const otherIncome = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.01)]));
 
   const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
   const netRevenue: Record<string, number> = {}, totalOpex: Record<string, number> = {}, netProfit: Record<string, number> = {};
   const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of keys) {
-    const nr = (gross[k] ?? 0) - (refunds[k] ?? 0) + (bankRevenue[k] ?? 0);
+    const nr = (gross[k] ?? 0) - (refunds[k] ?? 0);
     netRevenue[k] = nr;
     const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex; netProfit[k] = nr - opex + (otherIncome[k] ?? 0);
@@ -371,7 +372,6 @@ export function samplePnl(params: PnlParams): PnlData {
 
   const rows: PnlRow[] = [];
   rows.push({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
-  rows.push({ id: "bank_collections", label: "Customer Payments (Bank)", kind: "revenue", monthly: bankRevenue, drill: "income:customer_payment" });
   rows.push({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
   rows.push({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
   const sampleCat = (slug: string, section?: string): PnlRow => ({

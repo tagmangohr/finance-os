@@ -62,7 +62,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .lte("transaction_date", to);
 
   if (key === "revenue") {
-    q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
+    // Gross Revenue = PG gateway credits + bank-collected customer payments. The
+    // "Bank Collections" group expands to the bank side (sentinel party).
+    if (party === "__bank_collections__") {
+      q = q.eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment").in("status", ["completed", "refunded"]);
+    } else {
+      q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
+    }
   } else if (key === "refunds") {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
   } else if (key === "__pg_fees__") {
@@ -90,7 +96,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // GATEWAY (source stem, e.g. `stripe` covers stripe + stripe_refund); expense
   // lines by vendor (counterparty_name). '—' = the empty/null bucket.
   const isGateway = key === "revenue" || key === "refunds" || key === "__pg_fees__";
-  if (party != null) {
+  if (party != null && party !== "__bank_collections__") { // sentinel already scoped above
     if (party === "—") {
       const field = isGateway ? "source" : "counterparty_name";
       q = q.or(`${field}.is.null,${field}.eq.`);
