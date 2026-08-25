@@ -203,7 +203,14 @@ export async function fetchLinkTransactions(
         const ledger: "bank" | "payments" = tab.ledger === "bank" ? "bank" : "payments";
         for (const t of transactionsFromRows(tabRows, mapping)) {
           if (!validDate(t.transaction_date)) continue;
-          rows.push({ ...t, ledger, external_id: sheetExternalId(tab.name, t.raw) });
+          rows.push({
+            ...t,
+            ledger,
+            // Tag bank rows with the tab name so each synced source is a filterable
+            // "account" on the Bank page.
+            account_type: ledger === "bank" ? tab.name : (t.account_type ?? null),
+            external_id: sheetExternalId(tab.name, t.raw),
+          });
         }
       }
     } else {

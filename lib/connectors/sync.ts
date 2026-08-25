@@ -679,7 +679,8 @@ export async function mergeConnectorTransactions(
         type: r.type, amount: r.amount, currency: r.currency,
         counterparty_name: r.counterparty_name, description: r.description,
         transaction_date: r.transaction_date, metadata: r.metadata, raw: r.raw,
-        ledger: r.ledger, amount_base: r.amount_base, base_currency: r.base_currency, fx_rate: r.fx_rate,
+        ledger: r.ledger, account_type: r.account_type,
+        amount_base: r.amount_base, base_currency: r.base_currency, fx_rate: r.fx_rate,
       };
       if (manual.length > 0) {
         for (const f of manual) delete refresh[f];
