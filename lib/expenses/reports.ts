@@ -26,7 +26,6 @@ export type BankTxn = {
   card_holder: string | null;
   status: string;
   external_id: string | null;
-  metadata: Record<string, unknown> | null;
 };
 
 export type BankOverview = {
@@ -70,15 +69,20 @@ export async function getBankOverview(
       supabase
         .from("transactions")
         .select(
-          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id, metadata"
+          "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
         .gte("transaction_date", periodFrom)
         .lte("transaction_date", periodTo)
-        // Sort by the precise timestamp so same-day rows are ordered by time,
-        // not arbitrarily. transaction_date is the tiebreaker for null timestamps.
-        .order("transaction_at", { ascending: false, nullsFirst: false })
+        // Order by the indexed (transaction_date, id) only — deterministic, so
+        // selectAll pages through every row without gaps/dupes. We intentionally
+        // do NOT sort by transaction_at here: that column is unindexed and full of
+        // nulls (sheet imports), so a top-N sort forces Postgres to sort the whole
+        // filtered set — which, over a wide range, blew the statement timeout and
+        // 500'd the page. The client re-sorts by the precise transaction_at
+        // timestamp for display (bank-client.tsx), and every aggregate below is
+        // order-independent, so nothing depends on the DB row order.
         .order("transaction_date", { ascending: false })
         .order("id", { ascending: false })
         .range(from, to)

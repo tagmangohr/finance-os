@@ -56,7 +56,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .eq("ledger", "bank")
       .gte("transaction_date", periodFrom)
       .lte("transaction_date", periodTo)
-      .order("transaction_at", { ascending: false, nullsFirst: false })
+      // Order by the indexed (transaction_date, id) only. transaction_at is
+      // unindexed + null-heavy, so sorting a full-drain export by it forces a
+      // whole-set sort that blows the statement timeout as the ledger grows
+      // (same failure that 500'd the Bank page). Date-desc is the right order for
+      // an export anyway; same-day precision isn't needed in a flat file.
       .order("transaction_date", { ascending: false })
       .order("id", { ascending: false })
       .range(from, from + 999);
