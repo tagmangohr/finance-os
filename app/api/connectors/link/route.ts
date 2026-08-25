@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const maxDuration = 60;
 
@@ -39,6 +40,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   try {
     const result = await syncLinkConnector(auth.supabase, connector);
+    // Imported rows (esp. bank-routed) feed the cached Bank/dashboard views —
+    // invalidate so they appear immediately instead of after the cache TTL.
+    invalidateOrg(orgId);
     if (result.fetched === 0) {
       return NextResponse.json({
         synced: 0,

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { parseSyncDateRange } from "@/lib/api/validation";
 import { enqueueBackfill } from "@/lib/connectors/jobs";
@@ -64,7 +65,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const origin = req.nextUrl.origin;
   after(async () => {
     for (const c of linkConnectors) {
-      try { await syncLinkConnector(auth.supabase, c); } catch { /* surfaced via connector status */ }
+      try { await syncLinkConnector(auth.supabase, c); invalidateOrg(c.org_id); } catch { /* surfaced via connector status */ }
     }
     if (enqueued > 0 && cronSecret) {
       try { await fetch(`${origin}/api/cron/process-sync-jobs`, { headers: { authorization: `Bearer ${cronSecret}` } }); } catch { /* cron drains anyway */ }

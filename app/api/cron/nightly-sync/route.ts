@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
@@ -61,6 +62,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     (connectors as ConnectorRow[]).map(async (c) => {
       if (isLinkConnector(c.type)) {
         await syncLinkConnector(supabase, c);
+        invalidateOrg(c.org_id);
         links++;
         return;
       }
