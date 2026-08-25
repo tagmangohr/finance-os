@@ -26,3 +26,33 @@ export async function selectAll<T>(
   }
   return out;
 }
+
+/**
+ * Drain ALL rows via KEYSET pagination on a monotonic `id` (seek, not offset).
+ *
+ * OFFSET pagination (`selectAll` above) re-scans and discards every preceding row
+ * on each page, so cost grows with page depth — draining a few thousand WIDE rows
+ * can take 10s+ and trip Postgres's statement timeout. Keyset pages by `WHERE id >
+ * lastId ORDER BY id LIMIT n`, which is constant-time per page regardless of depth
+ * and stays flat as the table grows. Use this for any full drain of a large table.
+ *
+ * The factory MUST order by `id` ascending, apply `id > afterId` when given, and
+ * select the `id` column. Order within the result is `id`-ascending; callers that
+ * need a display order must sort the returned rows themselves.
+ */
+export async function selectAllKeyset<T extends { id: string }>(
+  makeQuery: (afterId: string | null, limit: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  pageSize = 1000
+): Promise<T[]> {
+  const out: T[] = [];
+  let after: string | null = null;
+  for (;;) {
+    const { data, error } = await makeQuery(after, pageSize);
+    if (error) throw new Error(error.message);
+    const batch = data ?? [];
+    out.push(...batch);
+    if (batch.length < pageSize) break;
+    after = batch[batch.length - 1].id;
+  }
+  return out;
+}

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { selectAll } from "@/lib/supabase/paginate";
+import { selectAllKeyset } from "@/lib/supabase/paginate";
 import { baseAmt, fyStartISO } from "@/lib/utils";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -65,8 +65,15 @@ export async function getBankOverview(
 
   const [categories, transactions, collectionsByMonth, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
-    selectAll<BankTxn>((from, to) =>
-      supabase
+    // KEYSET drain (seek by id), NOT offset. Offset pagination re-scans every
+    // preceding row per page, so draining a few thousand WIDE bank rows took 10s+
+    // and intermittently tripped the 8s statement timeout → the Bank page 500'd
+    // "again and again". Keyset is constant-time per page and stays flat as the
+    // ledger grows (verified: 11-15s → ~0.4s). The client re-sorts by transaction_at
+    // for display (bank-client.tsx) and every aggregate below is order-independent,
+    // so id-ascending drain order is fine.
+    selectAllKeyset<BankTxn>((afterId, limit) => {
+      let q = supabase
         .from("transactions")
         .select(
           "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id"
@@ -75,18 +82,11 @@ export async function getBankOverview(
         .eq("ledger", "bank")
         .gte("transaction_date", periodFrom)
         .lte("transaction_date", periodTo)
-        // Order by the indexed (transaction_date, id) only — deterministic, so
-        // selectAll pages through every row without gaps/dupes. We intentionally
-        // do NOT sort by transaction_at here: that column is unindexed and full of
-        // nulls (sheet imports), so a top-N sort forces Postgres to sort the whole
-        // filtered set — which, over a wide range, blew the statement timeout and
-        // 500'd the page. The client re-sorts by the precise transaction_at
-        // timestamp for display (bank-client.tsx), and every aggregate below is
-        // order-independent, so nothing depends on the DB row order.
-        .order("transaction_date", { ascending: false })
-        .order("id", { ascending: false })
-        .range(from, to)
-    ),
+        .order("id", { ascending: true })
+        .limit(limit);
+      if (afterId) q = q.gt("id", afterId);
+      return q;
+    }),
     // PG collections per month (gross revenue). Read the trigger-maintained
     // ROLLUP TABLE (rollup_revenue_monthly, migration 059) — NOT vw_metrics_monthly,
     // which GROUP-BYs all ~450k transactions live (~3.5s every load) and was timing
