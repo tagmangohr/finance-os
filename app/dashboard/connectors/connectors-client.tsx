@@ -514,8 +514,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const [tabCfg, setTabCfg] = React.useState<Record<string, SheetTabUi>>({});
   const [detectingTabs, setDetectingTabs] = React.useState(false);
 
-  const detectSheetTabs = async () => {
-    const url = formValues.sheet_url?.trim();
+  const detectSheetTabs = async (urlArg?: string) => {
+    const url = (urlArg ?? formValues.sheet_url)?.trim();
     if (!url) return;
     setDetectingTabs(true);
     try {
@@ -744,9 +744,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     }
     setFormValues(prefilled);
 
-    // Google Sheets: seed the tab config from what was saved, so edit shows it.
-    // Headers are unknown until "Detect tabs" is clicked again (re-reads the sheet),
-    // so column pickers stay hidden until then — the saved mapping is preserved.
+    // Google Sheets: seed the tab config from what was saved, then auto-detect so
+    // the column pickers appear immediately (headers aren't stored — they load from
+    // the live sheet). The seed runs first via functional setState so detect only
+    // fills UNSET fields and never clobbers the saved mapping.
     if (inst.type === "google_sheets") {
       const savedTabs = Array.isArray((cfg as { tabs?: unknown }).tabs)
         ? ((cfg as unknown as { tabs: (SheetTabPersisted & { valueCols?: string[] })[] }).tabs)
@@ -763,6 +764,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         descriptionCol: t.descriptionCol, counterpartyCol: t.counterpartyCol,
         labelCol: t.labelCol, valueCols: t.valueCols, matrixDirection: t.matrixDirection,
       } as SheetTabUi])));
+      const sheetUrl = (cfg as { sheet_url?: string }).sheet_url;
+      if (sheetUrl) void detectSheetTabs(sheetUrl); // populate headers → column pickers show
     } else {
       setSheetTabs(null);
       setTabCfg({});
@@ -1583,7 +1586,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                         <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Sub-sheets (tabs)</p>
                         <button
                           type="button"
-                          onClick={detectSheetTabs}
+                          onClick={() => detectSheetTabs()}
                           disabled={!formValues.sheet_url?.trim() || detectingTabs}
                           className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-border text-[11px] font-medium hover:bg-accent disabled:opacity-50"
                         >
