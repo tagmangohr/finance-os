@@ -243,13 +243,20 @@ export async function fetchLinkTransactions(
         const ledger: "bank" | "payments" = tab.ledger === "bank" ? "bank" : "payments";
         for (const t of buildTabTransactions(tabRows, headers, spec)) {
           if (!validDate(t.transaction_date)) continue;
+          // Stable external_id basis. For a MATRIX (payroll grid) key by (label,
+          // period column) ONLY — NOT the whole row — so editing/filling one month
+          // for an employee doesn't re-hash (and thus re-key + drop the category of)
+          // that employee's OTHER months. For single/split, the row IS the unit.
+          const idBasis = spec.format === "matrix"
+            ? { label: t.counterparty_name ?? "", col: (t.metadata as Record<string, unknown> | undefined)?.source_column ?? "" }
+            : t.raw;
           rows.push({
             ...t,
             ledger,
             // Tag bank rows with the tab name so each synced source is a filterable
             // "account" on the Bank page.
             account_type: ledger === "bank" ? tab.name : (t.account_type ?? null),
-            external_id: sheetExternalId(tab.name, t.raw),
+            external_id: sheetExternalId(tab.name, idBasis),
           });
         }
       }

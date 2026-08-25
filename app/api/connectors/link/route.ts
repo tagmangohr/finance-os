@@ -40,6 +40,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   try {
     const result = await syncLinkConnector(auth.supabase, connector);
+    // Re-apply the org's vendor rules to any uncategorized bank rows the sync just
+    // (re-)inserted, so a re-sync never leaves a previously-categorized vendor
+    // uncategorized (rules layer is fill-only + fast; AI only if a key is set).
+    // Non-fatal — a categorization hiccup must not fail the sync.
+    try {
+      const { createServiceClient } = await import("@/lib/supabase/server");
+      const { categorizeBankTransactions } = await import("@/lib/expenses/categorize");
+      await categorizeBankTransactions(orgId, await createServiceClient());
+    } catch (e) {
+      console.error(`[link-sync] post-sync categorize failed (non-fatal):`, e);
+    }
     // Imported rows (esp. bank-routed) feed the cached Bank/dashboard views —
     // invalidate so they appear immediately instead of after the cache TTL.
     invalidateOrg(orgId);

@@ -64,8 +64,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const cronSecret = process.env.CRON_SECRET;
   const origin = req.nextUrl.origin;
   after(async () => {
+    const syncedOrgs = new Set<string>();
     for (const c of linkConnectors) {
-      try { await syncLinkConnector(auth.supabase, c); invalidateOrg(c.org_id); } catch { /* surfaced via connector status */ }
+      try { await syncLinkConnector(auth.supabase, c); invalidateOrg(c.org_id); syncedOrgs.add(c.org_id); } catch { /* surfaced via connector status */ }
+    }
+    // Re-apply vendor rules to any uncategorized bank rows the link syncs (re-)inserted,
+    // so a re-sync never leaves a previously-categorized vendor uncategorized.
+    if (syncedOrgs.size > 0) {
+      try {
+        const { createServiceClient } = await import("@/lib/supabase/server");
+        const { categorizeBankTransactions } = await import("@/lib/expenses/categorize");
+        const svc = await createServiceClient();
+        for (const oid of syncedOrgs) await categorizeBankTransactions(oid, svc);
+      } catch (e) { console.error("[sync] post-link categorize failed (non-fatal):", e); }
     }
     if (enqueued > 0 && cronSecret) {
       try { await fetch(`${origin}/api/cron/process-sync-jobs`, { headers: { authorization: `Bearer ${cronSecret}` } }); } catch { /* cron drains anyway */ }
