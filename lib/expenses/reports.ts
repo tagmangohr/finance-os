@@ -87,7 +87,7 @@ export async function getBankOverview(
   const periodFrom = opts?.from || fyStartISO(new Date());
   const periodTo = opts?.to || today;
 
-  const [categories, transactions, collectionsByMonth, runwayRes] = await Promise.all([
+  const [categories, transactions, collectionsByMonth, pgFeesByMonth, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
     // KEYSET drain (seek by id), NOT offset. Offset pagination re-scans every
     // preceding row per page, so draining a few thousand WIDE bank rows took 10s+
@@ -114,23 +114,30 @@ export async function getBankOverview(
       if (afterId) q = q.gt("id", afterId);
       return q;
     }),
-    // PG collections per month (gross revenue). Read the trigger-maintained
-    // ROLLUP TABLE (rollup_revenue_monthly, migration 059) — NOT vw_metrics_monthly,
-    // which GROUP-BYs all ~450k transactions live (~3.5s every load) and was timing
-    // out the Bank page. The rollup is org×month with the same canonical revenue
-    // definition (verified equal to the view to the rupee) and reads in ~70ms.
-    supabase
-      .from("rollup_revenue_monthly" as never)
-      .select("month, gross_revenue")
-      .eq("org_id" as never, orgId),
+    // PG revenue + refunds per month (fast rollup RPC, same source the P&L page
+    // uses). We take gross_revenue AND refunds so "Collections" reflects the PG's
+    // NET contribution — matching the dedicated P&L page (which subtracts refunds +
+    // gateway fees). Without this the Bank net overstated profit by refunds + fees.
+    supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: periodFrom, p_to: periodTo } as never),
+    // PG processing fees per month (the __pg_fees__ line of the P&L category rollup),
+    // subtracted from collections too so both pages tie out.
+    supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: periodFrom, p_to: periodTo } as never),
     calculateRunway(orgId, supabase),
   ]);
 
   const labelBySlug = new Map(categories.map((c) => [c.slug, c.label]));
+  const inRange = (key: string) => key >= periodFrom.slice(0, 7) && key <= periodTo.slice(0, 7);
+  // Collections = PG gross − refunds − gateway fees (net PG contribution to profit),
+  // so Collections + Other income − Expenses ties to the P&L's Net Profit.
   const collMap = new Map<string, number>();
-  for (const r of (collectionsByMonth.data ?? []) as { month: string; gross_revenue: number }[]) {
+  for (const r of (collectionsByMonth.data ?? []) as { month: string; gross_revenue: number; refunds: number }[]) {
     const key = String(r.month).slice(0, 7);
-    if (key >= periodFrom.slice(0, 7) && key <= periodTo.slice(0, 7)) collMap.set(key, Number(r.gross_revenue ?? 0));
+    if (inRange(key)) collMap.set(key, (Number(r.gross_revenue ?? 0) - Number(r.refunds ?? 0)));
+  }
+  for (const c of (pgFeesByMonth.data ?? []) as { month: string; category: string; amount: number }[]) {
+    if (c.category !== "__pg_fees__") continue;
+    const key = String(c.month).slice(0, 7);
+    if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(c.amount ?? 0));
   }
 
   const monthly = new Map<string, { expenses: number; otherIncome: number }>();
