@@ -630,11 +630,11 @@ export async function replaceConnectorTransactions(
  * MERGE a connector's transactions from a re-readable source (link/sheet), instead
  * of the destructive replace. New rows (by external_id) are inserted; existing rows
  * have only their SOURCE fields refreshed — user-owned fields (pnl_treatment,
- * category, category_confidence) are PRESERVED, so categorizing a bank row in
- * Review survives the next sync. Rows absent from the source ARE deleted (the
- * sheet is the source of truth) EXCEPT ones the user has categorized or edited,
- * which are kept. Requires stable external_ids; legacy rows with a null
- * external_id for this connector (old mirror artifacts) are cleared once.
+ * category, category_confidence) are PRESERVED for rows STILL in the source, so
+ * categorizing a bank row in Review survives the next sync. Rows ABSENT from the
+ * source ARE deleted unconditionally (true mirror — the sheet is the source of
+ * truth, so removed/changed rows reflect on re-sync). Requires stable external_ids;
+ * legacy rows with a null external_id for this connector are cleared once.
  */
 export async function mergeConnectorTransactions(
   supabase: ServiceClient,
@@ -653,17 +653,20 @@ export async function mergeConnectorTransactions(
 
   const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
 
-  // Delete-absent: the sheet is the source of truth, so rows this connector
-  // produced before but the current parse no longer yields are stale (e.g. a
-  // corrected column mapping / format change re-keys rows). Drop them so a fix
-  // self-heals — but NEVER delete a row the user has already worked (categorized
-  // or manually edited); those survive even if their source row changed.
+  // Delete-absent (TRUE MIRROR): the sheet is the source of truth, so any row this
+  // connector produced before that the current parse no longer yields is deleted —
+  // unconditionally, even if it was categorized. This is what makes the sheet
+  // authoritative: remove/change/add a row there and it reflects here on re-sync.
+  // (Categorization of rows STILL present is preserved — those keep their stable id
+  // and are handled by the refresh loop below; only genuinely-removed rows go. A row
+  // whose sheet content CHANGED re-keys, so the old version is removed and the new
+  // one re-imported uncategorized — the intended "changes reflect" behaviour.)
   const incoming = new Set(externalIds);
-  const allExisting: Array<{ id: string; external_id: string | null; category: string | null; pnl_treatment: string | null; metadata: Record<string, unknown> | null }> = [];
+  const allExisting: Array<{ id: string; external_id: string | null }> = [];
   for (let page = 0; ; page += 1000) {
     const { data, error } = await supabase
       .from("transactions")
-      .select("id, external_id, category, pnl_treatment, metadata")
+      .select("id, external_id")
       .eq("org_id", orgId)
       .eq("connector_id", connectorId)
       .range(page, page + 999);
@@ -673,13 +676,7 @@ export async function mergeConnectorTransactions(
     if (batch.length < 1000) break;
   }
   const staleIds = allExisting
-    .filter((r) => {
-      if (r.external_id && incoming.has(r.external_id as string)) return false; // still produced
-      const meta = (r.metadata ?? {}) as Record<string, unknown>;
-      const hasManual = Array.isArray(meta.manual_fields) && (meta.manual_fields as unknown[]).length > 0;
-      const hasCategory = !!r.category || (r.pnl_treatment != null && r.pnl_treatment !== "uncategorized");
-      return !hasManual && !hasCategory; // only remove untouched stale rows
-    })
+    .filter((r) => !(r.external_id && incoming.has(r.external_id as string)))
     .map((r) => r.id as string);
   for (let i = 0; i < staleIds.length; i += 500) {
     const { error } = await supabase.from("transactions").delete().in("id", staleIds.slice(i, i + 500)).eq("org_id", orgId);

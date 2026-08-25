@@ -87,9 +87,13 @@ export async function getBankOverview(
         .order("id", { ascending: false })
         .range(from, to)
     ),
-    // PG collections per month (gross revenue) from the firewalled rollup view.
+    // PG collections per month (gross revenue). Read the trigger-maintained
+    // ROLLUP TABLE (rollup_revenue_monthly, migration 059) — NOT vw_metrics_monthly,
+    // which GROUP-BYs all ~450k transactions live (~3.5s every load) and was timing
+    // out the Bank page. The rollup is org×month with the same canonical revenue
+    // definition (verified equal to the view to the rupee) and reads in ~70ms.
     supabase
-      .from("vw_metrics_monthly" as never)
+      .from("rollup_revenue_monthly" as never)
       .select("month, gross_revenue")
       .eq("org_id" as never, orgId),
     calculateRunway(orgId, supabase),

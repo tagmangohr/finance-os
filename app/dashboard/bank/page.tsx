@@ -1,4 +1,7 @@
 export const dynamic = "force-dynamic";
+// Headroom for a cold cache-miss render (drain + runway) so it completes instead of
+// 504-ing at a lower default; warm loads are served from the org cache in ms.
+export const maxDuration = 60;
 
 import { redirect } from "next/navigation";
 import { getActiveOrg } from "@/lib/org/active-org";
