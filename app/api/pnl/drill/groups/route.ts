@@ -26,6 +26,34 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+
+  // Income cells (customer_payment revenue + Other Income) aren't in the
+  // pnl_drill_groups RPC (it's expense/PG only), so group them here directly by
+  // counterparty. Small set (bank income rows), so a direct query is fine.
+  if (key.startsWith("income:")) {
+    const slug = key.slice("income:".length);
+    let iq = supabase
+      .from("transactions")
+      .select("counterparty_name, amount, amount_base, type")
+      .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income")
+      .in("status", ["completed", "refunded"])
+      .gte("transaction_date", from).lte("transaction_date", to);
+    iq = slug && slug !== "uncategorized" ? iq.eq("category", slug) : iq.or("category.is.null,category.eq.");
+    const { data: irows, error: ierr } = await iq.limit(5000);
+    if (ierr) return NextResponse.json({ error: ierr.message }, { status: 500 });
+    const m = new Map<string, { amount: number; count: number }>();
+    for (const r of (irows ?? []) as { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string }[]) {
+      const name = (r.counterparty_name ?? "—") || "—";
+      const base = Number(r.amount_base ?? r.amount) || 0;
+      const signed = r.type === "credit" ? base : -base;
+      const e = m.get(name) ?? { amount: 0, count: 0 };
+      e.amount += signed; e.count += 1; m.set(name, e);
+    }
+    const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count }))
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
+  }
+
   const { data, error } = await supabase.rpc("pnl_drill_groups" as never, {
     p_org: org, p_key: key, p_from: from, p_to: to, p_limit: LIMIT + 1,
   } as never);

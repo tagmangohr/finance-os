@@ -67,6 +67,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
   } else if (key === "__pg_fees__") {
     q = q.in("status", ["completed", "refunded"]).or("metadata->>fee.not.is.null,metadata->>fees.not.is.null");
+  } else if (key.startsWith("income:")) {
+    // Bank rows treated as income (customer_payment revenue line + Other Income).
+    const slug = key.slice("income:".length);
+    q = q.eq("ledger", "bank").eq("pnl_treatment", "income").in("status", ["completed", "refunded"]);
+    if (slug && slug !== "uncategorized") q = q.eq("category", slug);
+    else q = q.or("category.is.null,category.eq.");
   } else {
     // An expense category slug (or 'uncategorized').
     q = q.in("status", ["completed", "refunded"]).or("and(ledger.eq.bank,pnl_treatment.eq.expense),and(ledger.eq.payments,type.eq.debit)");
@@ -101,9 +107,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const raw = (data ?? []) as unknown as Row[];
   const rows = raw.map((r) => {
     const isFee = key === "__pg_fees__";
+    const isIncome = key.startsWith("income:");
     const base = Number(r.amount_base ?? r.amount ?? 0);
-    // Expense rows: bank reversals (credit) net off, so show them signed.
-    const signed = key !== "revenue" && key !== "refunds" && !isFee && r.type === "credit" ? -base : base;
+    // Income rows: credit is + (a receipt), debit is − (clawback). Expense rows:
+    // bank reversals (credit) net off, so show them signed the other way.
+    const signed = isIncome
+      ? (r.type === "credit" ? base : -base)
+      : (key !== "revenue" && key !== "refunds" && !isFee && r.type === "credit" ? -base : base);
     return {
       id: r.id,
       transaction_date: r.transaction_date,

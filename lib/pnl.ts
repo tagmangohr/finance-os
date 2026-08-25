@@ -1,5 +1,12 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { selectAllKeyset } from "@/lib/supabase/paginate";
 import { CM_CONFIG, CM_CAT_ORDER } from "@/lib/pnl-config";
+
+// Income-treatment bank categories that are OPERATING REVENUE (customers paying
+// directly into the bank, outside a payment gateway) — folded into Net Revenue so
+// they flow through the CM tiers. Every other income category is non-operating
+// "Other Income" (added into Net Profit only). Per Ravi's P&L decision (2026-08-25).
+const REVENUE_INCOME_CATS = new Set(["customer_payment"]);
 
 export { CM_CONFIG, CM_CAT_ORDER };
 
@@ -144,15 +151,50 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
   const to = lastDayIso(maxKey);
 
   const supabase = await createServiceClient();
-  const [monthlyRes, pnlRes] = await Promise.all([
+  type IncomeRow = { id: string; transaction_date: string; category: string | null; type: string; amount: number; amount_base: number | null };
+  const [monthlyRes, pnlRes, incomeRows, catLabelRes] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Bank rows treated as income (customer_payment → revenue; the rest → Other
+    // Income). Few rows (index-backed on ledger='bank', pnl_treatment), keyset-drained.
+    selectAllKeyset<IncomeRow>((afterId, limit) => {
+      let q = supabase
+        .from("transactions")
+        .select("id, transaction_date, category, type, amount, amount_base")
+        .eq("org_id", orgId)
+        .eq("ledger", "bank")
+        .eq("pnl_treatment", "income")
+        .in("status", ["completed", "refunded"])
+        .gte("transaction_date", from)
+        .lte("transaction_date", to)
+        .order("id", { ascending: true })
+        .limit(limit);
+      if (afterId) q = q.gt("id", afterId);
+      return q as unknown as PromiseLike<{ data: IncomeRow[] | null; error: { message: string } | null }>;
+    }),
+    supabase.from("ledger_categories").select("slug, label").or(`org_id.is.null,org_id.eq.${orgId}`),
   ]);
 
   type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
   type PnlCatRow = { month: string; category: string; label: string; amount: number };
   const monthly: MonthlyRow[] = (monthlyRes.data as MonthlyRow[]) ?? [];
   const catRows: PnlCatRow[] = (pnlRes.data as PnlCatRow[]) ?? [];
+
+  // Split bank income into operating revenue (customer_payment) vs Other Income.
+  const catLabels = new Map<string, string>();
+  for (const c of (catLabelRes.data ?? []) as { slug: string; label: string }[]) catLabels.set(c.slug, c.label);
+  const bankRevenue: Record<string, number> = {}; // customer_payment → into Net Revenue
+  const incomeCats = new Map<string, { label: string; values: Record<string, number> }>(); // Other Income
+  for (const r of incomeRows) {
+    const k = monthKeyFromDate(r.transaction_date);
+    const amt = Number(r.amount_base ?? r.amount) || 0;
+    const signed = r.type === "credit" ? amt : -amt; // income: credit +, clawback −
+    const slug = r.category ?? "other_income";
+    if (REVENUE_INCOME_CATS.has(slug)) { bankRevenue[k] = (bankRevenue[k] ?? 0) + signed; continue; }
+    let e = incomeCats.get(slug);
+    if (!e) { e = { label: catLabels.get(slug) ?? slug, values: {} }; incomeCats.set(slug, e); }
+    e.values[k] = (e.values[k] ?? 0) + signed;
+  }
 
   const gross: Record<string, number> = {};
   const refunds: Record<string, number> = {};
@@ -175,22 +217,31 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
 
   const windowKeys = new Set<string>([
     ...Object.keys(gross), ...Object.keys(refunds), ...Object.keys(fees),
+    ...Object.keys(bankRevenue),
     ...[...cats.values()].flatMap((c) => Object.keys(c.values)),
+    ...[...incomeCats.values()].flatMap((c) => Object.keys(c.values)),
   ]);
   const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
+  const otherIncomeVal = (k: string) => [...incomeCats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
 
   // Derived monthly series.
   const netRevenue: Record<string, number> = {};
   const totalOpex: Record<string, number> = {};
+  const otherIncome: Record<string, number> = {};
   const netProfit: Record<string, number> = {};
   const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of windowKeys) {
     const g = gross[k] ?? 0, rf = refunds[k] ?? 0;
-    const nr = g - rf;
+    // Net Revenue includes bank-collected customer payments (operating revenue), so
+    // they flow through every CM tier and Net Profit.
+    const nr = g - rf + (bankRevenue[k] ?? 0);
     netRevenue[k] = nr;
     const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex;
-    netProfit[k] = nr - opex;
+    const oi = otherIncomeVal(k);
+    otherIncome[k] = oi;
+    // Non-operating Other Income is added AFTER operating expenses (not in CM tiers).
+    netProfit[k] = nr - opex + oi;
     let running = nr;
     for (const t of CM_CONFIG) {
       running -= t.cats.reduce((a, slug) => a + catVal(slug, k), 0);
@@ -210,6 +261,10 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
   };
 
   add({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
+  // Bank-collected customer payments (outside a PG) — operating revenue, drillable.
+  if ([...windowKeys].some((k) => (bankRevenue[k] ?? 0) !== 0)) {
+    add({ id: "bank_collections", label: "Customer Payments (Bank)", kind: "revenue", monthly: bankRevenue, drill: "income:customer_payment" });
+  }
   add({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
   add({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
 
@@ -251,6 +306,20 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
   }
 
   add({ id: "total_opex", label: "Total Operating Expenses", kind: "subtotal", emphasis: "strong", monthly: totalOpex });
+
+  // Other Income (non-operating: interest, reimbursements, misc receipts) — added
+  // into Net Profit below operating expenses, NOT into revenue or the CM tiers.
+  const oiEntries = [...incomeCats.entries()]
+    .map(([slug, c]) => ({ slug, c, total: [...windowKeys].reduce((a, k) => a + (c.values[k] ?? 0), 0) }))
+    .filter((e) => e.total !== 0)
+    .sort((a, b) => b.total - a.total);
+  let firstOI = true;
+  for (const e of oiEntries) {
+    add({ id: `inc_${e.slug}`, label: e.c.label, kind: "revenue", monthly: e.c.values, drill: `income:${e.slug}`, section: firstOI ? "Other Income" : undefined });
+    firstOI = false;
+  }
+  if (oiEntries.length > 1) add({ id: "other_income_total", label: "Total Other Income", kind: "subtotal", monthly: otherIncome });
+
   add({ id: "net_profit", label: "Net Profit / (Loss)", kind: "total", emphasis: "strong", monthly: netProfit });
   add({ id: "net_margin", label: "Net Margin %", kind: "margin", monthly: {}, pctBaseId: "net_revenue", numeratorId: "net_profit" });
 
@@ -284,20 +353,25 @@ export function samplePnl(params: PnlParams): PnlData {
   ];
   const cats = new Map(catDefs.map(([slug, label, frac]) => [slug, { label, values: Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * frac)])) }]));
 
+  // Sample bank-collected customer payments (→ revenue) + other income (→ net profit).
+  const bankRevenue = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.05)]));
+  const otherIncome = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.01)]));
+
   const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
   const netRevenue: Record<string, number> = {}, totalOpex: Record<string, number> = {}, netProfit: Record<string, number> = {};
   const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of keys) {
-    const nr = (gross[k] ?? 0) - (refunds[k] ?? 0);
+    const nr = (gross[k] ?? 0) - (refunds[k] ?? 0) + (bankRevenue[k] ?? 0);
     netRevenue[k] = nr;
     const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
-    totalOpex[k] = opex; netProfit[k] = nr - opex;
+    totalOpex[k] = opex; netProfit[k] = nr - opex + (otherIncome[k] ?? 0);
     let running = nr;
     for (const t of CM_CONFIG) { running -= t.cats.reduce((a, s) => a + catVal(s, k), 0); cm[t.id][k] = running; }
   }
 
   const rows: PnlRow[] = [];
   rows.push({ id: "gross_revenue", label: "Gross Revenue", kind: "revenue", emphasis: "strong", monthly: gross, drill: "revenue" });
+  rows.push({ id: "bank_collections", label: "Customer Payments (Bank)", kind: "revenue", monthly: bankRevenue, drill: "income:customer_payment" });
   rows.push({ id: "refunds", label: "Refunds", kind: "deduction", monthly: refunds, drill: "refunds" });
   rows.push({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
   const sampleCat = (slug: string, section?: string): PnlRow => ({
@@ -312,6 +386,7 @@ export function samplePnl(params: PnlParams): PnlData {
   rows.push({ id: "cm3", label: CM_CONFIG[2].label, kind: "cm", emphasis: "cm", monthly: cm.cm3, pctBaseId: "net_revenue" });
   rows.push(sampleCat("travel", "Other Operating"), sampleCat("software"));
   rows.push({ id: "total_opex", label: "Total Operating Expenses", kind: "subtotal", emphasis: "strong", monthly: totalOpex });
+  rows.push({ id: "inc_other_income", label: "Other Income", kind: "revenue", monthly: otherIncome, drill: "income:other_income", section: "Other Income" });
   rows.push({ id: "net_profit", label: "Net Profit / (Loss)", kind: "total", emphasis: "strong", monthly: netProfit });
   rows.push({ id: "net_margin", label: "Net Margin %", kind: "margin", monthly: {}, pctBaseId: "net_revenue", numeratorId: "net_profit" });
 
