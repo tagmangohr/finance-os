@@ -659,12 +659,20 @@ export async function mergeConnectorTransactions(
   // self-heals — but NEVER delete a row the user has already worked (categorized
   // or manually edited); those survive even if their source row changed.
   const incoming = new Set(externalIds);
-  const { data: allExisting } = await supabase
-    .from("transactions")
-    .select("id, external_id, category, pnl_treatment, metadata")
-    .eq("org_id", orgId)
-    .eq("connector_id", connectorId);
-  const staleIds = (allExisting ?? [])
+  const allExisting: Array<{ id: string; external_id: string | null; category: string | null; pnl_treatment: string | null; metadata: Record<string, unknown> | null }> = [];
+  for (let page = 0; ; page += 1000) {
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("id, external_id, category, pnl_treatment, metadata")
+      .eq("org_id", orgId)
+      .eq("connector_id", connectorId)
+      .range(page, page + 999);
+    if (error) throw new Error(`Merge scan failed: ${error.message}`);
+    const batch = (data ?? []) as typeof allExisting;
+    allExisting.push(...batch);
+    if (batch.length < 1000) break;
+  }
+  const staleIds = allExisting
     .filter((r) => {
       if (r.external_id && incoming.has(r.external_id as string)) return false; // still produced
       const meta = (r.metadata ?? {}) as Record<string, unknown>;
@@ -696,7 +704,11 @@ export async function mergeConnectorTransactions(
 
   // Refresh source fields only — never category/pnl_treatment (user-owned). Also
   // skip any field the user manually edited in-app (metadata.manual_fields), so
-  // inline edits survive the sync.
+  // inline edits survive the sync. CRITICAL: only UPDATE rows that actually changed
+  // and run the updates through a bounded pool — otherwise a re-sync fires one
+  // sequential UPDATE per row (hundreds for a sheet), blowing the 60s function
+  // budget → 504. A steady-state re-sync (sheet unchanged) now writes nothing.
+  const updateThunks: Array<() => Promise<void>> = [];
   for (const r of updRows) {
     const dupes = existing.get(r.external_id as string) ?? [];
     for (const e of dupes) {
@@ -715,11 +727,30 @@ export async function mergeConnectorTransactions(
         // preserve the manual-fields marker so future syncs keep skipping them
         refresh.metadata = { ...((r.metadata ?? {}) as Record<string, unknown>), manual_fields: manual };
       }
-      const { error } = await supabase.from("transactions").update(refresh).eq("id", e.id).eq("org_id", orgId);
-      if (error) throw new Error(`Merge update failed for ${r.external_id}: ${error.message}`);
+      // Skip rows whose source fields are unchanged (compare the fields the dedup
+      // lookup returns). Nothing to write on an unchanged re-sync → no UPDATE.
+      const has = (f: string) => Object.prototype.hasOwnProperty.call(refresh, f);
+      const changed =
+        (has("type") && e.type !== refresh.type) ||
+        (has("amount") && Number(e.amount) !== Number(refresh.amount)) ||
+        (has("currency") && e.currency !== refresh.currency) ||
+        (has("amount_base") && ((e.amount_base == null) !== (refresh.amount_base == null) ||
+          (e.amount_base != null && refresh.amount_base != null && Number(e.amount_base) !== Number(refresh.amount_base)))) ||
+        (has("counterparty_name") && (e.counterparty_name ?? null) !== ((refresh.counterparty_name as string | null) ?? null)) ||
+        (has("description") && (e.description ?? null) !== ((refresh.description as string | null) ?? null)) ||
+        (has("transaction_date") && e.transaction_date !== refresh.transaction_date) ||
+        (has("metadata") && stableJson(e.metadata) !== stableJson(refresh.metadata)) ||
+        (has("raw") && !e.has_raw && refresh.raw != null);
+      if (!changed) continue;
       updated++;
+      const id = e.id;
+      updateThunks.push(async () => {
+        const { error } = await supabase.from("transactions").update(refresh).eq("id", id).eq("org_id", orgId);
+        if (error) throw new Error(`Merge update failed for ${r.external_id}: ${error.message}`);
+      });
     }
   }
+  await runPooled(updateThunks, UPDATE_CONCURRENCY);
 
   await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connectorId);
   return { inserted, updated };
