@@ -50,7 +50,12 @@ function resolveTabSpec(tab: SheetTabConfig, headers: string[]): TabParseSpec {
     debitCol: tab.debitCol ?? s.debitCol,
     creditCol: tab.creditCol ?? s.creditCol,
     labelCol: tab.labelCol ?? s.labelCol,
-    valueCols: tab.valueCols ?? s.valueCols,
+    // For a MATRIX (payroll) tab, ALWAYS take the freshly auto-detected period
+    // columns — never the frozen saved list — so a newly-added month column (e.g.
+    // "August 2026" appearing next payroll cycle) is picked up automatically instead
+    // of being silently skipped. Fall back to the saved list only if detection finds
+    // none. (For non-matrix, the saved mapping wins.)
+    valueCols: (tab.format ?? s.format) === "matrix" ? (s.valueCols ?? tab.valueCols) : (tab.valueCols ?? s.valueCols),
     matrixDirection: tab.matrixDirection ?? s.matrixDirection ?? "debit",
   };
 }
