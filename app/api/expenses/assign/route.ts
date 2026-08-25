@@ -14,8 +14,9 @@ export const dynamic = "force-dynamic";
  * Body: { ids: string[], slug: string, remember?: boolean }.
  * Manual always wins (overwrite=true). When `remember` (default true), each
  * distinct counterparty gets a durable rule so it auto-applies going forward, and
- * the rule is back-filled onto that counterparty's still-UNcategorized bank rows.
- * Admin/finance-gated.
+ * the category is propagated to ALL of that counterparty's bank rows — overwriting
+ * any existing category (the latest vendor decision wins everywhere), so fixing one
+ * vendor row fixes them all. Admin/finance-gated.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
@@ -56,17 +57,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     for (const cp of counterparties) {
       await rememberCounterpartyRule(org.id, cp, slug, sb);
       remembered += 1;
-      // Back-fill onto this counterparty's still-uncategorized bank rows.
+      // Propagate to ALL of this counterparty's bank rows (exact name match),
+      // OVERWRITING any existing category — the latest vendor decision wins
+      // everywhere. Exclude the rows the user explicitly clicked (already set to
+      // "manual" above); the rest are provenance "rule".
       const { data: matches } = await sb
         .from("transactions")
         .select("id")
         .eq("org_id", org.id)
         .eq("ledger", "bank")
-        .is("category", null)
         .ilike("counterparty_name", likeEscape(cp));
-      const matchIds = (matches ?? []).map((m) => m.id as string);
+      const matchIds = (matches ?? []).map((m) => m.id as string).filter((id) => !ids.includes(id));
       if (matchIds.length) {
-        await applyCategory(sb, org.id, matchIds, slug, treatment, "rule", null);
+        await applyCategory(sb, org.id, matchIds, slug, treatment, "rule", null, true);
         backfilled += matchIds.length;
       }
     }
