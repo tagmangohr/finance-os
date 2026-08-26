@@ -1789,21 +1789,38 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                     </div>
                   )}
 
-                  {/* Webhook-only connector: show the endpoint URL to register with the provider. */}
-                  {openModal?.webhookPath && (
-                    <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-1.5">
-                      <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Webhook setup</p>
-                      <p className="text-xs text-muted-foreground/80 leading-relaxed">
-                        In App Store Connect → your app → <span className="text-foreground">App Information → App Store Server Notifications</span>, set the <span className="text-foreground">Version 2</span> Production (and Sandbox) URL to:
-                      </p>
-                      <code className="block text-[11px] break-all rounded bg-background/60 border border-border px-2 py-1.5 text-foreground select-all">
-                        {(typeof window !== "undefined" ? window.location.origin : "")}{openModal.webhookPath}
-                      </code>
-                      <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
-                        No secret needed — notifications are verified against Apple&apos;s certificate. Revenue appears in real time as customers subscribe, renew, and refund.
-                      </p>
-                    </div>
-                  )}
+                  {/* Webhook connector: show the endpoint URL + the provider's own
+                      setup note and captured events (keyed by type — NOT hardcoded
+                      to any one provider, so Brex/Mercury/App Store each show their
+                      own instructions). */}
+                  {openModal?.webhookPath && (() => {
+                    const wh = WEBHOOK_INFO[openModal.type];
+                    const label = GATEWAY_LABEL[openModal.type] ?? "the provider";
+                    return (
+                      <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-1.5">
+                        <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Webhook setup</p>
+                        <p className="text-xs text-muted-foreground/80 leading-relaxed">
+                          Register this URL with <span className="text-foreground">{label}</span> to receive events in real time:
+                        </p>
+                        <code className="block text-[11px] break-all rounded bg-background/60 border border-border px-2 py-1.5 text-foreground select-all">
+                          {(typeof window !== "undefined" ? window.location.origin : "")}{openModal.webhookPath}
+                        </code>
+                        {wh?.note && (
+                          <p className="text-[11px] text-muted-foreground/70 leading-relaxed">{wh.note}</p>
+                        )}
+                        {wh?.events?.length ? (
+                          <div className="pt-1 space-y-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Events captured</p>
+                            <div className="flex flex-wrap gap-1">
+                              {wh.events.map((e) => (
+                                <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>

@@ -18,6 +18,7 @@ export const CONNECTOR_TYPES = [
   "excel",
   "app_store",
   "mercury",
+  "brex",
 ] as const;
 
 export const CONNECTOR_STATUSES = ["active", "inactive", "error"] as const;
@@ -82,6 +83,9 @@ export function validateConnectorConfig(
       return null;
     case "mercury":
       if (!get("api_token")) return "Mercury needs an API Token (Mercury → Settings → Tokens & API). A read-only token is fine.";
+      return null;
+    case "brex":
+      if (!get("api_token")) return "Brex needs an API Token (Brex → Developer → API tokens). A read-only user token (starts with bxt_) is fine.";
       return null;
     case "payu":
       if (!get("key") || !get("salt")) return "PayU needs a Merchant Key and Salt.";
