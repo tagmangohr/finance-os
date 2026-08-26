@@ -16,6 +16,7 @@ export type PageDef = { slug: string; label: string; route?: string; pii?: boole
 
 export const GRANTABLE_PAGES: PageDef[] = [
   { slug: "dashboard",     label: "War Room",      route: "/dashboard" },
+  { slug: "analytics",     label: "Analytics",     route: "/dashboard/analytics" },
   { slug: "pnl",           label: "Profit & Loss", route: "/dashboard/pnl" },
   { slug: "forecast",      label: "Forecast",      route: "/dashboard/forecast" },
   { slug: "variance",      label: "Variance",      route: "/dashboard/variance" },
