@@ -8,6 +8,11 @@ export const dynamic = "force-dynamic";
 const ISO = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const LIMIT = 50;
 
+// Collapse whitespace runs → one space, trim. DISPLAY-only grouping key; stored
+// counterparty_name is never modified. Shared verbatim with the drill expand so a
+// group and its transactions match on identical rules.
+const normName = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
 /**
  * GET /api/pnl/drill/groups?org=&key=&from=&to=
  * Consolidated vendor/customer split of a P&L cell (Postgres-side grouping via
@@ -72,7 +77,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .limit(20000);
     const byCustomer = new Map<string, { amount: number; count: number }>();
     for (const r of (bank ?? []) as { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string }[]) {
-      const name = (r.counterparty_name ?? "—") || "—";
+      // Group by a WHITESPACE-NORMALIZED name (display only — the stored rows are
+      // untouched) so trivially-different spellings of the same party
+      // ("SWIFT … PVT LTD" vs "PVT  LTD" with a double space) fold into ONE payer
+      // here instead of listing twice. The expand step re-matches by the same rule.
+      const name = normName(r.counterparty_name) || "—";
       const base = Number(r.amount_base ?? r.amount) || 0;
       const e = byCustomer.get(name) ?? { amount: 0, count: 0 };
       e.amount += r.type === "credit" ? base : -base; e.count += 1;

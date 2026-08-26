@@ -8,6 +8,10 @@ export const dynamic = "force-dynamic";
 const ISO = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const LIMIT = 100;
 
+// Whitespace-normalized name — the SAME rule the drill-groups route uses to fold
+// same-party spellings into one payer. Display/matching only; stored rows untouched.
+const normName = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
 type Row = {
   id: string;
   transaction_date: string;
@@ -53,6 +57,48 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+
+  // ── Expand ONE bank payer under Gross Revenue ("bank:<customer>") ────────────
+  // Payers are grouped by normalized name in the groups route, so a single payer
+  // can span whitespace-variant spellings. `.eq(counterparty_name)` would miss the
+  // variants, so fetch this month's bank customer-payment rows and match by the
+  // SAME normalized rule — every underlying transaction shows on expand.
+  const bankParty = party && party.startsWith("bank:") ? party.slice("bank:".length) : null;
+  if (key === "revenue" && bankParty !== null) {
+    const wantEmpty = bankParty === "—";
+    const target = normName(bankParty);
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type")
+      .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment")
+      .in("status", ["completed", "refunded"])
+      .gte("transaction_date", from).lte("transaction_date", to)
+      .limit(20000);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    type BankRow = { id: string; transaction_date: string; counterparty_name: string | null; amount: number | null; amount_base: number | null; source: string | null; status: string | null; category: string | null; type: string };
+    const matched = ((data ?? []) as BankRow[]).filter((r) => {
+      const n = normName(r.counterparty_name);
+      return wantEmpty ? n === "" : n === target;
+    });
+    matched.sort((a, b) => (a.transaction_date < b.transaction_date ? 1 : a.transaction_date > b.transaction_date ? -1 : 0));
+    const rows = matched.slice(0, LIMIT).map((r) => {
+      const base = Number(r.amount_base ?? r.amount ?? 0);
+      return {
+        id: r.id,
+        transaction_date: r.transaction_date,
+        counterparty_name: r.counterparty_name,
+        amount: r.type === "credit" ? base : -base, // income: receipt +, clawback −
+        currency: "INR",
+        source: r.source,
+        status: r.status,
+        category: r.category,
+        type: r.type,
+        fee: null,
+      };
+    });
+    return NextResponse.json({ rows, count: matched.length });
+  }
+
   const cols = "id, transaction_date, counterparty_name, amount, amount_base, currency, fx_rate, source, status, category, type, metadata, ledger";
   let q = supabase
     .from("transactions")
@@ -62,13 +108,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .lte("transaction_date", to);
 
   if (key === "revenue") {
-    // Gross Revenue = PG gateway credits + bank-collected customer payments. A
-    // "bank:<customer>" party expands one bank payer; anything else is PG gateways.
-    if (party && party.startsWith("bank:")) {
-      q = q.eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment").in("status", ["completed", "refunded"]);
-    } else {
-      q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
-    }
+    // Gross Revenue drill = PG gateway credits. Bank-collected customer payments
+    // are expanded per-payer by the early "bank:<customer>" return above.
+    q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
   } else if (key === "refunds") {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
   } else if (key === "__pg_fees__") {
@@ -96,15 +138,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // GATEWAY (source stem, e.g. `stripe` covers stripe + stripe_refund); expense
   // lines by vendor (counterparty_name). '—' = the empty/null bucket.
   const isGateway = key === "revenue" || key === "refunds" || key === "__pg_fees__";
-  // A "bank:<customer>" party is a bank payer under Gross Revenue — match it by
-  // counterparty, NOT by gateway source. (Prefix is a sentinel so an arbitrary
-  // customer name can't collide with a gateway stem or break the query.)
-  const bankParty = party && party.startsWith("bank:") ? party.slice("bank:".length) : null;
+  // ("bank:<customer>" parties are handled by the early return above. Anything
+  // reaching here is a gateway stem (money-in) or an expense vendor.)
   if (party != null) {
-    if (bankParty !== null) {
-      if (bankParty === "—") q = q.or("counterparty_name.is.null,counterparty_name.eq.");
-      else q = q.eq("counterparty_name", bankParty);
-    } else if (party === "—") {
+    if (party === "—") {
       const field = isGateway ? "source" : "counterparty_name";
       q = q.or(`${field}.is.null,${field}.eq.`);
     } else if (isGateway) {
