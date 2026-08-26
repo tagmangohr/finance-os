@@ -310,8 +310,9 @@ export interface Database {
           source: string;
           status: "pending" | "completed" | "failed" | "refunded";
           // Ledger discriminator: 'payments' = PG/gateway money (default),
-          // 'bank' = bank-feed money (Mercury). Drives the revenue firewall.
-          ledger: "payments" | "bank";
+          // 'bank' = bank-feed money (Mercury), 'sales' = flexible sales ledger
+          // (sheet/CSV, counts as revenue). Drives the revenue firewall.
+          ledger: "payments" | "bank" | "sales";
           // How a bank txn hits the P&L (null for payments-ledger rows).
           pnl_treatment: "expense" | "income" | "excluded" | "uncategorized" | null;
           // Provenance of the assigned category (null until categorized).

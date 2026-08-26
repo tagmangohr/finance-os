@@ -482,7 +482,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       {/* Reconciled P&L */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
         <MetricCard title="Net P&L" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses (ties to P&L)" />
-        <MetricCard title="Collections (PG)" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="PG revenue, net of refunds & gateway fees" />
+        <MetricCard title="Collections" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="Revenue (PG + sales), net of refunds & gateway fees" />
         <MetricCard title="Expenses" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" />
         <MetricCard title="Other income" value={inr(totals.otherIncome, true)} icon={<ArrowUpRight className="size-4" />} accentColor="#10b981" subtitle="Non-PG receipts (invoices, interest)" />
       </div>

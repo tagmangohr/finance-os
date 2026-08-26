@@ -67,8 +67,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     )
     .eq("org_id", auth.org.id)
     // Firewall: the Payments explorer shows PG/gateway money only. Bank-ledger
-    // rows (Mercury) live in the admin-gated Bank tab, never here.
-    .neq("ledger", "bank");
+    // rows (Mercury) live in the Bank tab and sales-ledger rows in the Sales tab —
+    // neither belongs here, so scope to payments explicitly.
+    .eq("ledger", "payments");
 
   if (connectorId) query = query.eq("connector_id", connectorId);
   if (source)      query = query.eq("source", source);

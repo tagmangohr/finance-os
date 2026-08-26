@@ -24,6 +24,7 @@ export const GRANTABLE_PAGES: PageDef[] = [
   { slug: "cashflow",      label: "Cash Flow",     route: "/dashboard/cashflow" },
   { slug: "connectors",    label: "Connectors",    route: "/dashboard/connectors" },
   { slug: "data",          label: "Payments",      route: "/dashboard/data" },
+  { slug: "sales",         label: "Sales",         route: "/dashboard/sales", pii: true },
   { slug: "subscriptions", label: "Subscriptions", route: "/dashboard/subscriptions", pii: true },
   { slug: "bank",          label: "Bank",          route: "/dashboard/bank", pii: true },
   // Capability grant (no page): access to the floating AI co-pilot. PII — it can

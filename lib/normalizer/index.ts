@@ -22,7 +22,7 @@ export type NormalizedTransaction = {
   // Ledger discriminator. Omitted → 'payments' (PG/gateway money). Bank-feed
   // connectors (Mercury) set 'bank' so the revenue firewall excludes their
   // inflows and the categorization layer owns their category/treatment.
-  ledger?: "payments" | "bank";
+  ledger?: "payments" | "bank" | "sales";
   // Bank account kind (checking/savings/treasury/investment/credit/external) for
   // bank-ledger rows — drives account-type filtering + default P&L treatment.
   account_type?: string | null;

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Activity, Sheet, LineChart, Scale, Settings, BarChart3, type LucideIcon,
+  Repeat, Activity, Sheet, LineChart, Scale, Settings, BarChart3, ShoppingBag, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,8 @@ const NAV_GROUPS: NavGroup[] = [
   { label: "Money in", items: [
     { href: "/dashboard/data",          slug: "data",          label: "Payments",      Icon: Table2 },
     { href: "/dashboard/revenue",       slug: "revenue",       label: "Revenue",       Icon: TrendingUp },
+    // "sales" is a grantable (PII) slug — visible to owners/admins and members granted it.
+    { href: "/dashboard/sales",         slug: "sales",         label: "Sales",         Icon: ShoppingBag },
     { href: "/dashboard/subscriptions", slug: "subscriptions", label: "Subscriptions", Icon: Repeat },
   ]},
   { label: "Money out", items: [

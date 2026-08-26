@@ -33,7 +33,8 @@ export default async function DataPage() {
         .select("id", { count: "exact", head: true })
         .eq("org_id", org.id)
         .eq("connector_id", c.id)
-        .neq("ledger", "bank")
+        // Payments explorer = PG money only; exclude bank + sales ledgers.
+        .eq("ledger", "payments")
     )
   );
   const paymentsConnectors = all.filter((_, i) => (counts[i].count ?? 0) > 0);

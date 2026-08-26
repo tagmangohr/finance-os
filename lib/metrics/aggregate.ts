@@ -183,7 +183,7 @@ async function fromViews(orgId: string, supabase: SupabaseClient): Promise<Metri
 type Row = {
   transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null;
   status: string; category: string | null; source: string | null; counterparty_name: string | null;
-  ledger: "payments" | "bank"; pnl_treatment: string | null;
+  ledger: "payments" | "bank" | "sales"; pnl_treatment: string | null;
 };
 
 const isTransfer = (source: string | null) => !!source && /(settlement|payout)/i.test(source);

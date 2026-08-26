@@ -16,7 +16,7 @@ import { enrichRowsWithFx } from "@/lib/fx/rates";
 export type SheetTabConfig = {
   name: string;                      // worksheet (tab) name
   import?: boolean;                  // false = skip this tab
-  ledger?: "bank" | "payments";      // destination; bank → lands uncategorized in Review
+  ledger?: "bank" | "payments" | "sales"; // destination; bank → Review, sales → Sales tab (revenue)
   format?: "single" | "split" | "matrix";
   // single + split column mapping (flat):
   dateCol?: string;
@@ -253,7 +253,12 @@ export async function fetchLinkTransactions(
         if (!ws) continue;
         const { headers, rows: tabRows } = extractWorksheet(ws);
         const spec = resolveTabSpec(tab, headers);
-        const ledger: "bank" | "payments" = tab.ledger === "bank" ? "bank" : "payments";
+        const ledger: "bank" | "payments" | "sales" =
+          tab.ledger === "bank" ? "bank" : tab.ledger === "sales" ? "sales" : "payments";
+        // A sales sheet's single value column is the sale amount (money in), so a
+        // single-format sales tab is read as credit. Split-format sales tabs keep
+        // their withdrawal/deposit sides (so returns net out correctly).
+        if (ledger === "sales" && (spec.format ?? "single") === "single") spec.direction = "credit";
         for (const t of buildTabTransactions(tabRows, headers, spec)) {
           if (!validDate(t.transaction_date)) continue;
           // Stable external_id basis. For a MATRIX (payroll grid) key by (label,
@@ -269,9 +274,9 @@ export async function fetchLinkTransactions(
           rows.push({
             ...t,
             ledger,
-            // Tag bank rows with the tab name so each synced source is a filterable
-            // "account" on the Bank page.
-            account_type: ledger === "bank" ? tab.name : (t.account_type ?? null),
+            // Tag bank/sales rows with the tab name so each synced source is a
+            // filterable "account"/source on its page.
+            account_type: ledger === "bank" || ledger === "sales" ? tab.name : (t.account_type ?? null),
             external_id: seq === 0 ? baseId : `${baseId}_${seq + 1}`,
           });
         }

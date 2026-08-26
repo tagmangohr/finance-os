@@ -334,7 +334,7 @@ export const getCashFlowDetails = cachedOrgLoader(async (orgId: string, opts?: {
     dailyRows = ((viewRes.data ?? []) as unknown as { date: string; inflow: number; outflow: number }[])
       .map((r) => ({ date: String(r.date).slice(0, 10), inflow: Number(r.inflow ?? 0), outflow: Number(r.outflow ?? 0) }));
   } else {
-    const transactions = await selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; source: string | null; ledger: "payments" | "bank"; pnl_treatment: string | null }>((f, t) =>
+    const transactions = await selectAll<{ transaction_date: string; type: "credit" | "debit"; amount: number; amount_base: number | null; category: string | null; source: string | null; ledger: "payments" | "bank" | "sales"; pnl_treatment: string | null }>((f, t) =>
       supabase
         .from("transactions")
         .select("transaction_date, type, amount, amount_base, category, source, ledger, pnl_treatment")

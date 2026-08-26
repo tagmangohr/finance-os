@@ -346,7 +346,7 @@ type SheetTabDetected = { name: string; rowCount: number; headers: string[] };
 // Working (UI) config for one tab.
 type SheetTabUi = {
   import: boolean;
-  ledger: "bank" | "payments";
+  ledger: "bank" | "payments" | "sales";
   format?: SheetFormat; // undefined until detected/chosen → falls back to "single"
   dateCol?: string; amountCol?: string;
   direction?: "auto" | "debit" | "credit";
@@ -356,7 +356,7 @@ type SheetTabUi = {
 };
 // Shape persisted into connector config.tabs[] (a subset per format).
 type SheetTabPersisted = {
-  name: string; import: boolean; ledger: "bank" | "payments"; format: SheetFormat;
+  name: string; import: boolean; ledger: "bank" | "payments" | "sales"; format: SheetFormat;
   dateCol?: string; amountCol?: string; direction?: "auto" | "debit" | "credit";
   debitCol?: string; creditCol?: string; descriptionCol?: string; counterpartyCol?: string;
   labelCol?: string; valueCols?: string[]; matrixDirection?: "debit" | "credit";
@@ -1686,12 +1686,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                                   </span>
                                   <select
                                     value={c.ledger ?? "payments"}
-                                    onChange={(e) => setTab(t.name, { ledger: e.target.value as "bank" | "payments" })}
+                                    onChange={(e) => setTab(t.name, { ledger: e.target.value as "bank" | "payments" | "sales" })}
                                     disabled={!on}
                                     className="h-7 px-2 rounded-md border border-border bg-background text-[11.5px] disabled:opacity-50"
                                   >
                                     <option value="payments">Payments</option>
                                     <option value="bank">Bank</option>
+                                    <option value="sales">Sales</option>
                                   </select>
                                 </div>
 

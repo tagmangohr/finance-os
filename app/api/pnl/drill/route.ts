@@ -152,9 +152,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .lte("transaction_date", to);
 
   if (key === "revenue") {
-    // Gross Revenue drill = PG gateway credits. Bank-collected customer payments
-    // are expanded per-payer by the early "bank:<customer>" return above.
-    q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
+    // Gross Revenue drill = PG gateway credits + sales-ledger credits (both feed the
+    // Revenue line). Bank-collected customer payments are expanded per-payer by the
+    // early "bank:<customer>" return above.
+    q = q.eq("type", "credit").in("ledger", ["payments", "sales"]).in("status", ["completed", "refunded"]);
   } else if (key === "refunds") {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
   } else if (key === "__pg_fees__") {
