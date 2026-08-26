@@ -60,29 +60,53 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
   }
 
-  // Lost chargebacks — not in the pnl_drill_groups RPC (dispute is excluded there).
-  // Group by the CUSTOMER who charged back, resolving identity from the linked
-  // charge/payment (Stripe disputes carry no customer directly). Small set.
+  // Lost chargebacks — two-level drill. Top level (no `gateway` param): group by
+  // PAYMENT GATEWAY (Cashfree / Stripe / Razorpay). Second level (gateway=<stem>):
+  // the CUSTOMERS under that gateway, identity resolved from the linked
+  // charge/payment (Stripe disputes carry no customer directly). Not in the
+  // pnl_drill_groups RPC (dispute is excluded there); small set, direct query.
   if (key === "disputes_lost") {
+    const gateway = req.nextUrl.searchParams.get("gateway"); // 2nd-level filter
     const { data: drows, error: derr } = await supabase
       .from("transactions")
-      .select("counterparty_name, amount, amount_base, type, metadata")
+      .select("counterparty_name, amount, amount_base, type, source, metadata")
       .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
       .or("metadata->>dispute_status.ilike.*lost*,status.eq.failed")
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(5000);
     if (derr) return NextResponse.json({ error: derr.message }, { status: 500 });
-    type DRow = { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string; metadata: Record<string, unknown> | null };
+    type DRow = { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string; source: string | null; metadata: Record<string, unknown> | null };
     const rows = (drows ?? []) as DRow[];
-    const linked = await fetchLinkedIdentities(supabase, org, rows.map((r) => disputeLinkId(r.metadata)));
-    const m = new Map<string, { amount: number; count: number }>();
-    for (const r of rows) {
-      const name = resolveDisputeIdentity(r, linked).name || "—";
-      const base = Number(r.amount_base ?? r.amount) || 0; // disputes are debits → positive loss
-      const e = m.get(name) ?? { amount: 0, count: 0 };
-      e.amount += base; e.count += 1; m.set(name, e);
+    const stem = (s: string | null) => (s ? s.split("_")[0] : "other"); // stripe_dispute → stripe
+
+    if (!gateway) {
+      // Level 1: by gateway.
+      const m = new Map<string, { amount: number; count: number }>();
+      for (const r of rows) {
+        const name = stem(r.source);
+        const base = Number(r.amount_base ?? r.amount) || 0;
+        const e = m.get(name) ?? { amount: 0, count: 0 };
+        e.amount += base; e.count += 1; m.set(name, e);
+      }
+      const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count }))
+        .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+      return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
     }
-    const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count }))
+
+    // Level 2: customers under one gateway.
+    const inGw = rows.filter((r) => stem(r.source) === gateway);
+    const linked = await fetchLinkedIdentities(supabase, org, inGw.map((r) => disputeLinkId(r.metadata)));
+    const m = new Map<string, { amount: number; count: number; email: string | null; phone: string | null }>();
+    for (const r of inGw) {
+      const id = resolveDisputeIdentity(r, linked);
+      const name = id.name || "—";
+      const base = Number(r.amount_base ?? r.amount) || 0;
+      const e = m.get(name) ?? { amount: 0, count: 0, email: null, phone: null };
+      e.amount += base; e.count += 1;
+      e.email ??= id.email; e.phone ??= id.phone;
+      m.set(name, e);
+    }
+    const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count, email: v.email, phone: v.phone }))
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
   }

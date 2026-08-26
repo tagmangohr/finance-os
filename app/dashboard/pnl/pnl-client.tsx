@@ -33,30 +33,43 @@ const sumKeys = (monthly: Record<string, number>, keys: string[]) => keys.reduce
 const TipCtx = React.createContext<(text: string | null, x?: number, y?: number) => void>(() => {});
 
 // ─── Drill drawer (consolidated by vendor/customer, expandable) ────────────────
-type Group = { name: string; amount: number; txn_count: number };
+type Group = { name: string; amount: number; txn_count: number; email?: string | null; phone?: string | null };
 type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; email: string | null; phone: string | null; fee: number | null };
 
 const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
 const groupDisplayName = (drillKey: string, name: string) =>
   name.startsWith("bank:") ? (name.slice(5) === "—" ? "Bank collection (unnamed)" : name.slice(5)) // bank payer under Gross Revenue
-  : (GATEWAY_KEYS.has(drillKey) ? sourceLabel(name === "—" ? null : name) : name);
+  // disputes_lost top level = payment gateway (stem) → pretty gateway label
+  : (GATEWAY_KEYS.has(drillKey) || drillKey === "disputes_lost" ? sourceLabel(name === "—" ? null : name) : name);
 
 function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
   const [open, setOpen] = React.useState(false);
   const [txns, setTxns] = React.useState<DrillTxn[] | null>(null);
+  const [subs, setSubs] = React.useState<Group[] | null>(null); // disputes: customers under a gateway
   const [loading, setLoading] = React.useState(false);
+  // Disputes drill is two-level: gateway (this row) → customers (on expand).
+  const isDisputes = drillKey === "disputes_lost";
 
   const toggle = () => {
     const next = !open;
     setOpen(next);
-    if (next && txns == null) {
+    if (next && txns == null && subs == null) {
       setLoading(true);
-      const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
-      fetch(`/api/pnl/drill?${q}`)
-        .then((r) => r.json())
-        .then((d) => setTxns([...(d.rows ?? [])].sort((a: DrillTxn, b: DrillTxn) => Math.abs(b.amount) - Math.abs(a.amount))))
-        .catch(() => setTxns([]))
-        .finally(() => setLoading(false));
+      if (isDisputes) {
+        const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, gateway: g.name });
+        fetch(`/api/pnl/drill/groups?${q}`)
+          .then((r) => r.json())
+          .then((d) => setSubs([...(d.groups ?? [])].sort((a: Group, b: Group) => Math.abs(b.amount) - Math.abs(a.amount))))
+          .catch(() => setSubs([]))
+          .finally(() => setLoading(false));
+      } else {
+        const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
+        fetch(`/api/pnl/drill?${q}`)
+          .then((r) => r.json())
+          .then((d) => setTxns([...(d.rows ?? [])].sort((a: DrillTxn, b: DrillTxn) => Math.abs(b.amount) - Math.abs(a.amount))))
+          .catch(() => setTxns([]))
+          .finally(() => setLoading(false));
+      }
     }
   };
 
@@ -71,7 +84,23 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
       {open && (
         <div className="bg-muted/20">
           {loading && <div className="px-4 py-2 space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 rounded" />)}</div>}
-          {txns?.map((t) => {
+          {/* Disputes: customer sub-rows (name + contact + amount). */}
+          {isDisputes && subs?.map((c, i) => {
+            const contact = [c.email, c.phone].filter(Boolean).join(" · ");
+            return (
+              <div key={`${c.name}-${i}`} className="pl-10 pr-4 py-1.5 flex items-center gap-3 border-t border-border/40">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12px] text-foreground truncate">{c.name === "—" ? "Unknown customer" : c.name}</p>
+                  {contact && <p className="text-[10.5px] text-muted-foreground/70 truncate">{contact}</p>}
+                </div>
+                <span className="text-[10.5px] text-muted-foreground flex-shrink-0">{c.txn_count.toLocaleString("en-IN")}</span>
+                <p className="num text-[11.5px] font-medium text-foreground flex-shrink-0 w-[92px] text-right">{moneyFull(c.amount)}</p>
+              </div>
+            );
+          })}
+          {isDisputes && subs && subs.length === 0 && !loading && <p className="pl-10 pr-4 py-2 text-[11px] text-muted-foreground">No customers.</p>}
+          {/* Everything else: transactions. */}
+          {!isDisputes && txns?.map((t) => {
             const contact = [t.email, t.phone].filter(Boolean).join(" · ");
             return (
               <div key={t.id} className="pl-10 pr-4 py-1.5 flex items-center gap-3 border-t border-border/40">
@@ -83,7 +112,7 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
               </div>
             );
           })}
-          {txns && txns.length === 0 && !loading && <p className="pl-10 pr-4 py-2 text-[11px] text-muted-foreground">No transactions.</p>}
+          {!isDisputes && txns && txns.length === 0 && !loading && <p className="pl-10 pr-4 py-2 text-[11px] text-muted-foreground">No transactions.</p>}
         </div>
       )}
     </div>
