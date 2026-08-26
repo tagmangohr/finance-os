@@ -1,5 +1,6 @@
 import { CashfreeConnector } from "@/lib/connectors/cashfree";
 import { MercuryConnector } from "@/lib/connectors/mercury";
+import { BrexConnector } from "@/lib/connectors/brex";
 import { EasebuzzConnector } from "@/lib/connectors/easebuzz";
 import { PaytmConnector } from "@/lib/connectors/paytm";
 import { PayUConnector } from "@/lib/connectors/payu";
@@ -205,6 +206,19 @@ async function fetchMercury(
   return fetchSingleEndpoint("mercury", () => mercury.fetchTransactions(fromDate, toDate));
 }
 
+async function fetchBrex(
+  connector: ConnectorRow,
+  fromDate: Date,
+  toDate: Date
+) {
+  const { api_token: apiToken } = getConfig(connector);
+  if (!apiToken) throw new SyncConfigError("Connector is missing api_token in config");
+  const brex = new BrexConnector(apiToken);
+  // Read-only corporate-card + cash feed; paginates card + each cash account over
+  // the window internally. Direct call (not sub-chunked), same as Mercury.
+  return fetchSingleEndpoint("brex", () => brex.fetchTransactions(fromDate, toDate));
+}
+
 async function fetchConnectorTransactions(
   connector: ConnectorRow,
   fromDate: Date,
@@ -234,6 +248,9 @@ async function fetchConnectorTransactions(
     case "mercury":
       // Read-only bank feed; paginates internally over the window. Direct call.
       return fetchMercury(connector, fromDate, toDate);
+    case "brex":
+      // Read-only corporate-card + cash feed. Direct call.
+      return fetchBrex(connector, fromDate, toDate);
     case "payu": {
       const { key, salt } = config;
       if (!key || !salt) {

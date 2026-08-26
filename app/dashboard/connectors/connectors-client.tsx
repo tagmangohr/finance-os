@@ -197,6 +197,18 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
     ],
   },
   {
+    type: "brex",
+    name: "Brex",
+    description: "Corporate card & cash transactions (read-only)",
+    icon: <LetterIcon letters="Bx" bg="#212121" />,
+    webhookPath: "/api/webhooks/brex",
+    fields: [
+      { key: "api_token",      label: "API Token", isPassword: true, placeholder: "bxt_… (read-only user token)" },
+      { key: "webhook_secret", label: "Webhook Signing Secret", isPassword: true, isOptional: true, placeholder: "whsec_… from GET /v1/webhooks/secrets" },
+      { key: "email",          label: "Account Email", placeholder: "you@company.com", isOptional: true },
+    ],
+  },
+  {
     type: "payu",
     name: "PayU",
     description: "Payments and transaction history",
@@ -439,6 +451,11 @@ const WEBHOOK_INFO: Record<string, { path: string; events: string[]; note: strin
     events: ["transaction.created / updated"],
     note: "Paste Mercury's signing secret into this connector's Webhook Signing Secret field.",
   },
+  brex: {
+    path: "/api/webhooks/brex",
+    events: ["TRANSFER_PROCESSED", "TRANSFER_FAILED", "EXPENSE_PAYMENT_UPDATED", "EXPENSE_UPDATED", "EXPENSE_CREATED"],
+    note: "Create a webhook in Brex (Developer → Webhooks) pointing to this URL and subscribe to the events. Then call GET /v1/webhooks/secrets and paste the whsec_… signing secret into this connector's Webhook Signing Secret field. Any event triggers a fresh sync, so all card + cash activity is captured.",
+  },
 };
 
 function CopyField({ value }: { value: string }) {
@@ -462,7 +479,7 @@ function CopyField({ value }: { value: string }) {
 // connector exists for this org yet).
 const GATEWAY_LABEL: Record<string, string> = {
   razorpay: "Razorpay", stripe: "Stripe", cashfree: "Cashfree", payu: "PayU",
-  paytm: "Paytm", easebuzz: "Easebuzz", app_store: "Apple App Store", mercury: "Mercury",
+  paytm: "Paytm", easebuzz: "Easebuzz", app_store: "Apple App Store", mercury: "Mercury", brex: "Brex",
 };
 
 /**
