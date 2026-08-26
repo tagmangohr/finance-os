@@ -111,6 +111,8 @@ function drainDisputes(supabase: SupabaseClient, orgId: string, from: string, to
       .eq("org_id", orgId)
       .eq("ledger", "payments")
       .eq("category", "dispute")
+      // Disputes are contra-revenue → follow the connector income toggle (084/085).
+      .eq("conn_include_income", true)
       .gte("transaction_date", from)
       .lte("transaction_date", to)
       // lost only: dispute_status ~ 'lost' OR status='failed' (see doc above)

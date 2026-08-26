@@ -61,7 +61,7 @@ type BankAggRow = Pick<
   BankTxn,
   "id" | "transaction_date" | "type" | "amount" | "currency" | "amount_base" | "category"
   | "pnl_treatment" | "category_source" | "category_confidence" | "account_type" | "card_last4" | "card_holder" | "status"
->;
+> & { conn_include_income: boolean; conn_include_expense: boolean };
 
 /** A row needs review if uncategorized or a low-confidence AI guess. Shared by the
  *  aggregate reviewCount and the per-row badge so they always agree. */
@@ -102,7 +102,7 @@ export async function getBankOverview(
       let q = supabase
         .from("transactions")
         .select(
-          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status"
+          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, conn_include_income, conn_include_expense"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
@@ -167,6 +167,9 @@ export async function getBankOverview(
     const treatment = t.pnl_treatment ?? "uncategorized";
 
     if (treatment === "expense") {
+      // Respect the connector expense toggle (084/085): a connector with
+      // include_expense OFF drops its bank expenses from the Bank totals too.
+      if (!t.conn_include_expense) continue;
       // Direction-aware: debit = spend (+), credit = reversal/refund (−).
       const signed = t.type === "debit" ? amt : -amt;
       totals.expenses += signed;
@@ -174,6 +177,7 @@ export async function getBankOverview(
       const c = byCat.get(slug) ?? { label: labelBySlug.get(slug) ?? slug, treatment, amount: 0, count: 0 };
       c.amount += signed; c.count += 1; byCat.set(slug, c);
     } else if (treatment === "income") {
+      if (!t.conn_include_income) continue; // connector income toggle
       // credit = income (+), debit = clawback (−).
       const signed = t.type === "credit" ? amt : -amt;
       totals.otherIncome += signed;

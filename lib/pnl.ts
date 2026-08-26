@@ -165,6 +165,9 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
         .eq("org_id", orgId)
         .eq("ledger", "bank")
         .eq("pnl_treatment", "income")
+        // Respect the per-connector income toggle (084/085): a bank connector with
+        // include_income OFF drops its bank income (+ folded customer payments).
+        .eq("conn_include_income", true)
         .in("status", ["completed", "refunded"])
         .gte("transaction_date", from)
         .lte("transaction_date", to)

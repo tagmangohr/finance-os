@@ -56,6 +56,7 @@ export async function aiCategorize(
     `- A credit that is a REFUND/REVERSAL from a vendor you normally pay (money coming back) should go to that vendor's expense category (or "expense_reversal") — it nets against the expense, it is NOT income.\n` +
     `- Payouts/settlements FROM a payment gateway (Stripe, Razorpay, Cashfree, PayU) are "pg_settlement" — money already counted as revenue.\n` +
     `- Internal transfers, owner draws, loan movements and capital are "excluded" (cash moved, not P&L).\n` +
+    `- Payouts to CREATORS (creator/affiliate/partner revenue-share disbursements) are "creator_payout" — pass-through money, excluded from P&L (NOT an operating expense).\n` +
     `- If genuinely unsure, use "uncategorized" with low confidence rather than guessing.\n` +
     `Return ONLY a JSON array, no prose.`;
 

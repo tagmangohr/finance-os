@@ -1,13 +1,41 @@
 "use client";
 
 import * as React from "react";
-import { Copy, Check, Trash2, Plus, KeyRound, AlertTriangle } from "lucide-react";
+import { Copy, Check, Trash2, Plus, KeyRound, AlertTriangle, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ApiKey = {
   id: string; name: string; key_prefix: string; scopes: string[];
   created_at: string; last_used_at: string | null; revoked_at: string | null;
 };
+
+export type ConnectorToggle = {
+  id: string; name: string; type: string; status: string;
+  include_income: boolean; include_expense: boolean;
+};
+
+const CONNECTOR_TYPE_LABEL: Record<string, string> = {
+  razorpay: "Razorpay", stripe: "Stripe", cashfree: "Cashfree", payu: "PayU",
+  paytm: "Paytm", easebuzz: "Easebuzz", app_store: "Apple App Store", mercury: "Mercury",
+  brex: "Brex", google_sheets: "Google Sheet", excel: "Excel", csv: "CSV",
+  bank_statement: "Bank statement", zoho: "Zoho", quickbooks: "QuickBooks", tally: "Tally",
+};
+
+/** Small pill switch (no shared Switch component in the repo). */
+function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button" role="switch" aria-checked={checked} disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
+        checked ? "bg-primary" : "bg-muted-foreground/30"
+      )}
+    >
+      <span className={cn("inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform", checked ? "translate-x-[18px]" : "translate-x-0.5")} />
+    </button>
+  );
+}
 
 function Copyable({ value, className }: { value: string; className?: string }) {
   const [copied, setCopied] = React.useState(false);
@@ -22,7 +50,9 @@ function Copyable({ value, className }: { value: string; className?: string }) {
   );
 }
 
-export function SettingsClient() {
+export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }) {
+  const [conns, setConns] = React.useState<ConnectorToggle[]>(connectors);
+  const [savingId, setSavingId] = React.useState<string | null>(null);
   const [keys, setKeys] = React.useState<ApiKey[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [creating, setCreating] = React.useState(false);
@@ -51,11 +81,62 @@ export function SettingsClient() {
     await load();
   };
 
+  // Flip one connector's income/expense switch. Optimistic; reverts on failure.
+  const updateConn = async (id: string, field: "include_income" | "include_expense", value: boolean) => {
+    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
+    setSavingId(id);
+    try {
+      const r = await fetch(`/api/connectors/manage?id=${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: value }),
+      });
+      if (!r.ok) throw new Error();
+    } catch {
+      setConns((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: !value } : c)));
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   const active = keys.filter((k) => !k.revoked_at);
   const curl = `curl -H "Authorization: Bearer <YOUR_KEY>" \\\n  "${origin}/api/v1/payments?search=customer@email.com"`;
 
   return (
     <div className="space-y-6">
+      {/* ── Connector P&L treatment ──────────────────────────────── */}
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+          <div>
+            <h2 className="text-[14px] font-semibold text-foreground">Connector P&amp;L treatment</h2>
+            <p className="text-[12px] text-muted-foreground/80">Choose whether each connector&apos;s money counts toward Income and Expense across the P&amp;L, Dashboard and Analytics. Both on by default — turning one off applies instantly.</p>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {conns.length === 0 && <p className="text-[12px] text-muted-foreground/70">No connectors yet. Add one on the Connectors page.</p>}
+          {conns.map((c) => (
+            <div key={c.id} className="flex items-center gap-3 rounded-lg border border-border bg-accent/30 px-3 py-2.5">
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] font-medium text-foreground truncate">{c.name}</p>
+                <p className="text-[11px] text-muted-foreground/70">{CONNECTOR_TYPE_LABEL[c.type] ?? c.type}{c.status !== "active" ? ` · ${c.status}` : ""}</p>
+              </div>
+              <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                <span className={cn("tabular-nums", c.include_income ? "text-foreground" : "text-muted-foreground/50")}>Income</span>
+                <Switch checked={c.include_income} disabled={savingId === c.id} onChange={(v) => updateConn(c.id, "include_income", v)} />
+              </div>
+              <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                <span className={cn("tabular-nums", c.include_expense ? "text-foreground" : "text-muted-foreground/50")}>Expense</span>
+                <Switch checked={c.include_expense} disabled={savingId === c.id} onChange={(v) => updateConn(c.id, "include_expense", v)} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-muted-foreground/60 leading-relaxed">
+          <span className="font-medium">Income off</span> excludes that connector&apos;s revenue (captures + bank income) and its refunds/chargebacks. <span className="font-medium">Expense off</span> excludes its expense debits and payment-gateway fees.
+        </p>
+      </section>
+
       {/* ── API keys ─────────────────────────────────────────────── */}
       <section className="rounded-xl border border-border bg-card p-5 space-y-4">
         <div className="flex items-start justify-between gap-3 flex-wrap">

@@ -72,6 +72,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .from("transactions")
       .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type, metadata")
       .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment")
+      .eq("conn_include_income", true)
       .in("status", ["completed", "refunded"])
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(20000);
@@ -112,6 +113,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .from("transactions")
       .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type, metadata")
       .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
+      .eq("conn_include_income", true)
       .or("metadata->>dispute_status.ilike.*lost*,status.eq.failed")
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(5000);
@@ -169,6 +171,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     if (key === "uncategorized") q = q.or("category.is.null,category.eq.");
     else q = q.eq("category", key);
   }
+
+  // Respect per-connector toggles (084/085) so the drill ties to the gated line:
+  // revenue/refunds/other-income follow include_income, expenses/fees include_expense.
+  const drillIncomeSide = key === "revenue" || key === "refunds" || key.startsWith("income:");
+  q = drillIncomeSide ? q.eq("conn_include_income", true) : q.eq("conn_include_expense", true);
 
   // Exclude settlements/payouts everywhere (matches the rollup's _dm_excluded):
   // they're PG→bank transfers, not revenue/refunds/fees/expense.

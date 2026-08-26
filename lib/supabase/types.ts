@@ -35,6 +35,8 @@ export interface Database {
           synced_through: string | null;
           events_synced_through: string | null;
           capture_events: boolean;
+          include_income: boolean;
+          include_expense: boolean;
           created_at: string;
         };
         Insert: Omit<Database["public"]["Tables"]["connectors"]["Row"], "id" | "created_at">;

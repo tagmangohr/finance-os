@@ -198,6 +198,22 @@ export async function PATCH(request: Request) {
       updates.capture_events = body.capture_events;
     }
 
+    // Per-connector P&L switches (migration 084). Enforced at read time by the
+    // connector-dimension rollups (085): income → revenue + refunds/chargebacks;
+    // expense → expense debits + PG fees.
+    if (body.include_income !== undefined) {
+      if (typeof body.include_income !== "boolean") {
+        return NextResponse.json({ error: "include_income must be a boolean" }, { status: 400 });
+      }
+      updates.include_income = body.include_income;
+    }
+    if (body.include_expense !== undefined) {
+      if (typeof body.include_expense !== "boolean") {
+        return NextResponse.json({ error: "include_expense must be a boolean" }, { status: 400 });
+      }
+      updates.include_expense = body.include_expense;
+    }
+
     if (Object.keys(updates).length === 0) {
       return NextResponse.json({ error: "No updates provided" }, { status: 400 });
     }
@@ -211,6 +227,20 @@ export async function PATCH(request: Request) {
       .single();
 
     if (error) throw error;
+
+    // A P&L-toggle change re-scopes this connector's money across every rollup.
+    // Re-stamp its rows + rebuild the rollups in the background (heavy but rare;
+    // the UI updated optimistically). Only when a toggle actually changed.
+    if (body.include_income !== undefined || body.include_expense !== undefined) {
+      after(async () => {
+        try {
+          const svc = await createServiceClient();
+          await svc.rpc("resync_connector_pnl_flags" as never, { p_conn: id } as never);
+        } catch (e) {
+          console.error("[connectors/manage] resync_connector_pnl_flags failed:", e);
+        }
+      });
+    }
 
     return NextResponse.json(redactConnector(data));
   } catch (err) {
