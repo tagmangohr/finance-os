@@ -61,17 +61,40 @@ export function autoDetectMapping(
 
 // ─── Worksheet → header + row objects (for multi-tab spreadsheet import) ──────
 
+/**
+ * Coerce a raw cell value to a string for the row map. Date cells (real
+ * date/datetime serials — the workbook is read with cellDates:true) are formatted
+ * to `yyyy-mm-dd` from their UTC parts. This is the critical bit: a spreadsheet
+ * column can MIX display formats cell-to-cell (e.g. one ICICI/RBL statement had
+ * some dates shown as "1/4/2026 10:17" and others as "13-04-2026 02:20:52"). Reading
+ * the DISPLAY TEXT (raw:false) then re-parsing it is ambiguous and lossy — "13-04-…"
+ * fails JS Date parsing and got dropped, while "1/4/2026" was misread as US M/D
+ * (Jan-4 instead of 1-Apr). Reading the true serial and formatting it ourselves is
+ * unambiguous and format-independent, so every row imports with the correct date.
+ */
+function cellToCellString(v: unknown): string {
+  if (v == null) return "";
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return "";
+    return `${v.getUTCFullYear()}-${String(v.getUTCMonth() + 1).padStart(2, "0")}-${String(v.getUTCDate()).padStart(2, "0")}`;
+  }
+  return String(v).trim();
+}
+
 export function extractWorksheet(
   ws: XLSX.WorkSheet
 ): { headers: string[]; rows: Record<string, string>[] } {
+  // raw:true keeps date cells as Date objects (the workbook is read with
+  // cellDates:true) instead of re-rendering them to their per-cell display text.
+  // cellToCellString then formats dates to yyyy-mm-dd itself — see the note above.
   const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, {
-    header: 1, defval: "", raw: false, dateNF: "yyyy-mm-dd",
+    header: 1, defval: "", raw: true,
   });
   if (aoa.length < 1) return { headers: [], rows: [] };
   const headers = (aoa[0] as unknown[]).map((h) => String(h ?? "").trim());
   const rows = aoa.slice(1).map((r) => {
     const obj: Record<string, string> = {};
-    headers.forEach((h, i) => { obj[h] = String((r as unknown[])[i] ?? "").trim(); });
+    headers.forEach((h, i) => { obj[h] = cellToCellString((r as unknown[])[i]); });
     return obj;
   });
   return { headers, rows };

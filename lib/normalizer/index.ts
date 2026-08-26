@@ -276,11 +276,18 @@ export function parseDateString(raw: string): string {
     return toYmdLocal(native);
   }
 
-  // Try known FULL-date formats
-  for (const fmt of DATE_FORMATS) {
-    const parsed = parse(trimmed, fmt, new Date());
-    if (isValid(parsed)) {
-      return toYmdLocal(parsed);
+  // Try known FULL-date formats against the string and, if it carries a trailing
+  // clock time (e.g. "13-04-2026 02:20:52"), against the date-only part too — the
+  // date-fns formats below don't include a time token, so an unstripped time makes
+  // them all fail and the whole row gets dropped as an unparseable date.
+  const dateOnly = trimmed.replace(/[ T]\d{1,2}:\d{2}(:\d{2})?(\.\d+)?\s*(am|pm|Z|[+-]\d{2}:?\d{2})?$/i, "").trim();
+  const candidates = dateOnly && dateOnly !== trimmed ? [trimmed, dateOnly] : [trimmed];
+  for (const candidate of candidates) {
+    for (const fmt of DATE_FORMATS) {
+      const parsed = parse(candidate, fmt, new Date());
+      if (isValid(parsed)) {
+        return toYmdLocal(parsed);
+      }
     }
   }
 
