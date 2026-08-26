@@ -156,7 +156,10 @@ export async function getSalesTransactions(
   const [countRes, rowsRes] = await Promise.all([
     countQuery,
     rowsQuery
+      // Newest first by real timestamp (see getBankTransactions) — date-only rows
+      // trail same-day timestamped ones; id breaks ties deterministically.
       .order("transaction_date", { ascending: false })
+      .order("transaction_at", { ascending: false, nullsFirst: false })
       .order("id", { ascending: false })
       .range(page * pageSize, page * pageSize + pageSize - 1),
   ]);

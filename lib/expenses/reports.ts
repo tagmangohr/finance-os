@@ -245,7 +245,13 @@ export async function getBankTransactions(
   const [countRes, rowsRes] = await Promise.all([
     countQuery,
     rowsQuery
+      // Newest first by the REAL timestamp, not just the date. transaction_date is
+      // date-only, so ordering by it alone left same-day rows in id (UUID) order —
+      // effectively random, which buried timestamped feeds (Mercury/Brex) among
+      // date-only sheet rows. Order within a day by transaction_at (nulls last, so
+      // date-only sheet rows trail the timestamped ones), then id for determinism.
       .order("transaction_date", { ascending: false })
+      .order("transaction_at", { ascending: false, nullsFirst: false })
       .order("id", { ascending: false })
       .range(page * pageSize, page * pageSize + pageSize - 1),
   ]);
