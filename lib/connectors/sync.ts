@@ -711,9 +711,19 @@ export async function mergeConnectorTransactions(
   let updated = 0;
 
   if (newRows.length > 0) {
-    const { error, count } = await supabase.from("transactions").insert(newRows, { count: "exact" });
-    if (error) throw new Error(`Merge insert failed: ${error.message}`);
-    inserted = count ?? newRows.length;
+    // Insert in CHUNKS, not one giant statement. Every inserted row fires the
+    // per-row rollup triggers (revenue/dashboard/P&L/gateway) + the connector-flag
+    // stamp, so a first sync of a large sheet in a single INSERT blows the 8s
+    // statement timeout ("Merge insert failed: canceling statement due to statement
+    // timeout"). Small statements keep each well under the cap; progress is durable
+    // per chunk. 200 balances round-trips vs the per-row trigger work.
+    const INSERT_CHUNK = 200;
+    for (let i = 0; i < newRows.length; i += INSERT_CHUNK) {
+      const slice = newRows.slice(i, i + INSERT_CHUNK);
+      const { error, count } = await supabase.from("transactions").insert(slice, { count: "exact" });
+      if (error) throw new Error(`Merge insert failed: ${error.message}`);
+      inserted += count ?? slice.length;
+    }
   }
 
   // Refresh source fields only — never category/pnl_treatment (user-owned). Also
