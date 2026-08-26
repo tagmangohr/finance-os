@@ -197,6 +197,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const [splitRow, setSplitRow] = useState<BankTxn | null>(null);
   const [splitParts, setSplitParts] = useState<{ amount: string; category: string }[]>([]);
   const [savingSplit, setSavingSplit] = useState(false);
+  const [splitError, setSplitError] = useState<string | null>(null);
   const [unsplittingId, setUnsplittingId] = useState<string | null>(null);
 
   function openEdit(t: BankTxn) {
@@ -239,12 +240,14 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
   function openSplit(t: BankTxn) {
     setSplitRow(t);
+    setSplitError(null);
     setSplitParts([{ amount: "", category: "" }, { amount: "", category: "" }]);
   }
 
   async function saveSplit() {
     if (!splitRow) return;
     setSavingSplit(true);
+    setSplitError(null);
     try {
       const res = await fetch("/api/bank/split", {
         method: "POST",
@@ -255,13 +258,20 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         }),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "Failed to split");
+      if (!res.ok) {
+        // Surface the reason INSIDE the modal (a top-of-page banner would be hidden
+        // behind it). If the row was already split (e.g. a stale list still shows the
+        // parent), refresh so it disappears and the parts show.
+        setSplitError(j.error ?? "Failed to split");
+        if (typeof j.error === "string" && /already split/i.test(j.error)) { await fetchRows(); router.refresh(); }
+        return;
+      }
       setSplitRow(null);
       await fetchRows();
       router.refresh();
       setMsg(`Split into ${j.parts} parts.`);
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Failed to split");
+      setSplitError(e instanceof Error ? e.message : "Failed to split");
     } finally {
       setSavingSplit(false);
     }
@@ -872,6 +882,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                         {splitRow.currency} {remaining.toLocaleString("en-IN")}
                       </span>
                     </div>
+                    {splitError && (
+                      <p className="rounded-lg bg-destructive/10 text-destructive px-3 py-2 text-[12px]">{splitError}</p>
+                    )}
                     <div className="flex gap-2">
                       <Dialog.Close className="flex-1 h-9 rounded-lg border border-border text-[13px] hover:bg-accent">Cancel</Dialog.Close>
                       <button onClick={saveSplit} disabled={!allValid || savingSplit} className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary/90 disabled:opacity-50">
