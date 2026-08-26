@@ -3,7 +3,7 @@ import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 
-export const maxDuration = 60;
+export const maxDuration = 300; // large sheet merges (see /api/sync note)
 
 /**
  * POST /api/connectors/link  { connector_id, org_id }

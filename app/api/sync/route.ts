@@ -8,7 +8,11 @@ import type { Database } from "@/lib/supabase/types";
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
-export const maxDuration = 30;
+// Link connectors (Google Sheet / Excel) run their full MERGE synchronously here.
+// A first sync of a large sheet inserts many rows (each firing the per-row rollup
+// triggers), so 30s wasn't enough → 504. 300s (Pro plan) gives ample headroom;
+// gateway fallbacks finish fast regardless.
+export const maxDuration = 300;
 
 const GATEWAY_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz"];
 const SYNCABLE_TYPES = [...GATEWAY_TYPES, "google_sheets", "excel"];
