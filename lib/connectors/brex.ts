@@ -69,11 +69,11 @@ export class BrexConnector {
     return (await res.json()) as T;
   }
 
-  /** Page a cursor-paginated list endpoint fully. */
-  private async pageAll<T>(path: string, extra?: Record<string, string>): Promise<T[]> {
+  /** Page a cursor-paginated list endpoint fully (bounded by maxPages). */
+  private async pageAll<T>(path: string, extra?: Record<string, string>, maxPages = 200): Promise<T[]> {
     const out: T[] = [];
     let cursor: string | undefined;
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < maxPages; i++) {
       const page = await this.getJson<BrexList<T>>(path, { limit: String(PAGE), ...(cursor ? { cursor } : {}), ...extra });
       out.push(...(page.items ?? []));
       if (!page.next_cursor) break;
@@ -89,14 +89,27 @@ export class BrexConnector {
 
   /** All card + cash transactions in [fromDate, toDate], normalized to bank rows. */
   async fetchTransactions(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
+    // Brex's transaction endpoints filter on `start_date` / `end_date` (date-only,
+    // YYYY-MM-DD) — NOT `posted_at_start` (that returns 400 Bad Request, which the
+    // sync layer swallowed into a silent "0 new"). Validated against the live API.
     const start = fromDate.toISOString().slice(0, 10);
+    const end = toDate.toISOString().slice(0, 10);
+    const dateWin = { start_date: start, end_date: end };
     const startMs = fromDate.getTime();
     const endMs = toDate.getTime();
 
     // Expense metadata, keyed by id — best-effort (skip if the scope isn't granted).
+    // Expenses live under /v1 (NOT /v2, which 404s), and `expand[]=merchant` pulls
+    // the merchant sub-object for enrichment.
     const expenseById = new Map<string, BrexExpense>();
     try {
-      const expenses = await this.pageAll<BrexExpense>("/v2/expenses", { expand: "merchant" });
+      // Bounded to the same date window (+ a hard page cap) so a large expense
+      // history can't slow the per-window sync toward the function timeout.
+      const expenses = await this.pageAll<BrexExpense>(
+        "/v1/expenses",
+        { "expand[]": "merchant", start_date: start, end_date: end },
+        40
+      );
       for (const e of expenses) if (e?.id) expenseById.set(e.id, e);
     } catch { /* expenses scope not granted → no enrichment */ }
 
@@ -109,13 +122,13 @@ export class BrexConnector {
     };
 
     // Card transactions (primary card account).
-    const cardTxns = await this.pageAll<BrexTxn>("/v2/transactions/card/primary", { posted_at_start: start });
+    const cardTxns = await this.pageAll<BrexTxn>("/v2/transactions/card/primary", dateWin);
     for (const t of cardTxns) add(t, "credit"); // account_type label: corporate card
 
     // Cash-account transactions (one call per cash account).
     const cashAccounts = await this.fetchCashAccounts().catch(() => [] as BrexAccount[]);
     for (const acc of cashAccounts) {
-      const txns = await this.pageAll<BrexTxn>(`/v2/transactions/cash/${acc.id}`, { posted_at_start: start });
+      const txns = await this.pageAll<BrexTxn>(`/v2/transactions/cash/${acc.id}`, dateWin);
       for (const t of txns) add(t, "checking");
     }
 
@@ -133,13 +146,16 @@ export function normalizeBrexTransaction(
   if (!t.id || !t.amount || t.amount.amount == null) return null;
   const cents = Number(t.amount.amount);
   const type = (t.type ?? "").toString();
-  // Direction handles BOTH conventions Brex may use (we validate against the real
-  // token): a negative amount always means money out; for unsigned amounts, a
-  // refund/chargeback/deposit-type is money in, everything else is spend.
-  const direction: "credit" | "debit" =
-    cents < 0 ? "debit"
-    : CREDIT_TYPE.test(type) ? "credit"
-    : "debit";
+  // Direction convention differs by account type (validated against the live API):
+  //  • CASH accounts use SIGNED amounts — positive = money IN (Stripe/Cashfree
+  //    settlements, dividends), negative = money OUT (payouts, transfers). So the
+  //    sign alone decides direction.
+  //  • CARD accounts are a spend feed — a positive PURCHASE is money OUT (debit);
+  //    a refund/chargeback comes back as a negative amount or a REFUND-type, → credit.
+  const isCard = accountType === "credit"; // "credit" = corporate card; "checking" = cash
+  const direction: "credit" | "debit" = isCard
+    ? (cents < 0 || CREDIT_TYPE.test(type) ? "credit" : "debit")
+    : (cents < 0 ? "debit" : "credit");
   const amount = Math.abs(cents) / 100;
   const when = t.posted_at_date ?? t.initiated_at_date ?? null;
   const whenIso = when ? new Date(when).toISOString() : null;
