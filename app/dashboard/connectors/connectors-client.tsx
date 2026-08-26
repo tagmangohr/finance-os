@@ -458,11 +458,25 @@ function CopyField({ value }: { value: string }) {
   );
 }
 
-/** Per-account webhook endpoints (URL + events) for every connected PG connector. */
+// Pretty gateway names for the endpoint reference (independent of whether a
+// connector exists for this org yet).
+const GATEWAY_LABEL: Record<string, string> = {
+  razorpay: "Razorpay", stripe: "Stripe", cashfree: "Cashfree", payu: "PayU",
+  paytm: "Paytm", easebuzz: "Easebuzz", app_store: "Apple App Store", mercury: "Mercury",
+};
+
+/**
+ * Webhook endpoint reference — shown for EVERY org, even before any connector is
+ * added. Each supported gateway lists its URL + the events to enable + a setup
+ * note. A connected account shows its account-specific tokenized URL (…?c=token)
+ * so events route to that exact connector; a gateway with no connector yet shows
+ * the base URL as a template (dashed) with a note that the tokenized URL appears
+ * once the connector is added (the token — and the webhook secret needed to verify
+ * events — only exist after the connector is created).
+ */
 function WebhookEndpoints({ connectors }: { connectors: Connector[] }) {
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const webhookConns = connectors.filter((c) => WEBHOOK_INFO[c.type]);
-  if (webhookConns.length === 0) return null;
+  const types = Object.keys(WEBHOOK_INFO);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -471,28 +485,55 @@ function WebhookEndpoints({ connectors }: { connectors: Connector[] }) {
         <div className="flex-1 h-px bg-accent/40" />
       </div>
       <p className="text-xs text-muted-foreground/70">
-        Paste each account&apos;s URL into that gateway&apos;s dashboard and subscribe to the listed events. Every account has its own URL, so events route to the right connector.
+        Set these on each gateway&apos;s dashboard and subscribe to the listed events. Each connected account gets its own tokenized URL so events route to the right connector; add a connector above to generate its account-specific URL.
       </p>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {webhookConns.map((c) => {
-          const info = WEBHOOK_INFO[c.type];
-          const token = (c as { webhook_token?: string }).webhook_token;
-          const url = `${origin}${info.path}${token ? `?c=${token}` : ""}`;
-          return (
-            <div key={c.id} className="rounded-xl border border-border bg-accent/30 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-foreground truncate">{c.name}</span>
-                <span className="text-[10px] uppercase tracking-wide text-muted-foreground/60 flex-shrink-0">{c.type}</span>
-              </div>
-              <CopyField value={url} />
-              <div className="flex flex-wrap gap-1">
-                {info.events.map((e) => (
-                  <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
-                ))}
-              </div>
-              <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">{info.note}</p>
+        {types.flatMap((type) => {
+          const info = WEBHOOK_INFO[type];
+          const label = GATEWAY_LABEL[type] ?? type;
+          const conns = connectors.filter((c) => c.type === type);
+
+          const EventChips = (
+            <div className="flex flex-wrap gap-1">
+              {info.events.map((e) => (
+                <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
+              ))}
             </div>
           );
+
+          if (conns.length === 0) {
+            // Not connected yet — template reference card.
+            const url = `${origin}${info.path}`;
+            return [(
+              <div key={type} className="rounded-xl border border-dashed border-border bg-accent/15 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-foreground truncate">{label}</span>
+                  <span className="text-[9.5px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5 text-muted-foreground/70 flex-shrink-0">not connected</span>
+                </div>
+                <CopyField value={url} />
+                {EventChips}
+                <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">
+                  Add the {label} connector above to get your account-specific URL (<span className="font-mono">…?c=token</span>). {info.note}
+                </p>
+              </div>
+            )];
+          }
+
+          return conns.map((c) => {
+            const token = (c as { webhook_token?: string }).webhook_token;
+            const url = `${origin}${info.path}${token ? `?c=${token}` : ""}`;
+            return (
+              <div key={c.id} className="rounded-xl border border-border bg-accent/30 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-foreground truncate">{c.name}</span>
+                  <span className="text-[9.5px] uppercase tracking-wide rounded bg-success/15 text-success px-1.5 py-0.5 flex-shrink-0">connected</span>
+                </div>
+                <CopyField value={url} />
+                {EventChips}
+                <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">{info.note}</p>
+              </div>
+            );
+          });
         })}
       </div>
     </div>

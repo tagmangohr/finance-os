@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import * as Dialog from "@radix-ui/react-dialog";
 import Link from "next/link";
-import { Download, Sparkles, Zap, X, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Download, Sparkles, Zap, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { sourceLabel } from "@/lib/finance/transaction-status";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { FloatingPanel } from "@/components/ui/floating-panel";
 import type { PnlData, PnlRow, PnlColumn } from "@/lib/pnl";
 
 type Mode = "abs" | "mom" | "yoy";
@@ -110,32 +110,24 @@ function DrillDrawer({
     return () => { cancelled = true; };
   }, [open, drillKey, orgId, from, to]);
 
+  const byLabel = drillKey && GATEWAY_KEYS.has(drillKey) ? "gateway" : "vendor / customer";
   return (
-    <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[140]" />
-        <Dialog.Content className="fixed right-0 top-0 h-full w-full sm:w-[480px] bg-card border-l border-border z-[141] shadow-2xl flex flex-col focus:outline-none">
-          <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
-            <div className="min-w-0">
-              <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">{title}</Dialog.Title>
-              <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle} · by {drillKey && GATEWAY_KEYS.has(drillKey) ? "gateway" : "vendor / customer"}</p>
-            </div>
-            <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center flex-shrink-0"><X className="h-4 w-4" /></Dialog.Close>
-          </div>
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-            <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${groups.length}${hasMore ? "+" : ""} ${groups.length === 1 ? "party" : "parties"}`}</span>
-            <span className="num text-[13px] font-semibold text-foreground" title="Total from the P&L rollup">{moneyFull(expectedTotal)}</span>
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {err && <p className="p-4 text-[12px] text-destructive">{err}</p>}
-            {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>}
-            {!loading && !err && groups.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">Nothing in this slice.</p>}
-            {!loading && drillKey && groups.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
-            {hasMore && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <FloatingPanel
+      open={open}
+      onClose={onClose}
+      title={title}
+      subtitle={`${subtitle} · by ${byLabel}`}
+      headerRight={<span className="num text-[13px] font-semibold text-foreground pr-1" title="Total from the P&L rollup">{moneyFull(expectedTotal)}</span>}
+    >
+      <div className="px-4 py-2 border-b border-border flex items-center justify-between sticky top-0 bg-card/95 backdrop-blur z-[1]">
+        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${groups.length}${hasMore ? "+" : ""} ${groups.length === 1 ? "party" : "parties"}`}</span>
+      </div>
+      {err && <p className="p-4 text-[12px] text-destructive">{err}</p>}
+      {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>}
+      {!loading && !err && groups.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">Nothing in this slice.</p>}
+      {!loading && drillKey && groups.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
+      {hasMore && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
+    </FloatingPanel>
   );
 }
 
@@ -154,12 +146,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
   // The last two rows (Net Profit + Net Margin) are pinned to the bottom of the
-  // scroll box as a sticky footer. Net Margin sits at bottom:0; Net Profit sits
-  // directly above it, offset by the measured height of the margin row (it can
-  // grow when MoM/YoY delta sub-lines appear, so measure rather than hard-code).
+  // scroll box. They stay in <tbody> (NOT <tfoot> — Safari doesn't honor
+  // position:sticky on tfoot cells, which is what broke the freeze) and their
+  // cells are sticky-bottom. Net Margin sits at bottom:0; Net Profit sits directly
+  // above it, offset by the measured height of the margin row (it can grow when
+  // MoM/YoY delta sub-lines appear, so measure rather than hard-code).
   const FOOTER_IDS = React.useMemo(() => new Set(["net_profit", "net_margin"]), []);
-  const bodyRows = data.rows.filter((r) => !FOOTER_IDS.has(r.id));
-  const footerRows = data.rows.filter((r) => FOOTER_IDS.has(r.id));
   const marginRowRef = React.useRef<HTMLTableRowElement>(null);
   const [marginH, setMarginH] = React.useState(38);
   React.useLayoutEffect(() => {
@@ -398,13 +390,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               </tr>
             </thead>
             <tbody>
-              {bodyRows.map((row) => renderRow(row))}
+              {data.rows.map((row) => renderRow(row, FOOTER_IDS.has(row.id) ? (row.id === "net_margin" ? 0 : marginH) : undefined))}
             </tbody>
-            {footerRows.length > 0 && (
-              <tfoot>
-                {footerRows.map((row) => renderRow(row, row.id === "net_margin" ? 0 : marginH))}
-              </tfoot>
-            )}
           </table>
         </div>
       </div>
