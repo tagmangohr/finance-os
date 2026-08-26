@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
-import { cleanCounterpartyName } from "@/lib/normalizer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,9 +32,7 @@ export async function PATCH(
     patch.transaction_date = body.transaction_date; manual.push("transaction_date");
   }
   if ("counterparty_name" in body) {
-    // Same canonicalization as the sync write path so a hand-typed name with
-    // stray/internal whitespace still folds into the one vendor identity.
-    const v = cleanCounterpartyName(body.counterparty_name as string | null | undefined);
+    const v = body.counterparty_name == null ? null : String(body.counterparty_name).trim() || null;
     patch.counterparty_name = v; manual.push("counterparty_name");
   }
   if ("description" in body) {

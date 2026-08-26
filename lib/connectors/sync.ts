@@ -9,7 +9,7 @@ import {
   getExistingTransactionsByExternalId,
   type ExistingTransactionByExternalId,
 } from "@/lib/db/dedup";
-import { type NormalizedTransaction, cleanCounterpartyName } from "@/lib/normalizer";
+import type { NormalizedTransaction } from "@/lib/normalizer";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { categorizeSource } from "@/lib/finance/transaction-status";
 import { BASE_CURRENCY } from "@/lib/utils";
@@ -320,12 +320,8 @@ function toInsertRows(
       tx.metadata && typeof tx.metadata === "object"
         ? (tx.metadata as Record<string, unknown>).email
         : null;
-    // Canonicalize the name so whitespace-only variants of the same party
-    // ("SWIFT … PVT LTD" vs "PVT  LTD") collapse to ONE identity on both the
-    // insert and the re-sync refresh (toRefreshFields carries this same field).
-    const counterpartyName = cleanCounterpartyName(
-      tx.counterparty_name ?? (typeof metaEmail === "string" && metaEmail ? metaEmail : null)
-    );
+    const counterpartyName =
+      tx.counterparty_name ?? (typeof metaEmail === "string" && metaEmail ? metaEmail : null);
     return {
     org_id: orgId,
     connector_id: connectorId,
