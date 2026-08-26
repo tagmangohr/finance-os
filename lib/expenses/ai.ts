@@ -60,6 +60,7 @@ export async function aiCategorize(
     `- Payouts to CREATORS (creator/affiliate/partner revenue-share disbursements) are "creator_payout" — pass-through money, excluded from P&L (NOT an operating expense).\n` +
     `- Subscriptions to AI-powered TOOLS/apps (Cursor, GitHub Copilot, Perplexity, ChatGPT/Claude seats, etc.) are "ai_tool"; raw LLM/model API usage that powers the product (OpenAI/Anthropic API bills) is "ai_model"; other general SaaS is "software".\n` +
     `- Money paid back to an employee/founder for out-of-pocket business spend (expense claims, "reimbursement", "reimb", petty-cash top-ups) is "reimbursement".\n` +
+    `- Charitable / CSR donations and contributions (NGOs, relief funds, "donation", "daan") are "donation".\n` +
     `- If genuinely unsure, use "uncategorized" with low confidence rather than guessing.\n` +
     `Return ONLY a JSON array, no prose.`;
 
