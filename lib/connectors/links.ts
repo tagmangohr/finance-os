@@ -239,6 +239,13 @@ export async function fetchLinkTransactions(
       const buf = await fetchBytes(googleSheetXlsxUrl(sheetUrl));
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       rows = [];
+      // The id is a content hash, so two GENUINELY-identical source rows would
+      // collide on the unique (org,connector,external_id) index and fail the sync.
+      // Suffix the 2nd+ occurrence of an identical row within this sync so they
+      // import as distinct rows. The FIRST occurrence keeps the bare id (backward-
+      // compatible with already-synced rows), and given stable row order the
+      // suffixes are stable across syncs → still no duplicates on re-sync.
+      const seenIds = new Map<string, number>();
       for (const tab of tabsCfg) {
         if (tab.import === false) continue;
         const ws = wb.Sheets[tab.name];
@@ -255,13 +262,16 @@ export async function fetchLinkTransactions(
           const idBasis = spec.format === "matrix"
             ? { label: t.counterparty_name ?? "", col: (t.metadata as Record<string, unknown> | undefined)?.source_column ?? "" }
             : t.raw;
+          const baseId = sheetExternalId(tab.name, idBasis);
+          const seq = seenIds.get(baseId) ?? 0;
+          seenIds.set(baseId, seq + 1);
           rows.push({
             ...t,
             ledger,
             // Tag bank rows with the tab name so each synced source is a filterable
             // "account" on the Bank page.
             account_type: ledger === "bank" ? tab.name : (t.account_type ?? null),
-            external_id: sheetExternalId(tab.name, idBasis),
+            external_id: seq === 0 ? baseId : `${baseId}_${seq + 1}`,
           });
         }
       }
@@ -269,9 +279,15 @@ export async function fetchLinkTransactions(
       // Legacy single-tab (no per-tab config) — still stamp a stable id so merge works.
       const text = await fetchText(googleSheetCsvUrl(sheetUrl));
       const parsed = await parseCsvFile(text, finalizeMapping(csvHeaders(text), override));
+      const seenIds = new Map<string, number>();
       rows = parsed
         .filter((t) => validDate(t.transaction_date))
-        .map((t) => ({ ...t, external_id: sheetExternalId("__single__", t.raw) }));
+        .map((t) => {
+          const baseId = sheetExternalId("__single__", t.raw);
+          const seq = seenIds.get(baseId) ?? 0;
+          seenIds.set(baseId, seq + 1);
+          return { ...t, external_id: seq === 0 ? baseId : `${baseId}_${seq + 1}` };
+        });
     }
   } else if (connector.type === "excel") {
     const buf = await fetchBytes(excelDownloadUrl(String(cfg.file_url ?? "")));
