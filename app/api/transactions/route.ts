@@ -63,6 +63,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
        counterparty_name, description, external_id, category, metadata,
        connector_id,
        connectors!inner(name, type)`,
+      // EXACT count. It stays fast at scale because of the partial index
+      // idx_txn_payments_explorer (migration 095) — WHERE ledger='payments' over
+      // (org_id, transaction_date desc, source, type, connector_id) — which lets
+      // Postgres satisfy this count with an index-only scan of narrow entries
+      // instead of a sequential scan of the wide raw-jsonb heap. (The 8s timeouts
+      // that broke this page were a planner regression from dead-tuple bloat +
+      // stale stats; a VACUUM (ANALYZE) + this index remove them.)
       { count: "exact" }
     )
     .eq("org_id", auth.org.id)

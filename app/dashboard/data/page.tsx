@@ -26,18 +26,23 @@ export default async function DataPage() {
 
   const all = connectors ?? [];
   const svc = await createServiceClient();
+  // We only need to know whether each connector has ANY payments-ledger rows — an
+  // existence check (LIMIT 1), NOT a full count(exact). count(exact) over a large
+  // payments table (Fiesta has ~450k rows) scans every row and blows the 8s
+  // statement timeout, which was making this page fail to load.
   const counts = await Promise.all(
     all.map((c) =>
       svc
         .from("transactions")
-        .select("id", { count: "exact", head: true })
+        .select("id")
         .eq("org_id", org.id)
         .eq("connector_id", c.id)
         // Payments explorer = PG money only; exclude bank + sales ledgers.
         .eq("ledger", "payments")
+        .limit(1)
     )
   );
-  const paymentsConnectors = all.filter((_, i) => (counts[i].count ?? 0) > 0);
+  const paymentsConnectors = all.filter((_, i) => (counts[i].data?.length ?? 0) > 0);
 
   return (
     <DataExplorerClient
