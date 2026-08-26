@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { selectAllKeyset } from "@/lib/supabase/paginate";
-import { baseAmt, fyStartISO } from "@/lib/utils";
+import { fyStartISO } from "@/lib/utils";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cachedOrgLoader } from "@/lib/cache/org-cache";
@@ -59,20 +58,6 @@ export type BankOverview = {
   period: { from: string; to: string };
 };
 
-/** Narrow projection used for the aggregate drain (rows are summed, never returned). */
-type BankAggRow = Pick<
-  BankTxn,
-  "id" | "transaction_date" | "type" | "amount" | "currency" | "amount_base" | "category"
-  | "pnl_treatment" | "category_source" | "category_confidence" | "account_type" | "card_last4" | "card_holder" | "status"
-> & { conn_include_income: boolean; conn_include_expense: boolean; is_split_parent: boolean };
-
-/** A row needs review if uncategorized or a low-confidence AI guess. Shared by the
- *  aggregate reviewCount and the per-row badge so they always agree. */
-function bankRowNeedsReview(t: { pnl_treatment: string | null; category_source: string | null; category_confidence: number | null }): boolean {
-  return !t.pnl_treatment || t.pnl_treatment === "uncategorized" ||
-    (t.category_source === "ai" && (t.category_confidence ?? 1) < 0.6);
-}
-
 /**
  * Everything the Bank dashboard renders, scoped to the current financial year.
  * MUST be called with the SERVICE client (bank rows + taxonomy are not client-
@@ -89,33 +74,13 @@ export async function getBankOverview(
   const periodFrom = opts?.from || fyStartISO(new Date());
   const periodTo = opts?.to || today;
 
-  const [categories, transactions, collectionsByMonth, pgFeesByMonth, lostDisputes, runwayRes] = await Promise.all([
+  const [categories, aggRes, collectionsByMonth, pgFeesByMonth, lostDisputes, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
-    // KEYSET drain (seek by id), NOT offset. Offset pagination re-scans every
-    // preceding row per page, so draining a few thousand WIDE bank rows took 10s+
-    // and intermittently tripped the 8s statement timeout → the Bank page 500'd
-    // "again and again". Keyset is constant-time per page and stays flat as the
-    // ledger grows (verified: 11-15s → ~0.4s). The client re-sorts by transaction_at
-    // for display (bank-client.tsx) and every aggregate below is order-independent,
-    // so id-ascending drain order is fine.
-    selectAllKeyset<BankAggRow>((afterId, limit) => {
-      // Aggregation-only columns (no counterparty/description/external_id/
-      // transaction_at) — the rows are NOT returned to the client, only summed, so
-      // keep them narrow. The paginated table fetches the display columns itself.
-      let q = supabase
-        .from("transactions")
-        .select(
-          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, conn_include_income, conn_include_expense, is_split_parent"
-        )
-        .eq("org_id", orgId)
-        .eq("ledger", "bank")
-        .gte("transaction_date", periodFrom)
-        .lte("transaction_date", periodTo)
-        .order("id", { ascending: true })
-        .limit(limit);
-      if (afterId) q = q.gt("id", afterId);
-      return q;
-    }),
+    // Single-query bank aggregation (migration 089): cards / by-category / review
+    // count / filter options computed in Postgres in ONE indexed pass, instead of
+    // draining every bank row into JS. Flat and fast even at 100k+ rows (the old
+    // keyset drain was ~100 round-trips at that volume).
+    supabase.rpc("bank_overview_agg" as never, { p_org: orgId, p_from: periodFrom, p_to: periodTo } as never),
     // PG revenue + refunds per month (fast rollup RPC, same source the P&L page
     // uses). We take gross_revenue AND refunds so "Collections" reflects the PG's
     // NET contribution — matching the dedicated P&L page (which subtracts refunds +
@@ -150,65 +115,45 @@ export async function getBankOverview(
     if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(amt ?? 0));
   }
 
-  const byCat = new Map<string, { label: string; treatment: string; amount: number; count: number }>();
-  const accountTypeSet = new Set<string>();
-  const cardSet = new Set<string>();
-  let reviewCount = 0;
-  const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.filter((t) => !t.is_split_parent).length };
+  // Bank aggregates from the single-query RPC (no row drain). Fall back to zeros if
+  // the RPC returns nothing (e.g. migration 089 not applied yet → empty ledger view).
+  type Agg = {
+    expenses: number; otherIncome: number; excluded: number; uncategorizedCount: number;
+    txnCount: number; reviewCount: number;
+    byCategory: { category: string | null; amount: number; count: number }[];
+    accountTypes: string[]; cards: string[];
+  };
+  const agg = ((aggRes as { data: Agg | null }).data ?? {
+    expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, txnCount: 0, reviewCount: 0,
+    byCategory: [], accountTypes: [], cards: [],
+  }) as Agg;
 
-  for (const t of transactions) {
-    // Split PARENTS are containers, not real rows — their child parts carry the
-    // real amounts/categories. Skip them entirely (totals, counts, review).
-    if (t.is_split_parent) continue;
-    // Distinct filter options + review backlog are computed over ALL rows (any
-    // status), matching the table filters + the "Needs review" badge/metric.
-    if (t.account_type) accountTypeSet.add(t.account_type);
-    if (t.card_last4) cardSet.add(t.card_last4);
-    if (bankRowNeedsReview(t)) reviewCount += 1;
+  let collections = 0;
+  for (const v of collMap.values()) collections += v;
+  const totals = {
+    expenses: Number(agg.expenses) || 0,
+    otherIncome: Number(agg.otherIncome) || 0,
+    excluded: Number(agg.excluded) || 0,
+    uncategorizedCount: Number(agg.uncategorizedCount) || 0,
+    collections,
+    net: collections + (Number(agg.otherIncome) || 0) - (Number(agg.expenses) || 0),
+    txnCount: Number(agg.txnCount) || 0,
+  };
 
-    // Only POSTED transactions hit the P&L — failed/pending are shown in the table
-    // but never counted as expense/income/excluded.
-    if (t.status !== "completed" && t.status !== "refunded") continue;
-    const amt = baseAmt(t);
-    const treatment = t.pnl_treatment ?? "uncategorized";
-
-    if (treatment === "expense") {
-      // Respect the connector expense toggle (084/085): a connector with
-      // include_expense OFF drops its bank expenses from the Bank totals too.
-      if (!t.conn_include_expense) continue;
-      // Direction-aware: debit = spend (+), credit = reversal/refund (−).
-      const signed = t.type === "debit" ? amt : -amt;
-      totals.expenses += signed;
-      const slug = t.category ?? "uncategorized";
-      const c = byCat.get(slug) ?? { label: labelBySlug.get(slug) ?? slug, treatment, amount: 0, count: 0 };
-      c.amount += signed; c.count += 1; byCat.set(slug, c);
-    } else if (treatment === "income") {
-      if (!t.conn_include_income) continue; // connector income toggle
-      // credit = income (+), debit = clawback (−).
-      const signed = t.type === "credit" ? amt : -amt;
-      totals.otherIncome += signed;
-    } else if (treatment === "excluded") {
-      totals.excluded += amt;
-    } else {
-      totals.uncategorizedCount += 1;
-    }
-  }
-
-  for (const v of collMap.values()) totals.collections += v;
-  totals.net = totals.collections + totals.otherIncome - totals.expenses;
-
-  const byCategory = Array.from(byCat.entries())
-    .map(([category, v]) => ({ category, label: v.label, treatment: v.treatment, amount: v.amount, count: v.count }))
-    .filter((c) => Math.abs(c.amount) > 0.5) // drop fully-reversed (net ~0) categories
+  const byCategory = (agg.byCategory ?? [])
+    .map((c) => {
+      const slug = c.category ?? "uncategorized";
+      return { category: slug, label: labelBySlug.get(slug) ?? slug, treatment: "expense", amount: Number(c.amount) || 0, count: Number(c.count) || 0 };
+    })
     .sort((a, b) => b.amount - a.amount);
 
   return {
     categories,
     totals,
     byCategory,
-    accountTypes: Array.from(accountTypeSet).sort(),
-    cards: Array.from(cardSet).sort(),
-    reviewCount,
+    accountTypes: (agg.accountTypes ?? []).slice().sort(),
+    cards: (agg.cards ?? []).slice().sort(),
+    reviewCount: Number(agg.reviewCount) || 0,
     runway: { cashBalance: runwayRes.cash_balance, burnRate: runwayRes.burn_rate, runwayDays: runwayRes.runway_days },
     period: { from: periodFrom, to: periodTo },
   };
