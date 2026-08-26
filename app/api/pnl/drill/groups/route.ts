@@ -59,23 +59,27 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   } as never);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Gross Revenue also includes bank-collected customer payments — surface them as
-  // one "Bank Collections" group (sentinel name) so the cell's breakup is complete.
+  // Gross Revenue also includes bank-collected customer payments — surface each
+  // bank PAYER as its own group (name "bank:<customer>") alongside the PG gateways,
+  // so the breakup lists individual customers, not one lumped "Bank Collections".
   if (key === "revenue") {
     const { data: bank } = await supabase
       .from("transactions")
-      .select("amount, amount_base, type")
+      .select("counterparty_name, amount, amount_base, type")
       .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment")
       .in("status", ["completed", "refunded"])
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(20000);
-    let amt = 0, n = 0;
-    for (const r of (bank ?? []) as { amount: number | null; amount_base: number | null; type: string }[]) {
+    const byCustomer = new Map<string, { amount: number; count: number }>();
+    for (const r of (bank ?? []) as { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string }[]) {
+      const name = (r.counterparty_name ?? "—") || "—";
       const base = Number(r.amount_base ?? r.amount) || 0;
-      amt += r.type === "credit" ? base : -base; n += 1;
+      const e = byCustomer.get(name) ?? { amount: 0, count: 0 };
+      e.amount += r.type === "credit" ? base : -base; e.count += 1;
+      byCustomer.set(name, e);
     }
     const gw = ((data ?? []) as { name: string; amount: number; txn_count: number }[]).map((g) => ({ name: g.name, amount: Number(g.amount) || 0, txn_count: Number(g.txn_count) || 0 }));
-    if (n > 0) gw.push({ name: "__bank_collections__", amount: amt, txn_count: n });
+    for (const [name, v] of byCustomer) gw.push({ name: `bank:${name}`, amount: v.amount, txn_count: v.count });
     gw.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     return NextResponse.json({ groups: gw.slice(0, LIMIT), hasMore: gw.length > LIMIT });
   }

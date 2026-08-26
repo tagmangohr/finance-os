@@ -62,9 +62,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .lte("transaction_date", to);
 
   if (key === "revenue") {
-    // Gross Revenue = PG gateway credits + bank-collected customer payments. The
-    // "Bank Collections" group expands to the bank side (sentinel party).
-    if (party === "__bank_collections__") {
+    // Gross Revenue = PG gateway credits + bank-collected customer payments. A
+    // "bank:<customer>" party expands one bank payer; anything else is PG gateways.
+    if (party && party.startsWith("bank:")) {
       q = q.eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment").in("status", ["completed", "refunded"]);
     } else {
       q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
@@ -96,8 +96,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // GATEWAY (source stem, e.g. `stripe` covers stripe + stripe_refund); expense
   // lines by vendor (counterparty_name). '—' = the empty/null bucket.
   const isGateway = key === "revenue" || key === "refunds" || key === "__pg_fees__";
-  if (party != null && party !== "__bank_collections__") { // sentinel already scoped above
-    if (party === "—") {
+  // A "bank:<customer>" party is a bank payer under Gross Revenue — match it by
+  // counterparty, NOT by gateway source. (Prefix is a sentinel so an arbitrary
+  // customer name can't collide with a gateway stem or break the query.)
+  const bankParty = party && party.startsWith("bank:") ? party.slice("bank:".length) : null;
+  if (party != null) {
+    if (bankParty !== null) {
+      if (bankParty === "—") q = q.or("counterparty_name.is.null,counterparty_name.eq.");
+      else q = q.eq("counterparty_name", bankParty);
+    } else if (party === "—") {
       const field = isGateway ? "source" : "counterparty_name";
       q = q.or(`${field}.is.null,${field}.eq.`);
     } else if (isGateway) {

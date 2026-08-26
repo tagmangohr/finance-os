@@ -38,7 +38,7 @@ type DrillTxn = { id: string; transaction_date: string; counterparty_name: strin
 
 const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
 const groupDisplayName = (drillKey: string, name: string) =>
-  name === "__bank_collections__" ? "Bank Collections" // customer payments folded into Gross Revenue
+  name.startsWith("bank:") ? (name.slice(5) === "—" ? "Bank collection (unnamed)" : name.slice(5)) // bank payer under Gross Revenue
   : (GATEWAY_KEYS.has(drillKey) ? sourceLabel(name === "—" ? null : name) : name);
 
 function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
