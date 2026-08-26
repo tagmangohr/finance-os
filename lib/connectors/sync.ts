@@ -665,8 +665,10 @@ export async function mergeConnectorTransactions(
   await enrichRowsWithFx(rows);
 
   // One-time cleanup: drop legacy null-external_id rows for this connector (they
-  // can't be merged and would otherwise co-exist with the new keyed rows).
-  await supabase.from("transactions").delete().eq("org_id", orgId).eq("connector_id", connectorId).is("external_id", null);
+  // can't be merged and would otherwise co-exist with the new keyed rows). NEVER
+  // the app-generated split children (they carry a synthetic external_id, but guard
+  // here too in case a child ever lands with a null id).
+  await supabase.from("transactions").delete().eq("org_id", orgId).eq("connector_id", connectorId).is("external_id", null).is("split_parent_id", null);
 
   const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
 
@@ -679,11 +681,11 @@ export async function mergeConnectorTransactions(
   // whose sheet content CHANGED re-keys, so the old version is removed and the new
   // one re-imported uncategorized — the intended "changes reflect" behaviour.)
   const incoming = new Set(externalIds);
-  const allExisting: Array<{ id: string; external_id: string | null }> = [];
+  const allExisting: Array<{ id: string; external_id: string | null; split_parent_id: string | null }> = [];
   for (let page = 0; ; page += 1000) {
     const { data, error } = await supabase
       .from("transactions")
-      .select("id, external_id")
+      .select("id, external_id, split_parent_id")
       .eq("org_id", orgId)
       .eq("connector_id", connectorId)
       .range(page, page + 999);
@@ -693,6 +695,10 @@ export async function mergeConnectorTransactions(
     if (batch.length < 1000) break;
   }
   const staleIds = allExisting
+    // Never mirror-delete app-generated split children (synthetic external_id, not in
+    // the sheet). If a parent's own row disappears it's deleted here and its children
+    // cascade away via the split_parent_id FK — so no orphans either way.
+    .filter((r) => r.split_parent_id == null)
     .filter((r) => !(r.external_id && incoming.has(r.external_id as string)))
     .map((r) => r.id as string);
   for (let i = 0; i < staleIds.length; i += 500) {
