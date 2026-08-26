@@ -465,6 +465,20 @@ export interface Database {
         Insert: Omit<Database["public"]["Tables"]["sync_jobs"]["Row"], "id" | "created_at" | "updated_at" | "status" | "attempts" | "max_attempts" | "run_after" | "locked_at" | "locked_by" | "last_error" | "result" | "stream" | "cursor" | "processed" | "advance_checkpoint"> & Partial<Pick<Database["public"]["Tables"]["sync_jobs"]["Row"], "status" | "attempts" | "max_attempts" | "run_after" | "stream" | "cursor" | "processed" | "advance_checkpoint">>;
         Update: Partial<Database["public"]["Tables"]["sync_jobs"]["Row"]>;
       };
+      sheet_sync_rows: {
+        Row: {
+          id: number;
+          job_id: string;
+          org_id: string;
+          connector_id: string;
+          row_index: number;
+          external_id: string;
+          payload: Json;
+          created_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["sheet_sync_rows"]["Row"], "id" | "created_at">;
+        Update: Partial<Database["public"]["Tables"]["sheet_sync_rows"]["Insert"]>;
+      };
     };
     Functions: {
       claim_sync_jobs: {

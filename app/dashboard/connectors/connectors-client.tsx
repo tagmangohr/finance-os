@@ -1010,7 +1010,10 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
     setSyncingId(connector.id);
 
     try {
-      if (connector.type in SYNC_ENDPOINTS) {
+      // Gateways AND link connectors (Google Sheet / Excel) go through the
+      // background job queue — timeout-proof at any volume (100k+ rows). Sheets
+      // parse+stage then apply server-side in chunks; the poll shows progress.
+      if (connector.type in SYNC_ENDPOINTS || connector.type === "google_sheets" || connector.type === "excel") {
         const res = await fetch("/api/connectors/backfill", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1101,10 +1104,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // so this stays fast no matter how far behind (or how many connectors) we have.
   // Live-sync a link connector (Google Sheets / online Excel): re-read the URL
   // and mirror it. No date range — the whole sheet IS the dataset.
+  // Link connectors (Google Sheet / Excel) sync through the BACKGROUND job queue —
+  // parse+stage once, then apply server-side in chunks — so a 100k+ sheet never
+  // times out. Returns immediately; the progress bar polls until it's done.
   const handleLinkSync = async (connector: Connector) => {
     setSyncingId(connector.id);
     try {
-      const res = await fetch("/api/connectors/link", {
+      const res = await fetch("/api/connectors/backfill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ connector_id: connector.id, org_id: orgId }),
@@ -1113,16 +1119,13 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         const b = await res.json().catch(() => null);
         throw new Error((b as { error?: string } | null)?.error ?? `Request failed (${res.status})`);
       }
-      const data = await res.json() as { synced?: number; fetched?: number; warning?: string };
-      setActiveConnectors((prev) =>
-        prev.map((c) => (c.id === connector.id ? { ...c, last_synced_at: new Date().toISOString() } : c))
-      );
-      if (data.warning) toast.warning(data.warning);
-      else toast.success(`Synced ${data.synced ?? 0} row${data.synced === 1 ? "" : "s"} from the link`);
+      toast.message("Syncing your sheet in the background — you can keep working.");
+      await pollBackfill(connector.id);
     } catch (err) {
       if (!isAbortError(err)) toast.error(`Sync failed: ${err instanceof Error ? err.message : "Unknown error"}`);
     } finally {
       setSyncingId(null);
+      setSyncProgress(null);
     }
   };
 

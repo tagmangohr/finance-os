@@ -315,7 +315,7 @@ function collectSettled(
   return { transactions, warnings };
 }
 
-function toInsertRows(
+export function toInsertRows(
   orgId: string,
   connectorId: string,
   transactions: NormalizedTransaction[]

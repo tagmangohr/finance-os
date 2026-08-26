@@ -2,17 +2,18 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
-import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
+import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import { refreshMercuryBalances } from "@/lib/expenses/mercury-balances";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
-import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
+import { isLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
 import type { Database } from "@/lib/supabase/types";
 
-export const maxDuration = 60;
+// 300s: parsing + staging large link-connector sheets (100k+ rows) runs here.
+export const maxDuration = 300;
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
@@ -61,8 +62,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const outcomes = await Promise.allSettled(
     (connectors as ConnectorRow[]).map(async (c) => {
       if (isLinkConnector(c.type)) {
-        await syncLinkConnector(supabase, c);
-        invalidateOrg(c.org_id);
+        // Parse+stage the sheet, then let the background worker apply it in chunks
+        // (scales to 100k+). NOT a synchronous merge — that would block the cron and
+        // time out on a large sheet. The per-org rebuild inside the job refreshes the
+        // cache, so no invalidateOrg needed here.
+        await enqueueLinkSheetSync(supabase, c);
         links++;
         return;
       }

@@ -9,6 +9,7 @@ import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import type { NormalizedTransaction } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
+import { isLinkConnector, stageLinkSheet } from "@/lib/connectors/links";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
 
 type SupabaseLike = Awaited<ReturnType<typeof createServiceClient>>;
@@ -93,6 +94,55 @@ export async function enqueueBackfill(
   const { error } = await supabase.from("sync_jobs").insert(rows);
   if (error) throw new Error(`Failed to enqueue backfill: ${error.message}`);
   return rows.length;
+}
+
+/**
+ * Enqueue a scalable link-connector (Google Sheet / Excel) sync: parse the source
+ * ONCE + bulk-load it into staging (heavy — must run in a ≥300s context, e.g. the
+ * backfill route's after() or the nightly cron), then create a resumable job that
+ * the worker drains server-side (delete → apply-in-chunks → per-org rebuild). Returns
+ * the job id. The caller may kick the worker cron so processing starts promptly.
+ *
+ * The job is created FIRST in a non-claimable 'staging' phase (run_after in the
+ * future) so the worker can't grab it mid-parse; once staged it flips to 'delete'
+ * and becomes claimable.
+ */
+export async function enqueueLinkSheetSync(
+  supabase: SupabaseLike,
+  connector: ConnectorRow
+): Promise<string> {
+  const nowIso = new Date().toISOString();
+  const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const { data: jobRow, error } = await supabase
+    .from("sync_jobs")
+    .insert({
+      org_id: connector.org_id,
+      connector_id: connector.id,
+      type: connector.type,
+      window_from: nowIso,
+      window_to: nowIso,
+      stream: "staging",
+      run_after: future,
+    })
+    .select("id")
+    .single();
+  if (error || !jobRow) throw new Error(`Failed to enqueue sheet sync: ${error?.message ?? "no row"}`);
+  const jobId = (jobRow as { id: string }).id;
+
+  try {
+    const total = await stageLinkSheet(supabase, jobId, connector);
+    await supabase
+      .from("sync_jobs")
+      .update({ stream: "delete", run_after: new Date().toISOString(), result: { total }, updated_at: new Date().toISOString() })
+      .eq("id", jobId);
+  } catch (e) {
+    // Mark the job failed (visible) instead of leaving it stuck in 'staging'.
+    await supabase.from("sync_jobs").update({
+      status: "failed", last_error: (e instanceof Error ? e.message : "Sheet staging failed").slice(0, 500), updated_at: new Date().toISOString(),
+    }).eq("id", jobId);
+    throw e;
+  }
+  return jobId;
 }
 
 /**
@@ -403,6 +453,64 @@ async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, conn
   }
 }
 
+/**
+ * Scalable link-connector (sheet/Excel) sync. The row parse + staging already ran
+ * (in the backfill route), so this job just drives the DB-side phases across cron
+ * passes: delete-absent → apply staged rows in row-cursor chunks → per-org rollup
+ * rebuild. Everything is server-side (no data over the wire) and idempotent, so a
+ * 100k+ sheet completes across many bounded passes without ever timing out.
+ */
+async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
+  const APPLY_LIMIT = 5000; // rows per server-side chunk (rollups suppressed → fast)
+  const requeue = (extra: Record<string, unknown>) =>
+    supabase.from("sync_jobs").update({
+      attempts: 0, locked_at: null, locked_by: null, status: "pending",
+      run_after: new Date().toISOString(), updated_at: new Date().toISOString(), ...extra,
+    }).eq("id", job.id);
+  const phase = (job.stream as "delete" | "apply" | "rebuild" | null) ?? "delete";
+  try {
+    if (phase === "delete") {
+      const { error } = await supabase.rpc("sheet_delete_absent" as never,
+        { p_job: job.id, p_org: connector.org_id, p_conn: connector.id } as never);
+      if (error) throw new Error(error.message);
+      await requeue({ stream: "apply", cursor: "0", processed: 0 });
+      return "progress";
+    }
+    if (phase === "apply") {
+      const offset = Number(job.cursor ?? 0);
+      const { data: applied, error } = await supabase.rpc("apply_sheet_chunk" as never,
+        { p_job: job.id, p_offset: offset, p_limit: APPLY_LIMIT } as never);
+      if (error) throw new Error(error.message);
+      const { count: total } = await supabase
+        .from("sheet_sync_rows").select("id", { count: "exact", head: true }).eq("job_id", job.id);
+      const newOffset = offset + APPLY_LIMIT;
+      const processed = (job.processed ?? 0) + (Number(applied) || 0);
+      if (newOffset < (total ?? 0)) { await requeue({ stream: "apply", cursor: String(newOffset), processed }); return "progress"; }
+      await requeue({ stream: "rebuild", cursor: null, processed });
+      return "progress";
+    }
+    if (phase === "rebuild") {
+      // Recompute THIS org's rollups once (triggers were suppressed during
+      // delete+apply), clear staging, mark the connector synced + the job done.
+      const { error } = await supabase.rpc("rebuild_org_rollups" as never, { p_org: connector.org_id } as never);
+      if (error) throw new Error(error.message);
+      await supabase.from("sheet_sync_rows").delete().eq("job_id", job.id);
+      await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connector.id);
+      await supabase.from("sync_jobs").update({
+        status: "done", cursor: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
+      }).eq("id", job.id);
+      return "done";
+    }
+    // Unknown/not-ready phase (e.g. a 'staging' job that somehow got claimed) —
+    // leave it for the next pass rather than mis-processing it.
+    return "progress";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    await finishJob(supabase, job, { ok: false, error: message, permanent: false });
+    return job.attempts >= job.max_attempts ? "failed" : "progress";
+  }
+}
+
 /** Process one legacy (whole-window) job for a low-volume connector. */
 async function processLegacyJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
   try {
@@ -476,6 +584,7 @@ export async function drainSyncJobs(
           return "failed";
         }
         if (job.type === "subs") return processSubsBackfill(supabase, job, connector);
+        if (isLinkConnector(connector.type)) return processSheetJob(supabase, job, connector);
         return isResumable(connector.type)
           ? processResumableChunk(supabase, job, connector)
           : processLegacyJob(supabase, job, connector);

@@ -5,7 +5,8 @@ import type { createServiceClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 import type { NormalizedTransaction, CsvColumnMapping } from "@/lib/normalizer";
 import { parseCsvFile, parseExcelFile, autoDetectMapping, extractWorksheet, buildTabTransactions, suggestTabSpec, type TabParseSpec } from "@/lib/connectors/csv-parser";
-import { replaceConnectorTransactions, mergeConnectorTransactions } from "@/lib/connectors/sync";
+import { replaceConnectorTransactions, mergeConnectorTransactions, toInsertRows } from "@/lib/connectors/sync";
+import { enrichRowsWithFx } from "@/lib/fx/rates";
 
 /** Per-tab import config stored on a google_sheets connector: config.tabs[].
  *  Beyond destination (import/ledger) it carries the parse spec so bank statements
@@ -318,4 +319,48 @@ export async function syncLinkConnector(
     supabase, connector.org_id, connector.id, transactions
   );
   return { inserted, fetched: transactions.length };
+}
+
+/**
+ * SCALABLE PATH (google_sheets / excel): parse the source ONCE and bulk-load the
+ * normalized, FX-enriched insert rows into the sheet_sync_rows staging table keyed
+ * by jobId. No transaction-table triggers fire here (staging is a plain table), so
+ * this stays fast even for 100k+ rows. The background job (processSheetJob) then
+ * applies the staged rows server-side in chunks. Idempotent per job (clears any
+ * prior staging for the same jobId first, so a retried parse never double-stages).
+ * Returns the number of rows staged. `raw` is dropped from the payload to keep
+ * staging lean — sheet rows don't need the raw source blob.
+ */
+export async function stageLinkSheet(
+  supabase: SupabaseLike,
+  jobId: string,
+  connector: ConnectorRow
+): Promise<number> {
+  const transactions = await fetchLinkTransactions(connector);
+  const rows = toInsertRows(connector.org_id, connector.id, transactions);
+  await enrichRowsWithFx(rows as Parameters<typeof enrichRowsWithFx>[0]);
+
+  await supabase.from("sheet_sync_rows").delete().eq("job_id", jobId);
+
+  const staged = rows
+    .filter((r) => r.external_id)
+    .map((r, i) => {
+      const rec = { ...(r as Record<string, unknown>) };
+      delete rec.raw; // keep staging lean; apply RPC doesn't carry raw
+      return {
+        job_id: jobId,
+        org_id: connector.org_id,
+        connector_id: connector.id,
+        row_index: i,
+        external_id: r.external_id as string,
+        payload: rec,
+      };
+    });
+
+  const CHUNK = 1000;
+  for (let i = 0; i < staged.length; i += CHUNK) {
+    const { error } = await supabase.from("sheet_sync_rows").insert(staged.slice(i, i + CHUNK) as never);
+    if (error) throw new Error(`Sheet staging failed: ${error.message}`);
+  }
+  return staged.length;
 }

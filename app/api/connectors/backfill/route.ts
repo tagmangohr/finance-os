@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { parseSyncDateRange } from "@/lib/api/validation";
-import { enqueueBackfill, enqueueIncremental } from "@/lib/connectors/jobs";
+import { enqueueBackfill, enqueueIncremental, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
+import { isLinkConnector } from "@/lib/connectors/links";
+import { createServiceClient } from "@/lib/supabase/server";
 
-export const maxDuration = 30;
+// Link connectors parse + STAGE the whole sheet in the background (after()), which
+// can take a while for 100k+ rows — the background phase runs within this budget.
+export const maxDuration = 300;
 
 /**
  * POST /api/connectors/backfill
@@ -25,11 +29,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "connector_id and org_id are required" }, { status: 400 });
   }
 
-  const range = parseSyncDateRange(from_date, to_date);
-  if ("error" in range) return range.error;
-
   const auth = await requireConnectorAccess(connectorId, { orgId });
   if (isAuthFailure(auth)) return auth.error;
+
+  // ── Link connectors (Google Sheet / Excel): parse+stage in the background, then
+  //    a resumable job applies the staged rows server-side in chunks (scales to
+  //    100k+). Dates are irrelevant (the whole sheet is the source of truth). ──
+  if (isLinkConnector(auth.connector.type)) {
+    // Parse+stage the sheet then enqueue the resumable apply job — in the background
+    // (300s budget). Returns immediately; the client polls the queue for progress.
+    // The job appears within ~200ms, well before the poll's first ~2.5s check.
+    const cronSecret = process.env.CRON_SECRET;
+    const workerUrl = `${req.nextUrl.origin}/api/cron/process-sync-jobs`;
+    after(async () => {
+      const svc = await createServiceClient();
+      try {
+        // Full connector row (config.sheet_url / tabs) — auth.connector is a partial.
+        const { data: fullConn, error: cErr } = await svc
+          .from("connectors").select("*").eq("id", connectorId).eq("org_id", auth.connector.org_id).single();
+        if (cErr || !fullConn) throw new Error(cErr?.message ?? "Connector not found");
+        await enqueueLinkSheetSync(svc, fullConn);
+        if (cronSecret) { try { await fetch(workerUrl, { headers: { authorization: `Bearer ${cronSecret}` } }); } catch { /* cron will pick it up */ } }
+      } catch (e) {
+        console.error("[backfill] sheet enqueue failed:", e instanceof Error ? e.message : e);
+      }
+    });
+    return NextResponse.json({ enqueued: 1 });
+  }
+
+  const range = parseSyncDateRange(from_date, to_date);
+  if ("error" in range) return range.error;
 
   try {
     // incremental=true → "catch up to now" (one resumable job, advances the
