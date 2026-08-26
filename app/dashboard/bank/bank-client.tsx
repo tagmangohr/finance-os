@@ -139,6 +139,15 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const [cardFilter, setCardFilter] = useState<string>("all");
   const [page, setPage] = useState(0);
 
+  // ── Multi-select + bulk categorize ──────────────────────────────────────────
+  // Selection is a Set of ids that PERSISTS across pages (so you can page through
+  // and keep adding), but is cleared whenever the filter set changes (below), since
+  // those ids may no longer be in view.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkSlug, setBulkSlug] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
+
   // Server-driven transaction table: the page ships only aggregates (a few KB); the
   // rows are fetched here one bounded page at a time, so the ledger can grow without
   // limit. Debounce the search so typing doesn't fire a request per keystroke.
@@ -292,6 +301,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   // Rows are the server page; pagination is driven by the server total.
   const pageRows = rows;
   const pageCount = Math.max(1, Math.ceil(total / PAGE));
+  const visibleIds = pageRows.map((t) => t.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selected.has(id));
 
   async function assign(id: string, slug: string) {
     if (!slug) return;
@@ -311,6 +323,78 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       setMsg(e instanceof Error ? e.message : "Failed to categorize");
     } finally {
       setSavingId(null);
+    }
+  }
+
+  // Reset the selection whenever the filter/search/date range changes — the
+  // previously-selected ids may no longer match what's shown. (Page changes do NOT
+  // clear it, so cross-page selection is preserved.)
+  useEffect(() => {
+    setSelected(new Set());
+    setBulkSlug("");
+  }, [q, filter, statusFilter, accountFilter, cardFilter, data.period.from, data.period.to]);
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
+  function toggleVisible(visibleIds: string[], allSelected: boolean) {
+    setSelected((prev) => {
+      const n = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => n.delete(id));
+      else visibleIds.forEach((id) => n.add(id));
+      return n;
+    });
+  }
+
+  // Extend the selection to EVERY row matching the current filter (not just the
+  // visible page), fetched as a small id-only list so it scales past the page size.
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    try {
+      const params = new URLSearchParams({
+        from: data.period.from, to: data.period.to,
+        view: filter, status: statusFilter, account: accountFilter, card: cardFilter, search: q,
+      });
+      const res = await fetch(`/api/bank/transaction-ids?${params.toString()}`);
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed to select all");
+      setSelected(new Set<string>(j.ids ?? []));
+      if (j.capped) setMsg(`Selected the first ${Number(j.cap).toLocaleString("en-IN")} matching transactions — the filter matched more, so narrow it to reach the rest.`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to select all");
+    } finally {
+      setSelectingAll(false);
+    }
+  }
+
+  // Apply one category to every selected transaction in a single request. remember
+  // is false: a hand-picked batch spans arbitrary counterparties, so we touch ONLY
+  // the rows the user selected (no counterparty rule / no propagation).
+  async function applyBulk() {
+    if (!bulkSlug || selected.size === 0) return;
+    setBulkSaving(true);
+    try {
+      const res = await fetch("/api/expenses/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [...selected], slug: bulkSlug, remember: false }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed");
+      const label = categories.find((c) => c.slug === bulkSlug)?.label ?? bulkSlug;
+      setMsg(`Categorized ${Number(j.assigned ?? selected.size).toLocaleString("en-IN")} transaction(s) as “${label}”.`);
+      setSelected(new Set());
+      setBulkSlug("");
+      await fetchRows();   // refresh the visible page
+      router.refresh();    // refresh the aggregates (cards/charts/totals)
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to categorize");
+    } finally {
+      setBulkSaving(false);
     }
   }
 
@@ -476,9 +560,64 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
           </div>
         }
       >
+        {/* Bulk action bar — appears once anything is selected. Set one category
+            for the whole selection in a single action. */}
+        {selected.size > 0 && (
+          <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/[0.07] px-3 py-2 backdrop-blur-sm animate-enter">
+            <span className="text-xs font-semibold text-primary">{selected.size.toLocaleString("en-IN")} selected</span>
+            {total > visibleIds.length && selected.size < total && (
+              <button
+                onClick={selectAllMatching}
+                disabled={selectingAll}
+                className="text-[11px] text-primary underline underline-offset-2 hover:opacity-80 disabled:opacity-50"
+              >
+                {selectingAll ? "Selecting…" : `Select all ${total.toLocaleString("en-IN")} matching`}
+              </button>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <select
+                value={bulkSlug}
+                onChange={(e) => setBulkSlug(e.target.value)}
+                disabled={bulkSaving}
+                className="rounded-md border border-border bg-background px-2 py-1 text-xs outline-none max-w-[180px] disabled:opacity-50"
+              >
+                <option value="" disabled>Set category…</option>
+                {(["expense", "income", "excluded"] as const).map((grp) => (
+                  <optgroup key={grp} label={grp[0].toUpperCase() + grp.slice(1)}>
+                    {(grouped[grp] ?? []).map((c) => <option key={c.slug} value={c.slug}>{c.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <button
+                onClick={applyBulk}
+                disabled={!bulkSlug || bulkSaving}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {bulkSaving ? "Applying…" : `Apply to ${selected.size.toLocaleString("en-IN")}`}
+              </button>
+              <button
+                onClick={() => { setSelected(new Set()); setBulkSlug(""); }}
+                disabled={bulkSaving}
+                className="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium hover:border-border/60 disabled:opacity-50"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead><tr className="text-left text-muted-foreground border-b border-border/50">
+              <th className="py-1.5 font-medium w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Select all on this page"
+                  className="size-3.5 cursor-pointer align-middle accent-[hsl(var(--primary))]"
+                  checked={allVisibleSelected}
+                  ref={(el) => { if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected; }}
+                  onChange={() => toggleVisible(visibleIds, allVisibleSelected)}
+                />
+              </th>
               <th className="py-1.5 font-medium">Date</th>
               <th className="font-medium">Time (IST)</th>
               <th className="font-medium">Counterparty</th>
@@ -495,9 +634,18 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={13} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
+                <tr><td colSpan={14} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
               ) : pageRows.map((t) => (
-                <tr key={t.id} className={cn("border-b border-border/30", needsReview(t) && "bg-rose-500/[0.03]")}>
+                <tr key={t.id} className={cn("border-b border-border/30", selected.has(t.id) ? "bg-primary/[0.06]" : needsReview(t) && "bg-rose-500/[0.03]")}>
+                  <td className="py-1.5">
+                    <input
+                      type="checkbox"
+                      aria-label="Select transaction"
+                      className="size-3.5 cursor-pointer align-middle accent-[hsl(var(--primary))]"
+                      checked={selected.has(t.id)}
+                      onChange={() => toggleOne(t.id)}
+                    />
+                  </td>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME) : "—"}</td>
                   <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>

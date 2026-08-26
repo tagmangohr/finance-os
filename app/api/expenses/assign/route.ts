@@ -8,6 +8,9 @@ import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// A bulk "select all matching" assign can carry up to 10k ids → ~50 chunked
+// updates server-side; give it headroom well past the default budget.
+export const maxDuration = 60;
 
 /**
  * POST /api/expenses/assign — manually (re)categorize one or more bank transactions.

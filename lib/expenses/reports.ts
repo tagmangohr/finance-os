@@ -176,6 +176,47 @@ export type BankTxnFilters = {
 
 export type BankTxnPage = { rows: BankTxn[]; total: number; page: number; pageSize: number };
 
+// A PostgREST query builder, typed loosely because count/rows/id/update builders
+// have different result types but share exactly these predicate calls.
+export type BankFilterBuilder = {
+  eq: (c: string, v: string) => BankFilterBuilder;
+  gte: (c: string, v: string) => BankFilterBuilder;
+  lte: (c: string, v: string) => BankFilterBuilder;
+  ilike: (c: string, v: string) => BankFilterBuilder;
+  or: (v: string) => BankFilterBuilder;
+};
+
+/**
+ * The single source of truth for the Bank transaction-table filter predicates.
+ * Shared by the paginated table read (getBankTransactions), the "select all
+ * matching" id fetch, and any bulk mutation over the filtered set — so what the
+ * user sees, selects, and bulk-edits can never drift apart. Applies org + bank
+ * ledger + date range + split-parent hiding, then the optional status/account/
+ * card/category/view/search filters.
+ */
+export function applyBankTxnFilters(
+  q: BankFilterBuilder,
+  orgId: string,
+  from: string,
+  to: string,
+  f: Pick<BankTxnFilters, "status" | "account" | "card" | "category" | "view" | "search">
+): BankFilterBuilder {
+  let out = q.eq("org_id", orgId).eq("ledger", "bank").gte("transaction_date", from).lte("transaction_date", to);
+  // Hide split PARENTS — their child parts are shown as rows instead.
+  out = out.eq("is_split_parent", "false");
+  if (f.status && f.status !== "all") out = out.eq("status", f.status);
+  if (f.account && f.account !== "all") out = out.eq("account_type", f.account);
+  if (f.card && f.card !== "all") out = out.eq("card_last4", f.card);
+  if (f.category && f.category !== "all") out = out.eq("category", f.category);
+  if (f.view === "expense" || f.view === "income" || f.view === "excluded") out = out.eq("pnl_treatment", f.view);
+  else if (f.view === "review") out = out.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized,and(category_source.eq.ai,category_confidence.lt.0.6)");
+  if (f.search && f.search.trim()) {
+    const term = f.search.trim().replace(/[\\%_]/g, (ch) => `\\${ch}`);
+    out = out.ilike("search_text", `%${term}%`);
+  }
+  return out;
+}
+
 /**
  * One page of bank transactions for the table — filtered + searched + paginated in
  * Postgres so the client never loads the whole ledger. Newest first. MUST use the
@@ -196,37 +237,10 @@ export async function getBankTransactions(
   const cols =
     "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id, split_parent_id";
 
-  // Apply the identical filter set to a query builder. Typed loosely because the
-  // count query and the rows query have different builder result types but share
-  // exactly these predicate calls.
-  type FilterBuilder = {
-    eq: (c: string, v: string) => FilterBuilder;
-    gte: (c: string, v: string) => FilterBuilder;
-    lte: (c: string, v: string) => FilterBuilder;
-    ilike: (c: string, v: string) => FilterBuilder;
-    or: (v: string) => FilterBuilder;
-  };
-  const applyFilters = (q: FilterBuilder): FilterBuilder => {
-    let out = q.eq("org_id", orgId).eq("ledger", "bank").gte("transaction_date", from).lte("transaction_date", to);
-    // Hide split PARENTS — their child parts are shown as rows instead.
-    out = out.eq("is_split_parent", "false");
-    if (f.status && f.status !== "all") out = out.eq("status", f.status);
-    if (f.account && f.account !== "all") out = out.eq("account_type", f.account);
-    if (f.card && f.card !== "all") out = out.eq("card_last4", f.card);
-    if (f.category && f.category !== "all") out = out.eq("category", f.category);
-    if (f.view === "expense" || f.view === "income" || f.view === "excluded") out = out.eq("pnl_treatment", f.view);
-    else if (f.view === "review") out = out.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized,and(category_source.eq.ai,category_confidence.lt.0.6)");
-    if (f.search && f.search.trim()) {
-      const term = f.search.trim().replace(/[\\%_]/g, (ch) => `\\${ch}`);
-      out = out.ilike("search_text", `%${term}%`);
-    }
-    return out;
-  };
-
   const countQuery = supabase.from("transactions").select("id", { count: "exact", head: true });
   const rowsQuery = supabase.from("transactions").select(cols);
-  applyFilters(countQuery as unknown as FilterBuilder);
-  applyFilters(rowsQuery as unknown as FilterBuilder);
+  applyBankTxnFilters(countQuery as unknown as BankFilterBuilder, orgId, from, to, f);
+  applyBankTxnFilters(rowsQuery as unknown as BankFilterBuilder, orgId, from, to, f);
 
   const [countRes, rowsRes] = await Promise.all([
     countQuery,
