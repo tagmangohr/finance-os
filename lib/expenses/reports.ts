@@ -27,6 +27,9 @@ export type BankTxn = {
   card_holder: string | null;
   status: string;
   external_id: string | null;
+  // Split feature (087): a child part carries its parent's id here (so the UI can
+  // badge it + offer "Unsplit"). Split PARENTS are filtered out of the list.
+  split_parent_id: string | null;
 };
 
 /**
@@ -61,7 +64,7 @@ type BankAggRow = Pick<
   BankTxn,
   "id" | "transaction_date" | "type" | "amount" | "currency" | "amount_base" | "category"
   | "pnl_treatment" | "category_source" | "category_confidence" | "account_type" | "card_last4" | "card_holder" | "status"
-> & { conn_include_income: boolean; conn_include_expense: boolean };
+> & { conn_include_income: boolean; conn_include_expense: boolean; is_split_parent: boolean };
 
 /** A row needs review if uncategorized or a low-confidence AI guess. Shared by the
  *  aggregate reviewCount and the per-row badge so they always agree. */
@@ -102,7 +105,7 @@ export async function getBankOverview(
       let q = supabase
         .from("transactions")
         .select(
-          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, conn_include_income, conn_include_expense"
+          "id, transaction_date, type, amount, currency, amount_base, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, conn_include_income, conn_include_expense, is_split_parent"
         )
         .eq("org_id", orgId)
         .eq("ledger", "bank")
@@ -151,9 +154,12 @@ export async function getBankOverview(
   const accountTypeSet = new Set<string>();
   const cardSet = new Set<string>();
   let reviewCount = 0;
-  const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.length };
+  const totals = { expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, collections: 0, net: 0, txnCount: transactions.filter((t) => !t.is_split_parent).length };
 
   for (const t of transactions) {
+    // Split PARENTS are containers, not real rows — their child parts carry the
+    // real amounts/categories. Skip them entirely (totals, counts, review).
+    if (t.is_split_parent) continue;
     // Distinct filter options + review backlog are computed over ALL rows (any
     // status), matching the table filters + the "Needs review" badge/metric.
     if (t.account_type) accountTypeSet.add(t.account_type);
@@ -243,7 +249,7 @@ export async function getBankTransactions(
   const pageSize = Math.min(200, Math.max(1, f.pageSize ?? 50));
 
   const cols =
-    "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id";
+    "id, transaction_date, transaction_at, type, amount, currency, amount_base, counterparty_name, description, category, pnl_treatment, category_source, category_confidence, account_type, card_last4, card_holder, status, external_id, split_parent_id";
 
   // Apply the identical filter set to a query builder. Typed loosely because the
   // count query and the rows query have different builder result types but share
@@ -257,6 +263,8 @@ export async function getBankTransactions(
   };
   const applyFilters = (q: FilterBuilder): FilterBuilder => {
     let out = q.eq("org_id", orgId).eq("ledger", "bank").gte("transaction_date", from).lte("transaction_date", to);
+    // Hide split PARENTS — their child parts are shown as rows instead.
+    out = out.eq("is_split_parent", "false");
     if (f.status && f.status !== "all") out = out.eq("status", f.status);
     if (f.account && f.account !== "all") out = out.eq("account_type", f.account);
     if (f.card && f.card !== "all") out = out.eq("card_last4", f.card);

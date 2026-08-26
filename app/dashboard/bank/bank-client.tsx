@@ -7,6 +7,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Landmark, Search, Download, Sparkles, Wand2, TrendingUp, TrendingDown,
   Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X, ChevronRight,
+  Scissors, Undo2, Plus, Trash2,
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -183,6 +184,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   );
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Split editor: divide one bank txn into N parts that total the original exactly.
+  const [splitRow, setSplitRow] = useState<BankTxn | null>(null);
+  const [splitParts, setSplitParts] = useState<{ amount: string; category: string }[]>([]);
+  const [savingSplit, setSavingSplit] = useState(false);
+  const [unsplittingId, setUnsplittingId] = useState<string | null>(null);
+
   function openEdit(t: BankTxn) {
     setEditRow(t);
     setEditForm({
@@ -218,6 +225,56 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
       setMsg(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSavingEdit(false);
+    }
+  }
+
+  function openSplit(t: BankTxn) {
+    setSplitRow(t);
+    setSplitParts([{ amount: "", category: "" }, { amount: "", category: "" }]);
+  }
+
+  async function saveSplit() {
+    if (!splitRow) return;
+    setSavingSplit(true);
+    try {
+      const res = await fetch("/api/bank/split", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transactionId: splitRow.id,
+          parts: splitParts.map((p) => ({ amount: Number(p.amount), category: p.category })),
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed to split");
+      setSplitRow(null);
+      await fetchRows();
+      router.refresh();
+      setMsg(`Split into ${j.parts} parts.`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to split");
+    } finally {
+      setSavingSplit(false);
+    }
+  }
+
+  async function unsplit(t: BankTxn) {
+    setUnsplittingId(t.id);
+    try {
+      const res = await fetch("/api/bank/unsplit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transactionId: t.split_parent_id ?? t.id }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed to unsplit");
+      await fetchRows();
+      router.refresh();
+      setMsg("Split removed — original restored.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to unsplit");
+    } finally {
+      setUnsplittingId(null);
     }
   }
 
@@ -491,14 +548,37 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                       </span>
                     )}
                   </td>
-                  <td className="text-right">
-                    <button
-                      onClick={() => openEdit(t)}
-                      title="Edit fields"
-                      className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent"
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
+                  <td className="text-right whitespace-nowrap">
+                    {t.split_parent_id ? (
+                      <span className="inline-flex items-center gap-1">
+                        <span className="rounded bg-violet-500/10 text-violet-600 px-1.5 py-0.5 text-[10px] font-medium">part</span>
+                        <button
+                          onClick={() => unsplit(t)}
+                          disabled={unsplittingId === t.id}
+                          title="Undo split — restores the original transaction"
+                          className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent disabled:opacity-40"
+                        >
+                          <Undo2 className="size-3.5" />
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-0.5">
+                        <button
+                          onClick={() => openSplit(t)}
+                          title="Split into parts"
+                          className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent"
+                        >
+                          <Scissors className="size-3.5" />
+                        </button>
+                        <button
+                          onClick={() => openEdit(t)}
+                          title="Edit fields"
+                          className="p-1 rounded text-muted-foreground/60 hover:text-foreground hover:bg-accent"
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -575,6 +655,84 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                 {savingEdit ? "Saving…" : "Save"}
               </button>
             </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      {/* Split editor */}
+      <Dialog.Root open={splitRow != null} onOpenChange={(o) => !o && setSplitRow(null)}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[150]" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-[520px] bg-card border border-border rounded-xl z-[151] shadow-2xl focus:outline-none">
+            {splitRow && (() => {
+              const original = Math.round(Number(splitRow.amount) * 100) / 100;
+              const sum = Math.round(splitParts.reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
+              const remaining = Math.round((original - sum) * 100) / 100;
+              const allValid = splitParts.length >= 2 && splitParts.every((p) => Number(p.amount) > 0 && p.category) && remaining === 0;
+              return (
+                <>
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-border">
+                    <div className="min-w-0">
+                      <h3 className="text-[14px] font-semibold">Split transaction</h3>
+                      <p className="text-[11px] text-muted-foreground truncate">{splitRow.counterparty_name ?? splitRow.description ?? "—"} · {splitRow.currency} {original.toLocaleString("en-IN")}</p>
+                    </div>
+                    <Dialog.Close className="p-1 rounded hover:bg-accent flex-shrink-0"><X className="size-4" /></Dialog.Close>
+                  </div>
+                  <div className="p-5 space-y-2 max-h-[52vh] overflow-auto">
+                    {splitParts.map((p, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          type="number" inputMode="decimal" value={p.amount} placeholder="Amount"
+                          onChange={(e) => setSplitParts((a) => a.map((x, j) => (j === i ? { ...x, amount: e.target.value } : x)))}
+                          className="w-28 h-9 px-2 rounded-lg border border-border bg-background text-[13px] tabular-nums outline-none focus:border-primary"
+                        />
+                        <select
+                          value={p.category}
+                          onChange={(e) => setSplitParts((a) => a.map((x, j) => (j === i ? { ...x, category: e.target.value } : x)))}
+                          className="flex-1 h-9 rounded-lg border border-border bg-background px-2 text-[13px] outline-none focus:border-primary"
+                        >
+                          <option value="" disabled>Select category…</option>
+                          {(["expense", "income", "excluded"] as const).map((grp) => (
+                            <optgroup key={grp} label={grp[0].toUpperCase() + grp.slice(1)}>
+                              {(grouped[grp] ?? []).map((c) => <option key={c.slug} value={c.slug}>{c.label}</option>)}
+                            </optgroup>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => setSplitParts((a) => (a.length > 2 ? a.filter((_, j) => j !== i) : a))}
+                          disabled={splitParts.length <= 2} title="Remove part"
+                          className="p-1.5 rounded text-muted-foreground/60 hover:text-destructive disabled:opacity-30"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setSplitParts((a) => (a.length < 10 ? [...a, { amount: "", category: "" }] : a))}
+                      disabled={splitParts.length >= 10}
+                      className="inline-flex items-center gap-1 text-[12px] text-primary hover:underline disabled:opacity-40"
+                    >
+                      <Plus className="size-3.5" /> Add part
+                    </button>
+                  </div>
+                  <div className="px-5 py-3 border-t border-border space-y-2">
+                    <div className="flex items-center justify-between text-[12px]">
+                      <span className="text-muted-foreground">Remaining to allocate</span>
+                      <span className={cn("tabular-nums font-medium", remaining === 0 ? "text-emerald-600" : remaining < 0 ? "text-destructive" : "text-foreground")}>
+                        {splitRow.currency} {remaining.toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Dialog.Close className="flex-1 h-9 rounded-lg border border-border text-[13px] hover:bg-accent">Cancel</Dialog.Close>
+                      <button onClick={saveSplit} disabled={!allValid || savingSplit} className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary/90 disabled:opacity-50">
+                        {savingSplit ? "Splitting…" : "Split"}
+                      </button>
+                    </div>
+                    {remaining !== 0 && <p className="text-[11px] text-muted-foreground/70">Parts must total exactly {splitRow.currency} {original.toLocaleString("en-IN")} (over/under is not allowed).</p>}
+                  </div>
+                </>
+              );
+            })()}
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>

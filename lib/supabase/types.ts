@@ -332,12 +332,17 @@ export interface Database {
           // (raw IS NOT NULL) — never written directly, only read.
           raw: Json | null;
           has_raw: boolean;
+          // Split feature (087): a "split parent" is the original row, kept but
+          // excluded (its children carry the real categorized amounts); a child
+          // points at its parent via split_parent_id.
+          is_split_parent: boolean;
+          split_parent_id: string | null;
           created_at: string;
         };
         // New multi-currency columns + transaction_at + raw + subscription_id are
         // optional on insert (nullable, filled by the sync layer) so existing
         // inserters don't break. has_raw is generated → omitted from Insert entirely.
-        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder">>;
+        Insert: Omit<Database["public"]["Tables"]["transactions"]["Row"], "id" | "created_at" | "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "has_raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder" | "is_split_parent" | "split_parent_id"> & Partial<Pick<Database["public"]["Tables"]["transactions"]["Row"], "amount_base" | "base_currency" | "fx_rate" | "transaction_at" | "subscription_id" | "raw" | "ledger" | "pnl_treatment" | "category_source" | "account_type" | "card_last4" | "card_holder" | "is_split_parent" | "split_parent_id">>;
         Update: Partial<Database["public"]["Tables"]["transactions"]["Insert"]>;
       };
       bank_account_balances: {
