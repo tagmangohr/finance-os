@@ -7,6 +7,7 @@ import type { NormalizedTransaction, CsvColumnMapping } from "@/lib/normalizer";
 import { parseCsvFile, parseExcelFile, autoDetectMapping, extractWorksheet, buildTabTransactions, suggestTabSpec, type TabParseSpec } from "@/lib/connectors/csv-parser";
 import { replaceConnectorTransactions, mergeConnectorTransactions, toInsertRows } from "@/lib/connectors/sync";
 import { enrichRowsWithFx } from "@/lib/fx/rates";
+import { deriveCounterparty } from "@/lib/connectors/counterparty";
 
 /** Per-tab import config stored on a google_sheets connector: config.tabs[].
  *  Beyond destination (import/ledger) it carries the parse spec so bank statements
@@ -274,6 +275,11 @@ export async function fetchLinkTransactions(
           rows.push({
             ...t,
             ledger,
+            // Bank/sheet statements rarely have a counterparty column — the party is
+            // inside the remark. Derive it when absent so rows aren't left blank.
+            // Never overrides an explicitly-mapped counterparty; doesn't affect the
+            // external_id (hash of raw), so this can't re-key or lose categorization.
+            counterparty_name: t.counterparty_name ?? deriveCounterparty(t.description),
             // Tag bank/sales rows with the tab name so each synced source is a
             // filterable "account"/source on its page.
             account_type: ledger === "bank" || ledger === "sales" ? tab.name : (t.account_type ?? null),
