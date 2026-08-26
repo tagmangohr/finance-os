@@ -322,7 +322,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 className={cn(
                   "text-right px-3 py-2 num align-top border-l border-border/60",
                   !sticky && col.key === "__total__" && "bg-muted/30",
-                  sticky && `${footerBg} z-[7]`
+                  // Footer rows (Net Profit / Net Margin): the number cells must
+                  // ALSO be position:sticky — otherwise the inline `bottom` offset
+                  // is inert and only the left label pins while the figures scroll
+                  // past and overlap. `sticky` here = the vertical-bottom pin; they
+                  // still scroll horizontally with the month columns (no left set).
+                  sticky && `sticky ${footerBg} z-[7]`
                 )}
                 onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                 onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
