@@ -56,14 +56,36 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createServiceClient();
   const rawBody = await req.text();
 
+  // ── Svix signature material, parsed up front so we can disambiguate connectors by
+  //    signature (Brex signs per-connector). Header is space-delimited "v1,<b64>". ──
+  const id = req.headers.get("webhook-id") ?? "";
+  const ts = req.headers.get("webhook-timestamp") ?? "";
+  const sigHeader = req.headers.get("webhook-signature") ?? "";
+  const providedSigs = sigHeader.split(" ").map((p) => (p.includes(",") ? p.split(",")[1] : p));
+  const sigMatches = (secret: string): boolean => {
+    if (!secret || !id || !ts || !sigHeader) return false;
+    try {
+      const secretBytes = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+      const expected = Buffer.from(crypto.createHmac("sha256", secretBytes).update(`${id}.${ts}.${rawBody}`).digest("base64"), "base64");
+      return providedSigs.some((p) => { const a = Buffer.from(p, "base64"); return a.length === expected.length && crypto.timingSafeEqual(a, expected); });
+    } catch { return false; }
+  };
+
+  // Match: ?c=<token> → sole active → SIGNATURE match across active connectors (so a
+  // second Brex connector can't break the first's tokenless webhook — same self-
+  // routing as Mercury) → legacy ?c=<id>.
   const cParam = req.nextUrl.searchParams.get("c");
   const tokenConn = await connectorByToken(supabase, "brex", cParam);
   let connector: { id: string; org_id: string; config: Record<string, unknown> | null } | null =
     tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id, config: tokenConn.config } : null;
   if (!connector) {
     const { data: conns } = await supabase.from("connectors").select("id, org_id, config").eq("type", "brex").eq("status", "active");
-    const list = conns ?? [];
-    connector = (list.length === 1 ? list[0] : null) as { id: string; org_id: string; config: Record<string, unknown> | null } | null;
+    const list = (conns ?? []) as Array<{ id: string; org_id: string; config: Record<string, unknown> | null }>;
+    if (list.length === 1) connector = list[0];
+    else if (list.length > 1) {
+      connector = list.find((c) => sigMatches(decryptConfigSecrets((c.config ?? {}) as Record<string, string>).webhook_secret)) ?? null;
+      if (!connector && cParam) connector = list.find((c) => c.id === cParam) ?? null;
+    }
   }
   if (!connector) {
     await logWebhook(supabase, { outcome: "unmatched", signature_ok: false, event_type: peekType(rawBody) });
@@ -76,10 +98,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, note: "secret not configured" }, { status: 200 });
   }
 
-  // ── Svix-style verification ──
-  const id = req.headers.get("webhook-id") ?? "";
-  const ts = req.headers.get("webhook-timestamp") ?? "";
-  const sigHeader = req.headers.get("webhook-signature") ?? "";
+  // ── Svix-style verification against the matched connector's secret ──
   if (!id || !ts || !sigHeader) {
     await logWebhook(supabase, { outcome: "signature_failed", signature_ok: false, event_type: peekType(rawBody), connector_id: connector.id, org_id: connector.org_id, error: "missing signature headers" });
     return NextResponse.json({ error: "Invalid signature headers" }, { status: 401 });
@@ -90,15 +109,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await logWebhook(supabase, { outcome: "signature_failed", signature_ok: true, event_type: peekType(rawBody), connector_id: connector.id, org_id: connector.org_id, error: `stale timestamp (${skew}s)` });
     return NextResponse.json({ error: "Stale signature" }, { status: 401 });
   }
-  const secretBytes = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
-  const expected = crypto.createHmac("sha256", secretBytes).update(`${id}.${ts}.${rawBody}`).digest("base64");
-  // Header is space-delimited "v1,<b64>" entries — accept if any matches.
-  const provided = sigHeader.split(" ").map((p) => (p.includes(",") ? p.split(",")[1] : p));
-  const ok = provided.some((p) => {
-    const a = Buffer.from(p, "base64"); const b = Buffer.from(expected, "base64");
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  });
-  if (!ok) {
+  if (!sigMatches(secret)) {
     await logWebhook(supabase, { outcome: "signature_failed", signature_ok: false, event_type: peekType(rawBody), connector_id: connector.id, org_id: connector.org_id });
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
