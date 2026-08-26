@@ -5,6 +5,7 @@ import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { getCategories } from "./categories";
+import { getLostDisputesByMonth } from "@/lib/finance/disputes";
 import type { LedgerCategory } from "./types";
 
 export type BankTxn = {
@@ -38,7 +39,6 @@ export type BankTxn = {
  */
 export type BankOverview = {
   categories: LedgerCategory[];
-  monthly: { month: string; expenses: number; otherIncome: number; collections: number; net: number }[];
   totals: {
     expenses: number;
     otherIncome: number;
@@ -49,7 +49,6 @@ export type BankOverview = {
     txnCount: number;
   };
   byCategory: { category: string; label: string; treatment: string; amount: number; count: number }[];
-  byCard: { last4: string; holder: string | null; amount: number; count: number }[];
   accountTypes: string[]; // distinct account_type values (for the Account filter)
   cards: string[];        // distinct card_last4 values (for the Card filter)
   reviewCount: number;    // rows needing review (same predicate as the row badge)
@@ -87,7 +86,7 @@ export async function getBankOverview(
   const periodFrom = opts?.from || fyStartISO(new Date());
   const periodTo = opts?.to || today;
 
-  const [categories, transactions, collectionsByMonth, pgFeesByMonth, runwayRes] = await Promise.all([
+  const [categories, transactions, collectionsByMonth, pgFeesByMonth, lostDisputes, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
     // KEYSET drain (seek by id), NOT offset. Offset pagination re-scans every
     // preceding row per page, so draining a few thousand WIDE bank rows took 10s+
@@ -122,6 +121,9 @@ export async function getBankOverview(
     // PG processing fees per month (the __pg_fees__ line of the P&L category rollup),
     // subtracted from collections too so both pages tie out.
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: periodFrom, p_to: periodTo } as never),
+    // Lost chargebacks per month — netted out of collections so Bank net ties to
+    // the P&L (which now treats them as contra-revenue). Same helper the P&L uses.
+    getLostDisputesByMonth(supabase, orgId, periodFrom, periodTo),
     calculateRunway(orgId, supabase),
   ]);
 
@@ -139,10 +141,13 @@ export async function getBankOverview(
     const key = String(c.month).slice(0, 7);
     if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(c.amount ?? 0));
   }
+  // Lost chargebacks are contra-revenue (money the customer took back) — subtract
+  // them from collections too, matching the P&L's Net Revenue treatment.
+  for (const [key, amt] of Object.entries(lostDisputes)) {
+    if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(amt ?? 0));
+  }
 
-  const monthly = new Map<string, { expenses: number; otherIncome: number }>();
   const byCat = new Map<string, { label: string; treatment: string; amount: number; count: number }>();
-  const byCardMap = new Map<string, { holder: string | null; amount: number; count: number }>();
   const accountTypeSet = new Set<string>();
   const cardSet = new Set<string>();
   let reviewCount = 0;
@@ -159,61 +164,36 @@ export async function getBankOverview(
     // but never counted as expense/income/excluded.
     if (t.status !== "completed" && t.status !== "refunded") continue;
     const amt = baseAmt(t);
-
-    // Per-card spend (net of refunds): any posted row that carries a card.
-    if (t.card_last4) {
-      const signed = t.type === "debit" ? amt : -amt;
-      const c = byCardMap.get(t.card_last4) ?? { holder: t.card_holder, amount: 0, count: 0 };
-      c.amount += signed; c.count += 1;
-      if (!c.holder && t.card_holder) c.holder = t.card_holder;
-      byCardMap.set(t.card_last4, c);
-    }
-    const key = t.transaction_date.slice(0, 7);
-    const m = monthly.get(key) ?? { expenses: 0, otherIncome: 0 };
     const treatment = t.pnl_treatment ?? "uncategorized";
 
     if (treatment === "expense") {
       // Direction-aware: debit = spend (+), credit = reversal/refund (−).
       const signed = t.type === "debit" ? amt : -amt;
-      totals.expenses += signed; m.expenses += signed;
+      totals.expenses += signed;
       const slug = t.category ?? "uncategorized";
       const c = byCat.get(slug) ?? { label: labelBySlug.get(slug) ?? slug, treatment, amount: 0, count: 0 };
       c.amount += signed; c.count += 1; byCat.set(slug, c);
     } else if (treatment === "income") {
       // credit = income (+), debit = clawback (−).
       const signed = t.type === "credit" ? amt : -amt;
-      totals.otherIncome += signed; m.otherIncome += signed;
+      totals.otherIncome += signed;
     } else if (treatment === "excluded") {
       totals.excluded += amt;
     } else {
       totals.uncategorizedCount += 1;
     }
-    monthly.set(key, m);
   }
 
   for (const v of collMap.values()) totals.collections += v;
   totals.net = totals.collections + totals.otherIncome - totals.expenses;
-
-  const months = Array.from(new Set([...monthly.keys(), ...collMap.keys()])).sort();
-  const monthlySeries = months.map((month) => {
-    const m = monthly.get(month) ?? { expenses: 0, otherIncome: 0 };
-    const collections = collMap.get(month) ?? 0;
-    return { month, expenses: m.expenses, otherIncome: m.otherIncome, collections, net: collections + m.otherIncome - m.expenses };
-  });
 
   const byCategory = Array.from(byCat.entries())
     .map(([category, v]) => ({ category, label: v.label, treatment: v.treatment, amount: v.amount, count: v.count }))
     .filter((c) => Math.abs(c.amount) > 0.5) // drop fully-reversed (net ~0) categories
     .sort((a, b) => b.amount - a.amount);
 
-  const byCard = Array.from(byCardMap.entries())
-    .map(([last4, v]) => ({ last4, holder: v.holder, amount: v.amount, count: v.count }))
-    .sort((a, b) => b.amount - a.amount);
-
   return {
     categories,
-    byCard,
-    monthly: monthlySeries,
     totals,
     byCategory,
     accountTypes: Array.from(accountTypeSet).sort(),
@@ -233,6 +213,7 @@ export type BankTxnFilters = {
   status?: string;                    // completed | pending | failed | refunded
   account?: string;                   // account_type
   card?: string;                      // card_last4
+  category?: string;                  // exact category slug (category-drill drawer)
   view?: "all" | "expense" | "income" | "excluded" | "review";
   page?: number;                      // 0-based
   pageSize?: number;
@@ -275,6 +256,7 @@ export async function getBankTransactions(
     if (f.status && f.status !== "all") out = out.eq("status", f.status);
     if (f.account && f.account !== "all") out = out.eq("account_type", f.account);
     if (f.card && f.card !== "all") out = out.eq("card_last4", f.card);
+    if (f.category && f.category !== "all") out = out.eq("category", f.category);
     if (f.view === "expense" || f.view === "income" || f.view === "excluded") out = out.eq("pnl_treatment", f.view);
     else if (f.view === "review") out = out.or("pnl_treatment.is.null,pnl_treatment.eq.uncategorized,and(category_source.eq.ai,category_confidence.lt.0.6)");
     if (f.search && f.search.trim()) {

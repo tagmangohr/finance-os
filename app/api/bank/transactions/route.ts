@@ -28,6 +28,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     status: sp.get("status") ?? undefined,
     account: sp.get("account") ?? undefined,
     card: sp.get("card") ?? undefined,
+    category: sp.get("category") ?? undefined,
     view: (["all", "expense", "income", "excluded", "review"].includes(view ?? "") ? view : "all") as BankTxnFilters["view"],
     page: Math.max(0, num(sp.get("page"), 0)),
     pageSize: num(sp.get("pageSize"), 50),

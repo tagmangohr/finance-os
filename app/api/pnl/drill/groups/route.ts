@@ -59,6 +59,29 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
   }
 
+  // Lost chargebacks — not in the pnl_drill_groups RPC (dispute is excluded there);
+  // group directly by the customer who charged back. Small set, direct query is fine.
+  if (key === "disputes_lost") {
+    const { data: drows, error: derr } = await supabase
+      .from("transactions")
+      .select("counterparty_name, amount, amount_base, type")
+      .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
+      .or("metadata->>dispute_status.ilike.*lost*,status.eq.failed")
+      .gte("transaction_date", from).lte("transaction_date", to)
+      .limit(5000);
+    if (derr) return NextResponse.json({ error: derr.message }, { status: 500 });
+    const m = new Map<string, { amount: number; count: number }>();
+    for (const r of (drows ?? []) as { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string }[]) {
+      const name = (r.counterparty_name ?? "—") || "—";
+      const base = Number(r.amount_base ?? r.amount) || 0; // disputes are debits → positive loss
+      const e = m.get(name) ?? { amount: 0, count: 0 };
+      e.amount += base; e.count += 1; m.set(name, e);
+    }
+    const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count }))
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
+  }
+
   const { data, error } = await supabase.rpc("pnl_drill_groups" as never, {
     p_org: org, p_key: key, p_from: from, p_to: to, p_limit: LIMIT + 1,
   } as never);

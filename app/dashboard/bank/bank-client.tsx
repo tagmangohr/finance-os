@@ -6,7 +6,7 @@ import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Landmark, Search, Download, Sparkles, Wand2, TrendingUp, TrendingDown,
-  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X,
+  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X, ChevronRight,
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -49,10 +49,80 @@ const IST_TIME = { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit",
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
 
+// ─── Category drill drawer (click an "Expenses by category" row) ───────────────
+function CategoryDrillDrawer({
+  drill, onClose, from, to,
+}: {
+  drill: { slug: string; label: string; amount: number; count: number } | null;
+  onClose: () => void;
+  from: string;
+  to: string;
+}) {
+  const [rows, setRows] = useState<BankTxn[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const open = drill != null;
+
+  useEffect(() => {
+    if (!open || !drill) return;
+    let cancelled = false;
+    setLoading(true);
+    setRows([]);
+    const params = new URLSearchParams({
+      from, to, category: drill.slug, view: "expense", status: "all", page: "0", pageSize: "100",
+    });
+    fetch(`/api/bank/transactions?${params.toString()}`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) { setRows(d.rows ?? []); setTotal(d.total ?? 0); } })
+      .catch(() => { if (!cancelled) setRows([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, drill, from, to]);
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(o) => !o && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[150]" />
+        <Dialog.Content className="fixed right-0 top-0 h-full w-full sm:w-[480px] bg-card border-l border-border z-[151] shadow-2xl flex flex-col focus:outline-none">
+          <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
+            <div className="min-w-0">
+              <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">{drill?.label ?? ""}</Dialog.Title>
+              <p className="text-[12px] text-muted-foreground mt-0.5">Expense transactions in range</p>
+            </div>
+            <Dialog.Close className="h-7 w-7 rounded-md hover:bg-muted flex items-center justify-center flex-shrink-0"><X className="h-4 w-4" /></Dialog.Close>
+          </div>
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${(drill?.count ?? 0).toLocaleString("en-IN")} transaction${(drill?.count ?? 0) === 1 ? "" : "s"}`}</span>
+            <span className="num text-[13px] font-semibold text-foreground">{inr(drill?.amount ?? 0)}</span>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-10 rounded-lg bg-muted/50 animate-pulse" />)}</div>}
+            {!loading && rows.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">No transactions.</p>}
+            {!loading && rows.map((t) => (
+              <div key={t.id} className="px-4 py-2 flex items-center gap-3 border-b border-border/40">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] text-foreground truncate">{t.counterparty_name ?? t.description ?? "—"}</p>
+                  <p className="text-[11px] text-muted-foreground">{formatDate(t.transaction_date)}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
+                </div>
+                <p className={cn("num text-[12.5px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
+                  {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}
+                </p>
+              </div>
+            ))}
+            {!loading && total > rows.length && (
+              <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the first {rows.length} of {total.toLocaleString("en-IN")}.</p>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 export function BankClient({ data, hasBankConnector }: { data: BankOverview; hasBankConnector: boolean }) {
   const router = useRouter();
   const { navigate } = useNavProgress();
-  const { totals, categories, byCategory, byCard, monthly, runway, accountTypes, cards, reviewCount } = data;
+  const { totals, categories, byCategory, runway, accountTypes, cards, reviewCount } = data;
   const [qInput, setQInput] = useState(""); // immediate input value
   const [q, setQ] = useState("");           // debounced term used for fetching
   const [filter, setFilter] = useState<Filter>("all");
@@ -96,6 +166,8 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
+  // Category drill drawer (click an "Expenses by category" row → its transactions).
+  const [catDrill, setCatDrill] = useState<{ slug: string; label: string; amount: number; count: number } | null>(null);
 
   // Inline field editor (date / counterparty / description / amount / type).
   const [editRow, setEditRow] = useState<BankTxn | null>(null);
@@ -219,7 +291,6 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
   }
 
   const maxCat = Math.max(1, ...byCategory.map((c) => c.amount));
-  const maxCard = Math.max(1, ...byCard.map((c) => Math.abs(c.amount)));
   // reviewCount comes from the server aggregate (computed over ALL rows in range),
   // matching the row badge + "Needs review" filter.
 
@@ -271,80 +342,30 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         <MetricCard title="Needs review" value={reviewCount.toLocaleString("en-IN")} icon={<AlertTriangle className="size-4" />} severity={reviewCount > 0 ? "warning" : undefined} subtitle="Uncategorized or low-confidence (all statuses)" />
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-3 animate-enter-1">
-        {/* Expenses by category */}
-        <SectionCard title="Expenses by category" subtitle="Categorized outflows in range">
-          {byCategory.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-6 text-center">No categorized expenses yet — run auto-categorize or classify transactions below.</p>
-          ) : (
-            <div className="space-y-1.5 max-h-64 overflow-auto">
-              {byCategory.map((c) => (
-                <div key={c.category} className="flex items-center gap-2 text-xs">
-                  <div className="w-32 shrink-0 truncate">{c.label}</div>
-                  <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full rounded-full bg-amber-500/70" style={{ width: `${(c.amount / maxCat) * 100}%` }} />
-                  </div>
-                  <div className="w-20 text-right tabular-nums">{inr(c.amount, true)}</div>
-                  <div className="w-8 text-right tabular-nums text-muted-foreground">{c.count}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
-
-        {/* Monthly P&L */}
-        <SectionCard title="Monthly P&L" subtitle="Net PG collections vs expenses vs net">
-          <div className="max-h-64 overflow-auto">
-            <table className="w-full text-xs">
-              <thead><tr className="text-left text-muted-foreground border-b border-border/50 sticky top-0 bg-card">
-                <th className="py-1.5 font-medium">Month</th>
-                <th className="font-medium text-right">Collections</th>
-                <th className="font-medium text-right">Other inc.</th>
-                <th className="font-medium text-right">Expenses</th>
-                <th className="font-medium text-right">Net</th>
-              </tr></thead>
-              <tbody>
-                {monthly.length === 0 ? (
-                  <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">No data yet.</td></tr>
-                ) : monthly.map((m) => (
-                  <tr key={m.month} className="border-b border-border/30">
-                    <td className="py-1.5">{m.month}</td>
-                    <td className="text-right tabular-nums">{inr(m.collections, true)}</td>
-                    <td className="text-right tabular-nums text-emerald-600">{m.otherIncome ? inr(m.otherIncome, true) : "—"}</td>
-                    <td className="text-right tabular-nums text-amber-600">{m.expenses ? inr(m.expenses, true) : "—"}</td>
-                    <td className={cn("text-right tabular-nums font-medium", m.net >= 0 ? "text-emerald-600" : "text-rose-600")}>{inr(m.net, true)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </SectionCard>
-      </div>
-
-      {/* Spend by card */}
-      {byCard.length > 0 && (
-        <SectionCard title="Spend by card" subtitle="Net card spend (swipes − refunds) in range · click to filter">
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1.5">
-            {byCard.map((c) => (
+      {/* Expenses by category — full width, click a row to drill into its transactions */}
+      <SectionCard title="Expenses by category" subtitle="Categorized outflows in range · click a category to see its transactions" className="animate-enter-1">
+        {byCategory.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-6 text-center">No categorized expenses yet — run auto-categorize or classify transactions below.</p>
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-x-8 gap-y-0.5">
+            {byCategory.map((c) => (
               <button
-                key={c.last4}
-                onClick={() => { setCardFilter(c.last4); setPage(0); }}
-                className={cn("flex items-center gap-2 text-xs rounded-md px-1.5 py-1 text-left hover:bg-muted/50", cardFilter === c.last4 && "bg-muted")}
+                key={c.category}
+                onClick={() => setCatDrill({ slug: c.category, label: c.label, amount: c.amount, count: c.count })}
+                className="group flex items-center gap-3 text-xs rounded-md px-2 py-1.5 text-left hover:bg-muted/60 transition-colors"
               >
-                <div className="w-36 shrink-0 truncate">
-                  <span className="tabular-nums">•• {c.last4}</span>
-                  {c.holder && <span className="text-muted-foreground"> · {c.holder.split("@")[0]}</span>}
+                <div className="w-36 shrink-0 truncate font-medium text-foreground/90">{c.label}</div>
+                <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div className="h-full rounded-full bg-amber-500/70" style={{ width: `${(c.amount / maxCat) * 100}%` }} />
                 </div>
-                <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
-                  <div className="h-full rounded-full bg-sky-500/70" style={{ width: `${(Math.abs(c.amount) / maxCard) * 100}%` }} />
-                </div>
-                <div className="w-20 text-right tabular-nums">{inr(c.amount, true)}</div>
-                <div className="w-8 text-right tabular-nums text-muted-foreground">{c.count}</div>
+                <div className="w-24 text-right tabular-nums font-semibold text-foreground">{inr(c.amount, true)}</div>
+                <div className="w-10 text-right tabular-nums text-muted-foreground">{c.count}</div>
+                <ChevronRight className="size-3.5 text-muted-foreground/40 group-hover:text-muted-foreground shrink-0" />
               </button>
             ))}
           </div>
-        </SectionCard>
-      )}
+        )}
+      </SectionCard>
 
       {/* Transactions */}
       <SectionCard
@@ -544,6 +565,9 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
+
+      {/* Category drill drawer */}
+      <CategoryDrillDrawer drill={catDrill} onClose={() => setCatDrill(null)} from={data.period.from} to={data.period.to} />
     </div>
   );
 }

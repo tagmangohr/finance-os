@@ -153,6 +153,19 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
+  // The last two rows (Net Profit + Net Margin) are pinned to the bottom of the
+  // scroll box as a sticky footer. Net Margin sits at bottom:0; Net Profit sits
+  // directly above it, offset by the measured height of the margin row (it can
+  // grow when MoM/YoY delta sub-lines appear, so measure rather than hard-code).
+  const FOOTER_IDS = React.useMemo(() => new Set(["net_profit", "net_margin"]), []);
+  const bodyRows = data.rows.filter((r) => !FOOTER_IDS.has(r.id));
+  const footerRows = data.rows.filter((r) => FOOTER_IDS.has(r.id));
+  const marginRowRef = React.useRef<HTMLTableRowElement>(null);
+  const [marginH, setMarginH] = React.useState(38);
+  React.useLayoutEffect(() => {
+    if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
+  }, [data, change]);
+
   // Display columns: month/year columns + a Total column (except annual mode).
   const displayCols: PnlColumn[] = React.useMemo(() => {
     if (data.mode === "annual") return data.columns;
@@ -210,6 +223,98 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const ModeBtn = ({ m, label }: { m: string; label: string }) => (
     <button onClick={() => goMode(m)} className={cn("h-8 px-3 text-[12px] font-medium transition-colors", data.mode === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
   );
+
+  // Renders one P&L row. `stickyBottom` (px, or 0) pins it as a sticky footer row
+  // — the cells (not the <tr>, which doesn't stick reliably) get position:sticky +
+  // an OPAQUE background so scrolling body rows never bleed through, and a z-index
+  // above the body's sticky left column.
+  const renderRow = (row: PnlRow, stickyBottom?: number) => {
+    const strong = row.emphasis === "strong";
+    const isCm = row.emphasis === "cm";
+    const isTotalRow = row.kind === "total";
+    const isMargin = row.kind === "margin";
+    const isNetProfit = row.id === "net_profit";
+    const sticky = stickyBottom !== undefined;
+    // Opaque band colour for the pinned rows (translucent tints would bleed).
+    const footerBg = isTotalRow ? "bg-muted" : "bg-card";
+    return (
+      <React.Fragment key={row.id}>
+        {row.section && !sticky && (
+          <tr>
+            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
+          </tr>
+        )}
+        <tr
+          ref={row.id === "net_margin" ? marginRowRef : undefined}
+          className={cn(
+            "border-b border-border/50",
+            !sticky && strong && "bg-muted/40",
+            !sticky && isCm && "bg-primary/[0.055]",
+            !sticky && isTotalRow && "bg-primary/[0.09]",
+            isNetProfit && "border-t-2 border-border"
+          )}
+        >
+          <td
+            style={sticky ? { bottom: stickyBottom } : undefined}
+            className={cn(
+              // Sticky label column MUST be opaque or right-scrolled month
+              // values bleed through the translucent tints.
+              "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
+              (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
+              sticky && `${footerBg} z-[8]`,
+              strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
+              isTotalRow && "font-bold",
+              row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+            )}
+          >{row.label}</td>
+          {displayCols.map((col) => {
+            const v = aggVal(row, col);
+            const pct = pctVal(row, col);
+            const delta = deltaVal(row, col);
+            const drillable = Boolean(row.drill) && v !== 0;
+            const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
+            const valueCls = cn(
+              "inline-block leading-tight",
+              drillable && "hover:underline decoration-dotted cursor-pointer",
+              isTotalRow && (v < 0 ? "text-destructive font-bold" : "text-success font-bold"),
+              (strong || isCm) && !isTotalRow && "font-semibold"
+            );
+            const inner = isMargin
+              ? (pct == null ? "–" : <span className={pct < 0 ? "text-destructive" : "text-foreground"}>{pct.toFixed(1)}%</span>)
+              : cellText(row, v);
+            return (
+              <td
+                key={col.key}
+                style={sticky ? { bottom: stickyBottom } : undefined}
+                className={cn(
+                  "text-right px-3 py-2 num align-top border-l border-border/60",
+                  !sticky && col.key === "__total__" && "bg-muted/30",
+                  sticky && `${footerBg} z-[7]`
+                )}
+                onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                onMouseLeave={() => setTipCb(null)}
+              >
+                {drillable ? (
+                  <button type="button" onClick={() => openDrill(row, col)} className={valueCls}>{inner}</button>
+                ) : (
+                  <span className={valueCls}>{inner}</span>
+                )}
+                {isCm && pct != null && (
+                  <div className="text-[10px] text-primary/80 mt-0.5">{pct.toFixed(0)}% margin</div>
+                )}
+                {delta != null && (
+                  <span className={cn("flex items-center justify-end gap-0.5 text-[10px] mt-0.5", (delta >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive")}>
+                    {delta >= 0 ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}{Math.abs(delta).toFixed(0)}%
+                  </span>
+                )}
+              </td>
+            );
+          })}
+        </tr>
+      </React.Fragment>
+    );
+  };
 
   return (
     <TipCtx.Provider value={setTipCb}>
@@ -293,86 +398,13 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => {
-                const strong = row.emphasis === "strong";
-                const isCm = row.emphasis === "cm";
-                const isTotalRow = row.kind === "total";
-                const isMargin = row.kind === "margin";
-                const isNetProfit = row.id === "net_profit";
-                return (
-                  <React.Fragment key={row.id}>
-                    {row.section && (
-                      <tr>
-                        <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
-                      </tr>
-                    )}
-                    <tr
-                      className={cn(
-                        "border-b border-border/50",
-                        strong && "bg-muted/40",
-                        isCm && "bg-primary/[0.055]",
-                        isTotalRow && "bg-primary/[0.09]",
-                        isNetProfit && "border-t-2 border-border"
-                      )}
-                    >
-                      <td
-                        className={cn(
-                          // Sticky label column MUST be opaque or right-scrolled month
-                          // values bleed through the translucent tints.
-                          "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
-                          (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
-                          strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
-                          isTotalRow && "font-bold",
-                          row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
-                        )}
-                      >{row.label}</td>
-                      {displayCols.map((col) => {
-                        const v = aggVal(row, col);
-                        const pct = pctVal(row, col);
-                        const delta = deltaVal(row, col);
-                        const drillable = Boolean(row.drill) && v !== 0;
-                        const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
-                        const valueCls = cn(
-                          "inline-block leading-tight",
-                          drillable && "hover:underline decoration-dotted cursor-pointer",
-                          isTotalRow && (v < 0 ? "text-destructive font-bold" : "text-success font-bold"),
-                          (strong || isCm) && !isTotalRow && "font-semibold"
-                        );
-                        const inner = isMargin
-                          ? (pct == null ? "–" : <span className={pct < 0 ? "text-destructive" : "text-foreground"}>{pct.toFixed(1)}%</span>)
-                          : cellText(row, v);
-                        return (
-                          <td
-                            key={col.key}
-                            className={cn(
-                              "text-right px-3 py-2 num align-top border-l border-border/60",
-                              col.key === "__total__" && "bg-muted/30"
-                            )}
-                            onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
-                            onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
-                            onMouseLeave={() => setTipCb(null)}
-                          >
-                            {drillable ? (
-                              <button type="button" onClick={() => openDrill(row, col)} className={valueCls}>{inner}</button>
-                            ) : (
-                              <span className={valueCls}>{inner}</span>
-                            )}
-                            {isCm && pct != null && (
-                              <div className="text-[10px] text-primary/80 mt-0.5">{pct.toFixed(0)}% margin</div>
-                            )}
-                            {delta != null && (
-                              <span className={cn("flex items-center justify-end gap-0.5 text-[10px] mt-0.5", (delta >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive")}>
-                                {delta >= 0 ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}{Math.abs(delta).toFixed(0)}%
-                              </span>
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  </React.Fragment>
-                );
-              })}
+              {bodyRows.map((row) => renderRow(row))}
             </tbody>
+            {footerRows.length > 0 && (
+              <tfoot>
+                {footerRows.map((row) => renderRow(row, row.id === "net_margin" ? 0 : marginH))}
+              </tfoot>
+            )}
           </table>
         </div>
       </div>

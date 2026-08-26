@@ -113,6 +113,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
   } else if (key === "refunds") {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
+  } else if (key === "disputes_lost") {
+    // Lost chargebacks (contra-revenue) — same rule as getLostDisputesByMonth.
+    q = q.eq("ledger", "payments").eq("category", "dispute").or("metadata->>dispute_status.ilike.*lost*,status.eq.failed");
   } else if (key === "__pg_fees__") {
     q = q.in("status", ["completed", "refunded"]).or("metadata->>fee.not.is.null,metadata->>fees.not.is.null");
   } else if (key.startsWith("income:")) {
