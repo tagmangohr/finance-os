@@ -276,5 +276,10 @@ export const getBankOverviewCached = cachedOrgLoader(
     const supabase = await createServiceClient();
     return getBankOverview(orgId, supabase, opts);
   },
-  ["bank-overview"]
+  // The default-view cache key (from/to undefined) is stable across the FY->month
+  // default change, and the cached VALUE embeds period.{from,to} — so the stale
+  // FY-start snapshot would keep being served (Next Data Cache persists across
+  // deploys up to the TTL). Bump the version to orphan the old entries and force a
+  // recompute with the new current-month default.
+  ["bank-overview", "v2-month-default"]
 );
