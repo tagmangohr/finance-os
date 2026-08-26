@@ -1,6 +1,25 @@
 import { parse, isValid } from "date-fns";
 import { BASE_CURRENCY } from "@/lib/utils";
 
+// ─── Counterparty name hygiene ────────────────────────────────────────────────
+
+/**
+ * Canonicalize a vendor/customer name for storage so trivially-different spellings
+ * of the SAME party collapse to one identity everywhere (P&L drill groups, Bank
+ * vendor filter, category rules, vendor propagation). Collapses every run of
+ * whitespace — tabs, newlines, and repeated spaces — to a single space and trims.
+ * e.g. "SWIFT TECHNOLOGY PVT  LTD" (double space) → "SWIFT TECHNOLOGY PVT LTD",
+ * so it no longer shows up as a second, separate payer. Deliberately conservative:
+ * it does NOT change case or strip punctuation (that could merge genuinely distinct
+ * vendors) — only whitespace, which is never semantically meaningful in a name.
+ * Returns null for null/blank so the empty bucket stays empty.
+ */
+export function cleanCounterpartyName(name: string | null | undefined): string | null {
+  if (name == null) return null;
+  const cleaned = String(name).replace(/\s+/g, " ").trim();
+  return cleaned || null;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type NormalizedTransaction = {
