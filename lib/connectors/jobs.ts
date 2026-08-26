@@ -481,11 +481,18 @@ async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connecto
       const { data: applied, error } = await supabase.rpc("apply_sheet_chunk" as never,
         { p_job: job.id, p_offset: offset, p_limit: APPLY_LIMIT } as never);
       if (error) throw new Error(error.message);
-      const { count: total } = await supabase
-        .from("sheet_sync_rows").select("id", { count: "exact", head: true }).eq("job_id", job.id);
+      // Total staged rows is known from staging time (stored on the job's result),
+      // so we don't re-count the staging table on every chunk — at 100k that's ~20
+      // needless round-trips. Fall back to a count only if the total is missing.
+      let total = Number((job.result as { total?: number } | null)?.total);
+      if (!Number.isFinite(total)) {
+        const { count } = await supabase
+          .from("sheet_sync_rows").select("id", { count: "exact", head: true }).eq("job_id", job.id);
+        total = count ?? 0;
+      }
       const newOffset = offset + APPLY_LIMIT;
       const processed = (job.processed ?? 0) + (Number(applied) || 0);
-      if (newOffset < (total ?? 0)) { await requeue({ stream: "apply", cursor: String(newOffset), processed }); return "progress"; }
+      if (newOffset < total) { await requeue({ stream: "apply", cursor: String(newOffset), processed }); return "progress"; }
       await requeue({ stream: "rebuild", cursor: null, processed });
       return "progress";
     }
@@ -494,7 +501,11 @@ async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connecto
       // delete+apply), clear staging, mark the connector synced + the job done.
       const { error } = await supabase.rpc("rebuild_org_rollups" as never, { p_org: connector.org_id } as never);
       if (error) throw new Error(error.message);
-      await supabase.from("sheet_sync_rows").delete().eq("job_id", job.id);
+      // Clear staging via a timeout-free function (a plain PostgREST delete of the
+      // whole staged batch — up to 100k rows — runs under the default 8s cap and
+      // was the source of the "statement timeout" seen after large loads).
+      const { error: cErr } = await supabase.rpc("sheet_cleanup_staging" as never, { p_job: job.id } as never);
+      if (cErr) throw new Error(cErr.message);
       await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connector.id);
       await supabase.from("sync_jobs").update({
         status: "done", cursor: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
