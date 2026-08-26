@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { cachedOrgLoader } from "@/lib/cache/org-cache";
 
 // ─── Subscriptions dashboard data layer ─────────────────────────────────────────
 // All aggregation runs in Postgres (migrations 061-065 RPCs); we never sum rows in JS.
@@ -47,15 +48,23 @@ export async function getSubscriptionsOverview(orgId: string, grace = 1): Promis
   const curMonthStart = `${curMonth}-01`;
   const COHORT_PERIODS = 12;
 
+  // Each query degrades to an empty/zero fallback on error — a single slow or failed
+  // RPC (statement timeout, transient pooler drop) must NEVER blank the whole page;
+  // the section it feeds simply renders empty. (`.rpc` returns {data:null} on a DB
+  // error rather than throwing, but a network-level reject would — `safe` covers both.
+  // Promise.resolve() is needed because the query builder is only PromiseLike.)
+  const safe = <T,>(p: PromiseLike<T>, fallback: T): Promise<T> =>
+    Promise.resolve(p).then((v) => v, () => fallback);
+
   const [statusNow, monthly, renewals, cohortRows, mix, top10, renewOk, renewFail] = await Promise.all([
-    sb.rpc("subscription_status_now", { p_org: orgId, p_grace_months: grace }).then((r) => r.data ?? []),
-    sb.rpc("subscription_monthly_metrics", { p_org: orgId, p_from: fromDate, p_to: toDate, p_grace_months: grace }).then((r) => r.data ?? []),
-    sb.rpc("subscription_renewals_monthly", { p_org: orgId, p_from: fromDate, p_to: toDate }).then((r) => r.data ?? []),
-    sb.rpc("subscription_cohort_retention", { p_org: orgId, p_from: fromDate, p_to: toDate, p_periods: COHORT_PERIODS, p_grace_months: grace }).then((r) => r.data ?? []),
-    sb.rpc("subscription_mix_now", { p_org: orgId, p_grace_months: grace }).then((r) => r.data ?? []),
-    sb.rpc("subscription_list", { p_org: orgId, p_segment: "active", p_grace_months: grace, p_sort: "mrr", p_limit: 10, p_offset: 0 }).then((r) => r.data ?? []),
-    sb.from("transactions").select("*", { count: "exact", head: true }).eq("org_id", orgId).not("subscription_id", "is", null).eq("type", "credit").eq("status", "completed").gte("transaction_date", curMonthStart).then((r) => r.count ?? 0),
-    sb.from("transactions").select("*", { count: "exact", head: true }).eq("org_id", orgId).not("subscription_id", "is", null).eq("type", "credit").eq("status", "failed").gte("transaction_date", curMonthStart).then((r) => r.count ?? 0),
+    safe(sb.rpc("subscription_status_now", { p_org: orgId, p_grace_months: grace }).then((r) => r.data ?? []), []),
+    safe(sb.rpc("subscription_monthly_metrics", { p_org: orgId, p_from: fromDate, p_to: toDate, p_grace_months: grace }).then((r) => r.data ?? []), []),
+    safe(sb.rpc("subscription_renewals_monthly", { p_org: orgId, p_from: fromDate, p_to: toDate }).then((r) => r.data ?? []), []),
+    safe(sb.rpc("subscription_cohort_retention", { p_org: orgId, p_from: fromDate, p_to: toDate, p_periods: COHORT_PERIODS, p_grace_months: grace }).then((r) => r.data ?? []), []),
+    safe(sb.rpc("subscription_mix_now", { p_org: orgId, p_grace_months: grace }).then((r) => r.data ?? []), []),
+    safe(sb.rpc("subscription_list", { p_org: orgId, p_segment: "active", p_grace_months: grace, p_sort: "mrr", p_limit: 10, p_offset: 0 }).then((r) => r.data ?? []), []),
+    safe(sb.from("transactions").select("*", { count: "exact", head: true }).eq("org_id", orgId).not("subscription_id", "is", null).eq("type", "credit").eq("status", "completed").gte("transaction_date", curMonthStart).then((r) => r.count ?? 0), 0),
+    safe(sb.from("transactions").select("*", { count: "exact", head: true }).eq("org_id", orgId).not("subscription_id", "is", null).eq("type", "credit").eq("status", "failed").gte("transaction_date", curMonthStart).then((r) => r.count ?? 0), 0),
   ]);
 
   // ── Current-state segments ──
@@ -163,3 +172,21 @@ export async function getSubscriptionsOverview(orgId: string, grace = 1): Promis
     cohorts, cohortPeriods: COHORT_PERIODS,
   };
 }
+
+/**
+ * Per-org cached subscriptions overview — the same mechanism Bank/Sales use
+ * (unstable_cache, 1h TTL, busted on every sync/categorize write via the org tag).
+ *
+ * WHY: the overview fans out to 8 analytical queries; the monthly-metrics cross-join
+ * alone is O(12 months × subscriptions) — 5s+ at 128k subs and growing. Recomputing
+ * that on EVERY navigation is what pushed the page past the function/DB timeout and
+ * blanked it. Cached, warm loads are served in ms; the heavy compute runs at most
+ * once per hour per org (or right after a sync), which bounds cost as data grows.
+ * The numbers are derived from time (a sub silently lapses to past-due/churned as
+ * days pass), so a 1h staleness is immaterial — the state changes by the day, not
+ * the second. Uses the service client, so it is safe inside unstable_cache.
+ */
+export const getSubscriptionsOverviewCached = cachedOrgLoader(
+  (orgId: string, grace: number = 1) => getSubscriptionsOverview(orgId, grace),
+  ["subscriptions-overview"]
+);

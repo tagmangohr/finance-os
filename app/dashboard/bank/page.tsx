@@ -22,8 +22,8 @@ export default async function BankPage({ searchParams }: { searchParams: Promise
   if (!org) redirect("/auth/login");
   await requireRouteAccess("bank"); // owners/admins, or members granted the page
 
-  // Date-range from the URL (?from=YYYY-MM-DD&to=YYYY-MM-DD); default = current FY
-  // (getBankOverview falls back to fyStartISO when from is undefined).
+  // Date-range from the URL (?from=YYYY-MM-DD&to=YYYY-MM-DD); default = current
+  // calendar month (getBankOverview falls back to monthStartISO when from is undefined).
   const sp = await searchParams;
   const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
   const range = { from: isDate(sp.from) ? sp.from : undefined, to: isDate(sp.to) ? sp.to : undefined };

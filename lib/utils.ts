@@ -79,6 +79,21 @@ export function fyStartISO(ref: Date = new Date()): string {
   return `${month >= 4 ? year : year - 1}-04-01`;
 }
 
+/**
+ * First day (YYYY-MM-DD) of the calendar month that `ref` falls in, computed in IST
+ * (the reporting timezone) so the boundary doesn't shift for late-night UTC. Used as
+ * the default range for operational views (e.g. the Bank ledger) that should open on
+ * the current month, not the whole financial year.
+ */
+export function monthStartISO(ref: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit",
+  }).formatToParts(ref);
+  const year = parts.find((p) => p.type === "year")!.value;
+  const month = parts.find((p) => p.type === "month")!.value; // "01"–"12"
+  return `${year}-${month}-01`;
+}
+
 // Format percentage
 export function formatPercent(value: number, decimals: number = 1): string {
   return `${value >= 0 ? "+" : ""}${value.toFixed(decimals)}%`;

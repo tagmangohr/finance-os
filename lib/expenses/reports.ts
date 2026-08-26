@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { fyStartISO } from "@/lib/utils";
+import { monthStartISO } from "@/lib/utils";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cachedOrgLoader } from "@/lib/cache/org-cache";
@@ -70,8 +70,11 @@ export async function getBankOverview(
   opts?: { from?: string; to?: string }
 ): Promise<BankOverview> {
   const today = new Date().toISOString().slice(0, 10);
-  // Default range = current financial year; overridable via the date-range picker.
-  const periodFrom = opts?.from || fyStartISO(new Date());
+  // Default range = current CALENDAR MONTH (IST); overridable via the date-range
+  // picker. The bank ledger is an operational view — people land on it to see this
+  // month's activity, not the whole FY-to-date. (Runway/burn/cash below use their own
+  // 90-day windows, so this default only scopes the in-range cards.)
+  const periodFrom = opts?.from || monthStartISO(new Date());
   const periodTo = opts?.to || today;
 
   const [categories, aggRes, collectionsByMonth, pgFeesByMonth, lostDisputes, runwayRes] = await Promise.all([
@@ -229,7 +232,9 @@ export async function getBankTransactions(
   f: BankTxnFilters
 ): Promise<BankTxnPage> {
   const today = new Date().toISOString().slice(0, 10);
-  const from = f.from || fyStartISO(new Date());
+  // Default range = current calendar month (IST), matching getBankOverview so the
+  // table and the cards open on the same window.
+  const from = f.from || monthStartISO(new Date());
   const to = f.to || today;
   const page = Math.max(0, f.page ?? 0);
   const pageSize = Math.min(200, Math.max(1, f.pageSize ?? 50));
