@@ -3,7 +3,8 @@ import type { LedgerCategory } from "./types";
 
 // Cheap, high-volume model for structured categorization.
 const MODEL = "claude-haiku-4-5-20251001";
-const BATCH = 40;
+const BATCH = 25;        // smaller batch → responses never truncate (was 40)
+const CONCURRENCY = 4;   // batches in flight at once → clears a backlog in one run
 
 /**
  * Whether the AI layer can run. The key is a placeholder/unset in this project's
@@ -68,44 +69,64 @@ export async function aiCategorize(
     return out;
   }
 
-  for (let i = 0; i < txns.length; i += BATCH) {
-    const chunk = txns.slice(i, i + BATCH);
+  const chunks: AiTxn[][] = [];
+  for (let i = 0; i < txns.length; i += BATCH) chunks.push(txns.slice(i, i + BATCH));
+
+  // Classify one batch. Retries ONCE on a transient failure (rate limit / network /
+  // parse) before giving up — a dropped batch is left null for the next run, never
+  // aborts the whole job. max_tokens is generous so a full batch reply can't be
+  // truncated (a truncated JSON array parses to nothing → the batch would be lost).
+  const processChunk = async (chunk: AiTxn[]): Promise<void> => {
     const user =
       (fewshot ? `Prior human decisions to learn from:\n${fewshot}\n\n` : "") +
       `Categorize each transaction below. Return a JSON array of ` +
       `{"id": string, "slug": string, "confidence": number 0-1}, one per transaction.\n\n` +
       `Transactions:\n${JSON.stringify(chunk)}`;
-
-    try {
-      const resp = await client.messages.create({
-        model: MODEL,
-        max_tokens: 2048,
-        system,
-        messages: [{ role: "user", content: user }],
-      });
-      const block = resp.content.find((b) => b.type === "text");
-      if (!block || block.type !== "text") continue;
-      const parsed = extractJsonArray(block.text);
-      const batchMap = new Map<string, { slug: string; confidence: number }>();
-      for (const row of parsed) {
-        const id = String(row?.id ?? "");
-        const slug = String(row?.slug ?? "");
-        const confidence = Number(row?.confidence);
-        if (id && validSlugs.has(slug)) {
-          const v = { slug, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5 };
-          out.set(id, v);
-          batchMap.set(id, v);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const resp = await client.messages.create({
+          model: MODEL,
+          max_tokens: 4096,
+          system,
+          messages: [{ role: "user", content: user }],
+        });
+        const block = resp.content.find((b) => b.type === "text");
+        if (!block || block.type !== "text") return;
+        const parsed = extractJsonArray(block.text);
+        const batchMap = new Map<string, { slug: string; confidence: number }>();
+        for (const row of parsed) {
+          const id = String(row?.id ?? "");
+          const slug = String(row?.slug ?? "");
+          const confidence = Number(row?.confidence);
+          if (id && validSlugs.has(slug)) {
+            const v = { slug, confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.5 };
+            out.set(id, v);
+            batchMap.set(id, v);
+          }
         }
+        // Persist this batch immediately (if a sink is provided) so progress is
+        // durable even if the function's time budget cuts the run short.
+        if (onBatch && batchMap.size) await onBatch(batchMap);
+        return;
+      } catch {
+        if (attempt === 0) { await new Promise((r) => setTimeout(r, 800)); continue; }
+        return;
       }
-      // Persist this batch immediately (if a sink is provided) so progress is
-      // durable even if the function's time budget cuts the run short.
-      if (onBatch && batchMap.size) await onBatch(batchMap);
-    } catch {
-      // A failed batch (bad key, rate limit, parse error) just leaves that chunk
-      // for manual review — never aborts the whole run.
-      continue;
     }
-  }
+  };
+
+  // Run up to CONCURRENCY batches at once via a shared cursor — cuts a large
+  // backlog to ~1/4 the wall-clock so a single click can clear it before the
+  // function's time budget.
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, async () => {
+      while (next < chunks.length) {
+        const my = chunks[next++];
+        await processChunk(my);
+      }
+    })
+  );
   return out;
 }
 

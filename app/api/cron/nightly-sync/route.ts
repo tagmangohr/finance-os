@@ -201,6 +201,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       try {
         const res = await categorizeBankTransactions(orgId, sb);
         if (res.scanned) console.log(`[cron/nightly-sync] bank categorize org=${orgId} scanned=${res.scanned} system=${res.systemApplied} rule=${res.ruleApplied} ai=${res.aiApplied} remaining=${res.remaining}`);
+        // Bust the org cache so the Bank/P&L aggregates reflect the new categories
+        // (the cron path previously left them stale until the 1h TTL).
+        if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(orgId);
       } catch (e) {
         console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
       }

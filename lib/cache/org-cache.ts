@@ -1,4 +1,4 @@
-import { unstable_cache, revalidateTag } from "next/cache";
+import { unstable_cache, revalidateTag, updateTag } from "next/cache";
 
 /**
  * Per-org data cache.
@@ -41,8 +41,15 @@ export function cachedOrgLoader<A extends unknown[], T>(
 }
 
 /** Bust every cached aggregate for an org (call after a write: sync, categorize).
- *  `"max"` = stale-while-revalidate: the next visit serves cached data instantly
- *  and refreshes in the background, keeping navigation fast. */
-export function invalidateOrg(orgId: string): void {
-  revalidateTag(orgTag(orgId), "max");
+ *  Default `"max"` = stale-while-revalidate: the next visit serves cached data
+ *  instantly and refreshes in the background, keeping navigation fast — right for
+ *  background writes (sync/webhook/cron). Pass `{ immediate: true }` for a
+ *  user-initiated write (e.g. clicking Auto-categorize) so the very next render
+ *  recomputes synchronously and the user sees fresh numbers on the first reload,
+ *  not the second. */
+export function invalidateOrg(orgId: string, opts?: { immediate?: boolean }): void {
+  // updateTag = read-your-writes: the next read in this request/navigation sees
+  // fresh data. revalidateTag(…, "max") = stale-while-revalidate for background writes.
+  if (opts?.immediate) updateTag(orgTag(orgId));
+  else revalidateTag(orgTag(orgId), "max");
 }

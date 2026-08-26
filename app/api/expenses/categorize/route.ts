@@ -24,7 +24,9 @@ export async function POST(): Promise<NextResponse> {
   try {
     const sb = await createServiceClient();
     const result = await categorizeBankTransactions(org.id, sb);
-    invalidateOrg(org.id); // refresh cached P&L / category aggregates
+    // User-initiated → immediate (synchronous) revalidation so the Bank cards +
+    // "Needs review" update on the first reload, not the second.
+    invalidateOrg(org.id, { immediate: true });
     return NextResponse.json({ ok: true, ...result });
   } catch (err) {
     return NextResponse.json(
