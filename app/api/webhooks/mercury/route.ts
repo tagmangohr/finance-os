@@ -58,18 +58,45 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createServiceClient();
   const rawBody = await req.text();
 
-  // Match the Mercury connector: ?c=<token> (new) → sole active → ?c=<id> (legacy).
+  // ── Parse the signature header up front — "t=<sec>,v1=<hex>" over "<t>.<rawBody>".
+  //    We need v1 to disambiguate connectors by signature below. ──
+  const header = req.headers.get("mercury-signature") ?? "";
+  const parts = Object.fromEntries(header.split(",").map((kv) => kv.split("=").map((s) => s.trim()) as [string, string]));
+  const t = parts["t"];
+  const v1 = parts["v1"] ?? "";
+  const sigMatches = (secret: string): boolean => {
+    if (!secret || !t || !v1) return false;
+    try {
+      const a = Buffer.from(v1, "hex");
+      const b = Buffer.from(crypto.createHmac("sha256", secret).update(`${t}.${rawBody}`).digest("hex"), "hex");
+      return a.length === b.length && crypto.timingSafeEqual(a, b);
+    } catch { return false; }
+  };
+
+  // Match the Mercury connector. Order:
+  //   1. ?c=<token>  — explicit per-connector token (the intended multi-account path);
+  //   2. sole active Mercury connector — when there's only one, no token needed;
+  //   3. SIGNATURE match — with >1 Mercury connector and no/stale token, identify the
+  //      owner by which connector's webhook_secret validates THIS request's signature.
+  //      Mercury signs per-connector, so exactly one matches. This is what keeps a
+  //      second Mercury connector from breaking the first one's (tokenless) webhook.
+  //   4. ?c=<id> legacy — old URLs that carried the connector id.
   const cParam = req.nextUrl.searchParams.get("c");
   const tokenConn = await connectorByToken(supabase, "mercury", cParam);
   let connector: { id: string; org_id: string; config: Record<string, unknown> | null } | null =
     tokenConn ? { id: tokenConn.id, org_id: tokenConn.org_id, config: tokenConn.config } : null;
   if (!connector) {
-    let cq = supabase.from("connectors").select("id, org_id, config").eq("type", "mercury").eq("status", "active");
-    if (cParam) cq = cq.eq("id", cParam); // backward-compat: old ?c=<connector id> URLs
-    const { data: conns } = await cq;
-    const list = conns ?? [];
-    connector = (cParam ? list[0] : list.length === 1 ? list[0] : null) as
-      | { id: string; org_id: string; config: Record<string, unknown> | null } | null;
+    const { data: conns } = await supabase
+      .from("connectors").select("id, org_id, config").eq("type", "mercury").eq("status", "active");
+    const list = (conns ?? []) as Array<{ id: string; org_id: string; config: Record<string, unknown> | null }>;
+    if (list.length === 1) {
+      connector = list[0];
+    } else if (list.length > 1) {
+      // Disambiguate by signature (self-routing — survives adding/removing connectors).
+      connector = list.find((c) => sigMatches(decryptConfigSecrets((c.config ?? {}) as Record<string, string>).webhook_secret)) ?? null;
+      // Legacy fallback: an old ?c=<connector id> URL.
+      if (!connector && cParam) connector = list.find((c) => c.id === cParam) ?? null;
+    }
   }
 
   if (!connector) {
@@ -84,19 +111,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ received: true, note: "secret not configured" }, { status: 200 });
   }
 
-  // ── Verify signature: header "t=<sec>,v1=<hex>" over "<t>.<rawBody>" ──
-  const header = req.headers.get("mercury-signature") ?? "";
-  const parts = Object.fromEntries(header.split(",").map((kv) => kv.split("=").map((s) => s.trim()) as [string, string]));
-  const t = parts["t"];
-  const v1 = parts["v1"] ?? "";
+  // ── Verify signature against the matched connector's secret ──
   if (!t || !v1) {
     await logWebhook(supabase, { outcome: "signature_failed", signature_ok: false, event_type: peekType(rawBody), connector_id: connector.id, org_id: connector.org_id, error: "missing t/v1" });
     return NextResponse.json({ error: "Invalid signature header" }, { status: 401 });
   }
-  const expected = crypto.createHmac("sha256", secret).update(`${t}.${rawBody}`).digest("hex");
-  const a = Buffer.from(v1, "hex");
-  const b = Buffer.from(expected, "hex");
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+  if (!sigMatches(secret)) {
     await logWebhook(supabase, { outcome: "signature_failed", signature_ok: false, event_type: peekType(rawBody), connector_id: connector.id, org_id: connector.org_id });
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
