@@ -34,7 +34,7 @@ const TipCtx = React.createContext<(text: string | null, x?: number, y?: number)
 
 // ─── Drill drawer (consolidated by vendor/customer, expandable) ────────────────
 type Group = { name: string; amount: number; txn_count: number };
-type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; fee: number | null };
+type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; email: string | null; phone: string | null; fee: number | null };
 
 const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
 const groupDisplayName = (drillKey: string, name: string) =>
@@ -54,7 +54,7 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
       const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
       fetch(`/api/pnl/drill?${q}`)
         .then((r) => r.json())
-        .then((d) => setTxns(d.rows ?? []))
+        .then((d) => setTxns([...(d.rows ?? [])].sort((a: DrillTxn, b: DrillTxn) => Math.abs(b.amount) - Math.abs(a.amount))))
         .catch(() => setTxns([]))
         .finally(() => setLoading(false));
     }
@@ -71,14 +71,18 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
       {open && (
         <div className="bg-muted/20">
           {loading && <div className="px-4 py-2 space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 rounded" />)}</div>}
-          {txns?.map((t) => (
-            <div key={t.id} className="pl-10 pr-4 py-1.5 flex items-center gap-3 border-t border-border/40">
-              <div className="min-w-0 flex-1">
-                <p className="text-[11.5px] text-muted-foreground">{formatDate(t.transaction_date)}{t.source ? ` · ${t.source}` : ""}{t.status ? ` · ${t.status}` : ""}</p>
+          {txns?.map((t) => {
+            const contact = [t.email, t.phone].filter(Boolean).join(" · ");
+            return (
+              <div key={t.id} className="pl-10 pr-4 py-1.5 flex items-center gap-3 border-t border-border/40">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11.5px] text-muted-foreground">{formatDate(t.transaction_date)}{t.source ? ` · ${t.source}` : ""}{t.status ? ` · ${t.status}` : ""}</p>
+                  {contact && <p className="text-[10.5px] text-muted-foreground/70 truncate">{contact}</p>}
+                </div>
+                <p className="num text-[11.5px] text-foreground flex-shrink-0">{t.fee != null ? moneyFull(t.fee) : formatCurrency(t.amount, t.currency || "INR", false)}</p>
               </div>
-              <p className="num text-[11.5px] text-foreground flex-shrink-0">{t.fee != null ? moneyFull(t.fee) : formatCurrency(t.amount, t.currency || "INR", false)}</p>
-            </div>
-          ))}
+            );
+          })}
           {txns && txns.length === 0 && !loading && <p className="pl-10 pr-4 py-2 text-[11px] text-muted-foreground">No transactions.</p>}
         </div>
       )}
@@ -96,6 +100,9 @@ function DrillDrawer({
   const [groups, setGroups] = React.useState<Group[]>([]);
   const [hasMore, setHasMore] = React.useState(false);
   const [err, setErr] = React.useState<string | null>(null);
+  const [query, setQuery] = React.useState("");
+
+  React.useEffect(() => { if (open) setQuery(""); }, [open, drillKey]);
 
   React.useEffect(() => {
     if (!open || !drillKey) return;
@@ -111,6 +118,10 @@ function DrillDrawer({
   }, [open, drillKey, orgId, from, to]);
 
   const byLabel = drillKey && GATEWAY_KEYS.has(drillKey) ? "gateway" : "vendor / customer";
+  // Groups arrive sorted by value (desc); filter by the displayed name.
+  const shown = query.trim()
+    ? groups.filter((g) => groupDisplayName(drillKey ?? "", g.name).toLowerCase().includes(query.trim().toLowerCase()))
+    : groups;
   return (
     <FloatingPanel
       open={open}
@@ -118,15 +129,16 @@ function DrillDrawer({
       title={title}
       subtitle={`${subtitle} · by ${byLabel}`}
       headerRight={<span className="num text-[13px] font-semibold text-foreground pr-1" title="Total from the P&L rollup">{moneyFull(expectedTotal)}</span>}
+      search={{ value: query, onChange: setQuery, placeholder: `Search ${byLabel}…` }}
     >
       <div className="px-4 py-2 border-b border-border flex items-center justify-between sticky top-0 bg-card/95 backdrop-blur z-[1]">
-        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${groups.length}${hasMore ? "+" : ""} ${groups.length === 1 ? "party" : "parties"}`}</span>
+        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${shown.length}${hasMore && !query ? "+" : ""} ${shown.length === 1 ? "party" : "parties"}`}</span>
       </div>
       {err && <p className="p-4 text-[12px] text-destructive">{err}</p>}
       {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>}
-      {!loading && !err && groups.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">Nothing in this slice.</p>}
-      {!loading && drillKey && groups.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
-      {hasMore && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
+      {!loading && !err && shown.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{query ? "No matches." : "Nothing in this slice."}</p>}
+      {!loading && drillKey && shown.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
+      {hasMore && !query && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
     </FloatingPanel>
   );
 }
@@ -310,7 +322,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   return (
     <TipCtx.Provider value={setTipCb}>
-    <div className="space-y-3 max-w-[1400px]">
+    {/* Full-height flex column so the table's scroll box fills the viewport and its
+        BOTTOM edge is always visible — that's what makes the sticky Net Profit /
+        Net Margin rows actually pin (a max-height box whose bottom sits below the
+        fold, or that doesn't scroll internally, can't show a frozen footer). */}
+    <div className="flex flex-col h-full max-w-[1400px] gap-3">
       <PageHeader title="Profit & Loss" subtitle={`Month-wise P&L · ${data.periodLabel}`}>
         {/* view mode */}
         <div className="inline-flex rounded-lg border border-border overflow-hidden">
@@ -377,9 +393,10 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         </div>
       )}
 
-      {/* grid — own scroll box; the header row (top) + line-item column (left) stay frozen */}
-      <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="overflow-auto max-h-[calc(100vh-215px)]">
+      {/* grid — fills remaining height; header row (top) + line-item column (left)
+          + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
+      <div className="flex-1 min-h-0 rounded-xl border border-border bg-card overflow-hidden">
+        <div className="h-full overflow-auto">
           <table className="w-full border-collapse text-[12.5px]">
             <thead>
               <tr className="border-b-2 border-border">

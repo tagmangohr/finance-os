@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { hasPageAccessForOrg } from "@/lib/org/page-access";
+import { disputeLinkId, fetchLinkedIdentities, resolveDisputeIdentity } from "@/lib/finance/disputes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,20 +60,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
   }
 
-  // Lost chargebacks — not in the pnl_drill_groups RPC (dispute is excluded there);
-  // group directly by the customer who charged back. Small set, direct query is fine.
+  // Lost chargebacks — not in the pnl_drill_groups RPC (dispute is excluded there).
+  // Group by the CUSTOMER who charged back, resolving identity from the linked
+  // charge/payment (Stripe disputes carry no customer directly). Small set.
   if (key === "disputes_lost") {
     const { data: drows, error: derr } = await supabase
       .from("transactions")
-      .select("counterparty_name, amount, amount_base, type")
+      .select("counterparty_name, amount, amount_base, type, metadata")
       .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
       .or("metadata->>dispute_status.ilike.*lost*,status.eq.failed")
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(5000);
     if (derr) return NextResponse.json({ error: derr.message }, { status: 500 });
+    type DRow = { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string; metadata: Record<string, unknown> | null };
+    const rows = (drows ?? []) as DRow[];
+    const linked = await fetchLinkedIdentities(supabase, org, rows.map((r) => disputeLinkId(r.metadata)));
     const m = new Map<string, { amount: number; count: number }>();
-    for (const r of (drows ?? []) as { counterparty_name: string | null; amount: number | null; amount_base: number | null; type: string }[]) {
-      const name = (r.counterparty_name ?? "—") || "—";
+    for (const r of rows) {
+      const name = resolveDisputeIdentity(r, linked).name || "—";
       const base = Number(r.amount_base ?? r.amount) || 0; // disputes are debits → positive loss
       const e = m.get(name) ?? { amount: 0, count: 0 };
       e.amount += base; e.count += 1; m.set(name, e);

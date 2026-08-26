@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { X, GripVertical } from "lucide-react";
+import { X, GripVertical, Search } from "lucide-react";
 
 /**
  * A draggable, resizable floating panel — a non-modal alternative to a slide-in
@@ -14,7 +14,7 @@ import { X, GripVertical } from "lucide-react";
  * Position/size persist while open and re-anchor to the top-right on reopen.
  */
 export function FloatingPanel({
-  open, onClose, title, subtitle, headerRight, children,
+  open, onClose, title, subtitle, headerRight, children, search,
   width = 460, height = 560,
 }: {
   open: boolean;
@@ -23,6 +23,8 @@ export function FloatingPanel({
   subtitle?: string;
   headerRight?: React.ReactNode;
   children: React.ReactNode;
+  /** Optional search bar rendered under the header (filtering is the caller's job). */
+  search?: { value: string; onChange: (v: string) => void; placeholder?: string };
   width?: number;
   height?: number;
 }) {
@@ -113,6 +115,24 @@ export function FloatingPanel({
           </button>
         </div>
       </div>
+
+      {search && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-2 bg-card">
+          <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+          <input
+            value={search.value}
+            onChange={(e) => search.onChange(e.target.value)}
+            placeholder={search.placeholder ?? "Search…"}
+            className="flex-1 bg-transparent text-[12.5px] outline-none placeholder:text-muted-foreground/60"
+            autoFocus
+          />
+          {search.value && (
+            <button onClick={() => search.onChange("")} className="text-muted-foreground/60 hover:text-foreground" title="Clear">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto min-h-0">{children}</div>
 

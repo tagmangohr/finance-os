@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { hasPageAccessForOrg } from "@/lib/org/page-access";
+import { disputeLinkId, fetchLinkedIdentities, resolveDisputeIdentity } from "@/lib/finance/disputes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -69,20 +70,22 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const target = normName(bankParty);
     const { data, error } = await supabase
       .from("transactions")
-      .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type")
+      .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type, metadata")
       .eq("org_id", org).eq("ledger", "bank").eq("pnl_treatment", "income").eq("category", "customer_payment")
       .in("status", ["completed", "refunded"])
       .gte("transaction_date", from).lte("transaction_date", to)
       .limit(20000);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    type BankRow = { id: string; transaction_date: string; counterparty_name: string | null; amount: number | null; amount_base: number | null; source: string | null; status: string | null; category: string | null; type: string };
+    type BankRow = { id: string; transaction_date: string; counterparty_name: string | null; amount: number | null; amount_base: number | null; source: string | null; status: string | null; category: string | null; type: string; metadata: Record<string, unknown> | null };
     const matched = ((data ?? []) as BankRow[]).filter((r) => {
       const n = normName(r.counterparty_name);
       return wantEmpty ? n === "" : n === target;
     });
-    matched.sort((a, b) => (a.transaction_date < b.transaction_date ? 1 : a.transaction_date > b.transaction_date ? -1 : 0));
+    // Largest spend first (item 7).
+    matched.sort((a, b) => Math.abs(Number(b.amount_base ?? b.amount) || 0) - Math.abs(Number(a.amount_base ?? a.amount) || 0));
     const rows = matched.slice(0, LIMIT).map((r) => {
       const base = Number(r.amount_base ?? r.amount ?? 0);
+      const meta = (r.metadata ?? {}) as Record<string, unknown>;
       return {
         id: r.id,
         transaction_date: r.transaction_date,
@@ -93,10 +96,49 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         status: r.status,
         category: r.category,
         type: r.type,
+        email: (meta.email as string | null) ?? null,
+        phone: (meta.phone as string | null) ?? null,
         fee: null,
       };
     });
     return NextResponse.json({ rows, count: matched.length });
+  }
+
+  // ── Expand lost chargebacks, with customer identity resolved from the linked
+  // charge/payment (Stripe disputes carry no customer directly). Grouping (groups
+  // route) keys on the SAME resolved name, so the party filter matches on it too.
+  if (key === "disputes_lost") {
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("id, transaction_date, counterparty_name, amount, amount_base, source, status, category, type, metadata")
+      .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
+      .or("metadata->>dispute_status.ilike.*lost*,status.eq.failed")
+      .gte("transaction_date", from).lte("transaction_date", to)
+      .limit(5000);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    type DRow = { id: string; transaction_date: string; counterparty_name: string | null; amount: number | null; amount_base: number | null; source: string | null; status: string | null; category: string | null; type: string; metadata: Record<string, unknown> | null };
+    const drows = (data ?? []) as DRow[];
+    const linked = await fetchLinkedIdentities(supabase, org, drows.map((r) => disputeLinkId(r.metadata)));
+    const enriched = drows.map((r) => ({ r, id: resolveDisputeIdentity(r, linked) }));
+    const filtered = party == null ? enriched
+      : party === "—" ? enriched.filter((e) => !e.id.name)
+      : enriched.filter((e) => e.id.name === party);
+    filtered.sort((a, b) => Math.abs(Number(b.r.amount_base ?? b.r.amount) || 0) - Math.abs(Number(a.r.amount_base ?? a.r.amount) || 0));
+    const rows = filtered.slice(0, LIMIT).map(({ r, id }) => ({
+      id: r.id,
+      transaction_date: r.transaction_date,
+      counterparty_name: id.name,
+      amount: Number(r.amount_base ?? r.amount ?? 0), // dispute = debit → positive loss
+      currency: "INR",
+      source: r.source,
+      status: r.status,
+      category: r.category,
+      type: r.type,
+      email: id.email,
+      phone: id.phone,
+      fee: null,
+    }));
+    return NextResponse.json({ rows, count: filtered.length });
   }
 
   const cols = "id, transaction_date, counterparty_name, amount, amount_base, currency, fx_rate, source, status, category, type, metadata, ledger";
@@ -113,9 +155,6 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     q = q.eq("type", "credit").eq("ledger", "payments").in("status", ["completed", "refunded"]);
   } else if (key === "refunds") {
     q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
-  } else if (key === "disputes_lost") {
-    // Lost chargebacks (contra-revenue) — same rule as getLostDisputesByMonth.
-    q = q.eq("ledger", "payments").eq("category", "dispute").or("metadata->>dispute_status.ilike.*lost*,status.eq.failed");
   } else if (key === "__pg_fees__") {
     q = q.in("status", ["completed", "refunded"]).or("metadata->>fee.not.is.null,metadata->>fees.not.is.null");
   } else if (key.startsWith("income:")) {
@@ -154,7 +193,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   }
 
-  const { data, count, error } = await q.order("transaction_date", { ascending: false }).limit(LIMIT);
+  // Largest spend first (item 7); amount_base is the INR magnitude.
+  const { data, count, error } = await q.order("amount_base", { ascending: false, nullsFirst: false }).limit(LIMIT);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const raw = (data ?? []) as unknown as Row[];
@@ -167,6 +207,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const signed = isIncome
       ? (r.type === "credit" ? base : -base)
       : (key !== "revenue" && key !== "refunds" && !isFee && r.type === "credit" ? -base : base);
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
     return {
       id: r.id,
       transaction_date: r.transaction_date,
@@ -177,6 +218,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       status: r.status,
       category: r.category,
       type: r.type,
+      email: (meta.email as string | null) ?? null,
+      phone: (meta.phone as string | null) ?? null,
       fee: isFee ? Number(feeInr(r).toFixed(2)) : null,
     };
   });

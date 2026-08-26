@@ -62,7 +62,10 @@ function CategoryDrillDrawer({
   const [rows, setRows] = useState<BankTxn[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
   const open = drill != null;
+
+  useEffect(() => { if (open) setQuery(""); }, [open, drill?.slug]);
 
   useEffect(() => {
     if (!open || !drill) return;
@@ -74,11 +77,22 @@ function CategoryDrillDrawer({
     });
     fetch(`/api/bank/transactions?${params.toString()}`)
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) { setRows(d.rows ?? []); setTotal(d.total ?? 0); } })
+      .then((d) => {
+        if (cancelled) return;
+        // Largest spend first (item 7).
+        const sorted = [...((d.rows ?? []) as BankTxn[])].sort(
+          (a, b) => Math.abs(Number(b.amount_base ?? b.amount) || 0) - Math.abs(Number(a.amount_base ?? a.amount) || 0)
+        );
+        setRows(sorted); setTotal(d.total ?? 0);
+      })
       .catch(() => { if (!cancelled) setRows([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, drill, from, to]);
+
+  const shown = query.trim()
+    ? rows.filter((t) => `${t.counterparty_name ?? ""} ${t.description ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()))
+    : rows;
 
   return (
     <FloatingPanel
@@ -87,13 +101,14 @@ function CategoryDrillDrawer({
       title={drill?.label ?? ""}
       subtitle="Expense transactions in range"
       headerRight={<span className="num text-[13px] font-semibold text-foreground pr-1">{inr(drill?.amount ?? 0)}</span>}
+      search={{ value: query, onChange: setQuery, placeholder: "Search counterparty, memo…" }}
     >
       <div className="px-4 py-2 border-b border-border sticky top-0 bg-card/95 backdrop-blur z-[1]">
-        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${(drill?.count ?? 0).toLocaleString("en-IN")} transaction${(drill?.count ?? 0) === 1 ? "" : "s"}`}</span>
+        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${(query ? shown.length : drill?.count ?? 0).toLocaleString("en-IN")} transaction${(query ? shown.length : drill?.count ?? 0) === 1 ? "" : "s"}`}</span>
       </div>
       {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-10 rounded-lg bg-muted/50 animate-pulse" />)}</div>}
-      {!loading && rows.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">No transactions.</p>}
-      {!loading && rows.map((t) => (
+      {!loading && shown.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{query ? "No matches." : "No transactions."}</p>}
+      {!loading && shown.map((t) => (
         <div key={t.id} className="px-4 py-2 flex items-center gap-3 border-b border-border/40">
           <div className="min-w-0 flex-1">
             <p className="text-[12.5px] text-foreground truncate">{t.counterparty_name ?? t.description ?? "—"}</p>
