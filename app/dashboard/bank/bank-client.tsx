@@ -373,19 +373,22 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
 
   // Apply one category to every selected transaction in a single request. remember
   // is false: a hand-picked batch spans arbitrary counterparties, so we touch ONLY
-  // the rows the user selected (no counterparty rule / no propagation).
-  async function applyBulk() {
-    if (!bulkSlug || selected.size === 0) return;
+  // the rows the user selected (no counterparty rule / no propagation). Accepts an
+  // explicit slug so it can be driven either from the bulk bar OR from changing the
+  // category on any selected row's own dropdown (the natural gesture).
+  async function applyBulk(slugArg?: string) {
+    const slug = slugArg ?? bulkSlug;
+    if (!slug || selected.size === 0) return;
     setBulkSaving(true);
     try {
       const res = await fetch("/api/expenses/assign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: [...selected], slug: bulkSlug, remember: false }),
+        body: JSON.stringify({ ids: [...selected], slug, remember: false }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Failed");
-      const label = categories.find((c) => c.slug === bulkSlug)?.label ?? bulkSlug;
+      const label = categories.find((c) => c.slug === slug)?.label ?? slug;
       setMsg(`Categorized ${Number(j.assigned ?? selected.size).toLocaleString("en-IN")} transaction(s) as “${label}”.`);
       setSelected(new Set());
       setBulkSlug("");
@@ -563,7 +566,7 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         {/* Bulk action bar — appears once anything is selected. Set one category
             for the whole selection in a single action. */}
         {selected.size > 0 && (
-          <div className="sticky top-0 z-20 mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/[0.07] px-3 py-2 backdrop-blur-sm animate-enter">
+          <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 flex flex-wrap items-center gap-2.5 rounded-xl border border-primary/40 bg-card px-4 py-2.5 shadow-2xl shadow-black/20 animate-enter">
             <span className="text-xs font-semibold text-primary">{selected.size.toLocaleString("en-IN")} selected</span>
             {total > visibleIds.length && selected.size < total && (
               <button
@@ -574,35 +577,27 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                 {selectingAll ? "Selecting…" : `Select all ${total.toLocaleString("en-IN")} matching`}
               </button>
             )}
-            <div className="ml-auto flex items-center gap-2">
-              <select
-                value={bulkSlug}
-                onChange={(e) => setBulkSlug(e.target.value)}
-                disabled={bulkSaving}
-                className="rounded-md border border-border bg-background px-2 py-1 text-xs outline-none max-w-[180px] disabled:opacity-50"
-              >
-                <option value="" disabled>Set category…</option>
-                {(["expense", "income", "excluded"] as const).map((grp) => (
-                  <optgroup key={grp} label={grp[0].toUpperCase() + grp.slice(1)}>
-                    {(grouped[grp] ?? []).map((c) => <option key={c.slug} value={c.slug}>{c.label}</option>)}
-                  </optgroup>
-                ))}
-              </select>
-              <button
-                onClick={applyBulk}
-                disabled={!bulkSlug || bulkSaving}
-                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-              >
-                {bulkSaving ? "Applying…" : `Apply to ${selected.size.toLocaleString("en-IN")}`}
-              </button>
-              <button
-                onClick={() => { setSelected(new Set()); setBulkSlug(""); }}
-                disabled={bulkSaving}
-                className="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium hover:border-border/60 disabled:opacity-50"
-              >
-                Clear
-              </button>
-            </div>
+            <div className="h-4 w-px bg-border" />
+            <select
+              value={bulkSlug}
+              onChange={(e) => { const v = e.target.value; setBulkSlug(v); if (v) applyBulk(v); }}
+              disabled={bulkSaving}
+              className="rounded-md border border-border bg-background px-2 py-1 text-xs outline-none max-w-[200px] disabled:opacity-50"
+            >
+              <option value="" disabled>{bulkSaving ? "Applying…" : "Set category for all…"}</option>
+              {(["expense", "income", "excluded"] as const).map((grp) => (
+                <optgroup key={grp} label={grp[0].toUpperCase() + grp.slice(1)}>
+                  {(grouped[grp] ?? []).map((c) => <option key={c.slug} value={c.slug}>{c.label}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <button
+              onClick={() => { setSelected(new Set()); setBulkSlug(""); }}
+              disabled={bulkSaving}
+              className="rounded-md border border-border bg-card px-2 py-1 text-xs font-medium hover:border-border/60 disabled:opacity-50"
+            >
+              Clear
+            </button>
           </div>
         )}
         <div className="overflow-x-auto">
@@ -670,11 +665,18 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                   <td>
                     <select
                       value={t.category ?? ""}
-                      disabled={savingId === t.id}
-                      onChange={(e) => assign(t.id, e.target.value)}
-                      className="rounded-md border border-border bg-background px-1.5 py-0.5 text-xs outline-none max-w-[160px] disabled:opacity-50"
+                      disabled={savingId === t.id || bulkSaving}
+                      onChange={(e) => {
+                        // If this row is part of a multi-selection, changing its
+                        // category applies to the WHOLE selection (the natural
+                        // gesture). Otherwise it's a single-row edit (remembers
+                        // the vendor rule, as before).
+                        if (selected.size > 1 && selected.has(t.id)) applyBulk(e.target.value);
+                        else assign(t.id, e.target.value);
+                      }}
+                      className={cn("rounded-md border bg-background px-1.5 py-0.5 text-xs outline-none max-w-[160px] disabled:opacity-50", selected.size > 1 && selected.has(t.id) ? "border-primary/50" : "border-border")}
                     >
-                      <option value="" disabled>{savingId === t.id ? "Saving…" : "Uncategorized"}</option>
+                      <option value="" disabled>{savingId === t.id ? "Saving…" : bulkSaving && selected.has(t.id) ? "Applying…" : selected.size > 1 && selected.has(t.id) ? `Set for ${selected.size} selected…` : "Uncategorized"}</option>
                       {(["expense", "income", "excluded"] as const).map((grp) => (
                         <optgroup key={grp} label={grp[0].toUpperCase() + grp.slice(1)}>
                           {(grouped[grp] ?? []).map((c) => <option key={c.slug} value={c.slug}>{c.label}</option>)}
