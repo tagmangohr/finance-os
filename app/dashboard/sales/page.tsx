@@ -6,6 +6,7 @@ import { getActiveOrg } from "@/lib/org/active-org";
 import { requireRouteAccess } from "@/lib/org/page-access";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getSalesOverviewCached, hasSalesRows, getSalesSources } from "@/lib/sales/reports";
+import { getSalesViewConfig } from "@/lib/sales/view-config";
 import { SalesClient } from "./sales-client";
 
 /**
@@ -31,11 +32,12 @@ export default async function SalesPage({ searchParams }: { searchParams: Promis
   };
   const sb = await createServiceClient();
 
-  const [data, hasSales, sources] = await Promise.all([
+  const [data, hasSales, sources, viewConfig] = await Promise.all([
     getSalesOverviewCached(org.id, range),
     hasSalesRows(org.id, sb),
     getSalesSources(org.id, sb),
+    getSalesViewConfig(org.id, sb),
   ]);
 
-  return <SalesClient data={data} hasSales={hasSales} sources={sources} />;
+  return <SalesClient data={data} hasSales={hasSales} sources={sources} viewConfig={viewConfig} />;
 }

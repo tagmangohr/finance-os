@@ -1,14 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ShoppingBag, TrendingUp, Hash, Receipt, Search, Plug, Layers } from "lucide-react";
+import { ShoppingBag, TrendingUp, Hash, Receipt, Search, Plug, Layers, SlidersHorizontal, ArrowUp, ArrowDown, Check, RotateCcw } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import type { SalesOverview, SalesTxn } from "@/lib/sales/reports";
+import { mergeSalesViewConfig, type SalesViewConfig, type SalesColumn, type SalesColType } from "@/lib/sales/view-config";
 
 const inr = (n: number, compact = false) => formatCurrency(n, "INR", compact);
 const PAGE = 50;
@@ -17,7 +18,20 @@ const MONTH_LABEL = (m: string) => {
   return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
 };
 
-export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; hasSales: boolean; sources: string[] }) {
+// Render one raw cell value per its type hint — numbers grouped, blanks as em-dash.
+function fmtCell(val: unknown, type: SalesColType): string {
+  if (val == null || val === "") return "—";
+  const s = String(val);
+  if (type === "number") {
+    const n = Number(s.replace(/,/g, ""));
+    return Number.isFinite(n) ? n.toLocaleString("en-IN") : s;
+  }
+  return s;
+}
+
+export function SalesClient({
+  data, hasSales, sources, viewConfig,
+}: { data: SalesOverview; hasSales: boolean; sources: string[]; viewConfig: SalesViewConfig | null }) {
   const { navigate } = useNavProgress();
 
   // Overview (cards/trend/breakdown) — seeded from the server, re-fetched when the
@@ -26,6 +40,49 @@ export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; 
   const [dimension, setDimension] = useState<string | null>(data.dimension);
   const [loadingDim, setLoadingDim] = useState(false);
   useEffect(() => { setOverview(data); setDimension(data.dimension); }, [data]);
+
+  // ── Column playground (per-org shared view config) ──
+  // Effective columns = saved config merged with the currently-detected raw columns
+  // (new sheet columns appear as hidden until curated). Re-seeded on navigation only,
+  // so picking a breakdown dimension never discards in-progress column edits.
+  const [columns, setColumns] = useState<SalesColumn[]>(() => mergeSalesViewConfig(viewConfig, data.dimensions).columns);
+  useEffect(() => { setColumns(mergeSalesViewConfig(viewConfig, data.dimensions).columns); }, [viewConfig, data.dimensions]);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedTick, setSavedTick] = useState(false);
+
+  const visibleCols = useMemo(() => columns.filter((c) => c.visible).sort((a, b) => a.order - b.order), [columns]);
+  // Breakdown selector lists the dimension-enabled columns; falls back to every
+  // detected column if the user hasn't marked any yet.
+  const dimOptions = useMemo(() => {
+    const marked = columns.filter((c) => c.dimension).map((c) => c.key);
+    return marked.length ? marked : overview.dimensions;
+  }, [columns, overview.dimensions]);
+  const labelFor = useMemo(() => new Map(columns.map((c) => [c.key, c.label || c.key])), [columns]);
+
+  const updateCol = (key: string, patch: Partial<SalesColumn>) =>
+    setColumns((cs) => cs.map((c) => (c.key === key ? { ...c, ...patch } : c)));
+  const moveCol = (key: string, dir: -1 | 1) =>
+    setColumns((cs) => {
+      const arr = [...cs].sort((a, b) => a.order - b.order);
+      const i = arr.findIndex((c) => c.key === key);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= arr.length) return cs;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+      return arr.map((c, idx) => ({ ...c, order: idx }));
+    });
+  const resetDefaults = () => setColumns(mergeSalesViewConfig(null, data.dimensions).columns);
+
+  const saveColumns = async () => {
+    setSaving(true); setSavedTick(false);
+    try {
+      const res = await fetch("/api/sales/view", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ columns: columns.map((c, i) => ({ ...c, order: c.order ?? i })) }),
+      });
+      if (res.ok) { setSavedTick(true); setTimeout(() => setSavedTick(false), 2000); }
+    } catch { /* keep edits */ } finally { setSaving(false); }
+  };
 
   const changeDimension = async (dim: string) => {
     setDimension(dim);
@@ -90,6 +147,7 @@ export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; 
   const maxMonth = Math.max(1, ...overview.byMonth.map((m) => Math.abs(m.amount)));
   const maxDim = Math.max(1, ...overview.byDimension.map((d) => Math.abs(d.amount)));
   const dimTotal = overview.byDimension.reduce((a, d) => a + d.amount, 0);
+  const visibleCount = visibleCols.length;
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -138,17 +196,17 @@ export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; 
       {/* Breakdown by any detected dimension */}
       <SectionCard
         title="Sales breakdown"
-        subtitle={overview.dimension ? `Top values by ${overview.dimension}` : "No columns detected"}
+        subtitle={overview.dimension ? `Top values by ${labelFor.get(overview.dimension) ?? overview.dimension}` : "No columns detected"}
         className="animate-enter-2"
         action={
-          overview.dimensions.length > 0 ? (
+          dimOptions.length > 0 ? (
             <select
               value={dimension ?? ""}
               onChange={(e) => changeDimension(e.target.value)}
               disabled={loadingDim}
               className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none max-w-[220px] disabled:opacity-50"
             >
-              {overview.dimensions.map((d) => <option key={d} value={d}>{d}</option>)}
+              {dimOptions.map((d) => <option key={d} value={d}>{labelFor.get(d) ?? d}</option>)}
             </select>
           ) : undefined
         }
@@ -179,6 +237,14 @@ export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; 
         className="animate-enter-3"
         action={
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPanelOpen((o) => !o)}
+              className={cn("inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors",
+                panelOpen ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-background hover:border-border/60")}
+            >
+              <SlidersHorizontal className="size-3.5" /> Columns
+              <span className="tabular-nums text-muted-foreground">· {visibleCount}</span>
+            </button>
             <div className="flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1">
               <Search className="size-3.5 text-muted-foreground" />
               <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Search…" className="bg-transparent text-xs outline-none w-40" />
@@ -192,24 +258,81 @@ export function SalesClient({ data, hasSales, sources }: { data: SalesOverview; 
           </div>
         }
       >
+        {/* Column playground */}
+        {panelOpen && (
+          <div className="mb-3 rounded-xl border border-border bg-muted/20 p-3 animate-enter">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div>
+                <p className="text-xs font-medium">Customize columns</p>
+                <p className="text-[11px] text-muted-foreground">Show/hide, reorder, rename, and pick which columns can be used as a breakdown. Shared across your org.</p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button onClick={resetDefaults} className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1 text-[11px] hover:border-border/60">
+                  <RotateCcw className="size-3" /> Reset
+                </button>
+                <button onClick={saveColumns} disabled={saving} className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
+                  {savedTick ? <><Check className="size-3" /> Saved</> : saving ? "Saving…" : "Save view"}
+                </button>
+              </div>
+            </div>
+            <div className="max-h-[280px] overflow-y-auto rounded-lg border border-border/60 divide-y divide-border/40">
+              {[...columns].sort((a, b) => a.order - b.order).map((c, idx, arr) => (
+                <div key={c.key} className="flex items-center gap-2 px-2.5 py-1.5 bg-background/60">
+                  <input
+                    type="checkbox" checked={c.visible} onChange={(e) => updateCol(c.key, { visible: e.target.checked })}
+                    className="size-3.5 accent-primary" title="Show in table"
+                  />
+                  <input
+                    value={c.label} onChange={(e) => updateCol(c.key, { label: e.target.value })}
+                    className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-0.5 text-xs outline-none focus:border-primary/50"
+                  />
+                  <span className="hidden sm:block w-40 shrink-0 truncate text-[10px] text-muted-foreground/70" title={c.key}>{c.key}</span>
+                  <select
+                    value={c.type} onChange={(e) => updateCol(c.key, { type: e.target.value as SalesColType })}
+                    className="shrink-0 rounded-md border border-border bg-background px-1.5 py-0.5 text-[11px] outline-none"
+                    title="Type"
+                  >
+                    <option value="text">text</option>
+                    <option value="number">number</option>
+                    <option value="date">date</option>
+                  </select>
+                  <label className="shrink-0 inline-flex items-center gap-1 text-[10px] text-muted-foreground" title="Available as a breakdown dimension">
+                    <input type="checkbox" checked={c.dimension} onChange={(e) => updateCol(c.key, { dimension: e.target.checked })} className="size-3 accent-primary" />
+                    dim
+                  </label>
+                  <div className="shrink-0 flex items-center">
+                    <button onClick={() => moveCol(c.key, -1)} disabled={idx === 0} className="rounded p-0.5 disabled:opacity-30 hover:bg-muted"><ArrowUp className="size-3.5" /></button>
+                    <button onClick={() => moveCol(c.key, 1)} disabled={idx === arr.length - 1} className="rounded p-0.5 disabled:opacity-30 hover:bg-muted"><ArrowDown className="size-3.5" /></button>
+                  </div>
+                </div>
+              ))}
+              {columns.length === 0 && <p className="px-2.5 py-6 text-center text-[11px] text-muted-foreground">No columns detected in this sheet yet.</p>}
+            </div>
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead><tr className="text-left text-muted-foreground border-b border-border/50">
-              <th className="py-1.5 font-medium">Date</th>
-              <th className="font-medium">Source</th>
-              <th className="font-medium">Details</th>
-              {dimension && <th className="font-medium">{dimension}</th>}
-              <th className="font-medium text-right">Amount</th>
+              <th className="py-1.5 font-medium whitespace-nowrap">Date</th>
+              <th className="font-medium whitespace-nowrap">Source</th>
+              {visibleCols.map((c) => (
+                <th key={c.key} className={cn("font-medium whitespace-nowrap", c.type === "number" && "text-right")}>{c.label}</th>
+              ))}
+              <th className="font-medium text-right whitespace-nowrap">Amount</th>
             </tr></thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={dimension ? 5 : 4} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No sales match."}</td></tr>
+                <tr><td colSpan={visibleCols.length + 3} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No sales match."}</td></tr>
               ) : rows.map((t) => (
                 <tr key={t.id} className="border-b border-border/30">
                   <td className="py-1.5 whitespace-nowrap text-muted-foreground">{formatDate(t.transaction_date)}</td>
                   <td className="whitespace-nowrap text-muted-foreground">{t.account_type ?? "—"}</td>
-                  <td className="max-w-[320px] truncate">{t.counterparty_name || t.description || "—"}</td>
-                  {dimension && <td className="max-w-[200px] truncate text-muted-foreground">{String(t.raw?.[dimension] ?? "—")}</td>}
+                  {visibleCols.map((c) => (
+                    <td key={c.key} className={cn("max-w-[240px] truncate", c.type === "number" ? "text-right tabular-nums" : "text-muted-foreground")}>
+                      {fmtCell(t.raw?.[c.key], c.type)}
+                    </td>
+                  ))}
                   <td className="text-right tabular-nums whitespace-nowrap text-emerald-600">+{inr(Number(t.amount_base ?? t.amount))}</td>
                 </tr>
               ))}
