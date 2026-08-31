@@ -405,6 +405,25 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
+// A settled charge must never fall back to "pending". Gateways can emit a later,
+// out-of-order event that folds onto the same row — e.g. Cashfree fires a
+// SUBSCRIPTION_AUTH_STATUS (the MANDATE/autopay authorization, which can read
+// "pending" while the bank confirms it) AFTER the charge's SUBSCRIPTION_PAYMENT_SUCCESS.
+// With plain last-write-wins that mandate "pending" overwrote the completed charge,
+// dropping it out of revenue (1,195 charges / ₹44.1L were stuck this way). This guard
+// keeps status monotonic: a "pending" never overwrites an already-terminal status.
+// Every legitimate transition still flows (pending→completed, completed→refunded,
+// failed→completed) — only the downgrade-to-pending is blocked.
+const TERMINAL_STATUSES = new Set(["completed", "refunded", "failed"]);
+function guardStatusDowngrade(
+  existingStatus: string | null | undefined,
+  incomingStatus: TransactionUpdate["status"]
+): TransactionUpdate["status"] {
+  return incomingStatus === "pending" && existingStatus != null && TERMINAL_STATUSES.has(existingStatus)
+    ? (existingStatus as TransactionUpdate["status"]) // a terminal status from the same union → safe
+    : incomingStatus;
+}
+
 function hasTransactionChanged(
   existing: ExistingTransactionByExternalId,
   next: TransactionUpdate
@@ -499,22 +518,25 @@ export async function persistTransactions(
     if (!row.external_id) continue;
     const existingMatches = existingByExternalId.get(row.external_id) ?? [];
     const refreshFields = toRefreshFields(row);
-    const changedMatches = existingMatches.filter((e) => hasTransactionChanged(e, refreshFields));
-    if (changedMatches.length === 0) {
-      out.skipped++;
-      continue;
-    }
-    out.updated++;
-    for (const existing of changedMatches) {
+    let touched = false;
+    for (const existing of existingMatches) {
+      // Per-existing status guard: never downgrade a terminal status to "pending".
+      // Computed against THIS row's current status, so a pure downgrade (only status
+      // changed, pending onto a completed charge) is correctly skipped, not written.
+      const fields = { ...refreshFields, status: guardStatusDowngrade(existing.status, refreshFields.status) };
+      if (!hasTransactionChanged(existing, fields)) continue;
+      touched = true;
       updateThunks.push(async () => {
         const { error } = await supabase
           .from("transactions")
-          .update(refreshFields)
+          .update(fields)
           .eq("id", existing.id)
           .eq("org_id", orgId);
         if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
       });
     }
+    if (touched) out.updated++;
+    else out.skipped++;
   }
   await runPooled(updateThunks, UPDATE_CONCURRENCY);
 
