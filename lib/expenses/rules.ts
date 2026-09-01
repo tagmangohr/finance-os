@@ -50,10 +50,58 @@ export function matchRule(txn: MatchableTxn, rules: CategoryRule[]): string | nu
 }
 
 /**
+ * Persist a manual categorization as a durable EXACT-DESCRIPTION rule so only rows
+ * with the IDENTICAL description auto-apply next time. This is the precise "memory":
+ * two descriptions under the same merchant (e.g. "ANTHROPIC* CLAUDE TEAM" vs
+ * "ANTHROPIC* CLAUDE SUB") stay independently categorizable — a counterparty-level
+ * rule would wrongly collapse them. Priority 40 (above counterparty's 50), so an
+ * explicit per-description decision overrides any broader counterparty rule.
+ * Upsert-by-hand (the uniqueness guard is an expression index PostgREST can't target).
+ */
+export async function rememberDescriptionRule(
+  orgId: string,
+  description: string,
+  slug: string,
+  supabase: SupabaseClient
+): Promise<void> {
+  const value = description.trim();
+  if (!value) return;
+
+  const { data: existing } = await supabase
+    .from("category_rules")
+    .select("id")
+    .eq("org_id", orgId)
+    .eq("match_field", "description")
+    .eq("match_type", "exact")
+    .ilike("match_value", likeEscape(value)) // exact, case-insensitive (wildcards escaped)
+    .maybeSingle();
+
+  if (existing?.id) {
+    await supabase
+      .from("category_rules")
+      .update({ category_slug: slug, updated_at: new Date().toISOString() })
+      .eq("id", existing.id);
+  } else {
+    await supabase.from("category_rules").insert({
+      org_id: orgId,
+      match_field: "description",
+      match_type: "exact",
+      match_value: value,
+      category_slug: slug,
+      priority: 40, // above counterparty (50) → a specific description wins over the merchant
+      source: "manual",
+    });
+  }
+}
+
+/**
  * Persist a manual categorization as a durable counterparty rule so the SAME
  * counterparty auto-applies next time (the "memory" that makes categorization
  * sticky). Upsert-by-hand because the uniqueness guard is an expression index
  * (lower(match_value)), which PostgREST's onConflict can't target.
+ * NOTE: no longer used by the manual-assign flow (which now remembers by exact
+ * description via rememberDescriptionRule); retained for the 462 pre-existing
+ * counterparty rules + any programmatic callers.
  */
 export async function rememberCounterpartyRule(
   orgId: string,

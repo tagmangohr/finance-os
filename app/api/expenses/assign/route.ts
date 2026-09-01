@@ -3,7 +3,7 @@ import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCategories, treatmentMap } from "@/lib/expenses/categories";
 import { applyCategory } from "@/lib/expenses/categorize";
-import { rememberCounterpartyRule, likeEscape } from "@/lib/expenses/rules";
+import { rememberDescriptionRule, likeEscape } from "@/lib/expenses/rules";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const runtime = "nodejs";
@@ -16,10 +16,12 @@ export const maxDuration = 60;
  * POST /api/expenses/assign — manually (re)categorize one or more bank transactions.
  * Body: { ids: string[], slug: string, remember?: boolean }.
  * Manual always wins (overwrite=true). When `remember` (default true), each
- * distinct counterparty gets a durable rule so it auto-applies going forward, and
- * the category is propagated to ALL of that counterparty's bank rows — overwriting
- * any existing category (the latest vendor decision wins everywhere), so fixing one
- * vendor row fixes them all. Admin/finance-gated.
+ * distinct EXACT DESCRIPTION gets a durable rule so it auto-applies going forward,
+ * and the category is propagated ONLY to bank rows with the IDENTICAL description —
+ * never across a whole merchant. This keeps two descriptions under the same vendor
+ * (e.g. "ANTHROPIC* CLAUDE TEAM" vs "ANTHROPIC* CLAUDE SUB") independently
+ * categorizable, so fixing one description can't silently re-tag another.
+ * Admin/finance-gated.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const { org, pageAccess } = await getActiveOrg();
@@ -48,28 +50,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   let remembered = 0;
   let backfilled = 0;
   if (remember) {
-    // Distinct counterparties among the assigned rows → durable rules + back-fill.
+    // Distinct EXACT descriptions among the assigned rows → durable rules + back-fill.
     const { data: assigned } = await sb
       .from("transactions")
-      .select("counterparty_name")
+      .select("description")
       .eq("org_id", org.id)
       .in("id", ids);
-    const counterparties = Array.from(
-      new Set((assigned ?? []).map((r) => (r.counterparty_name ?? "").trim()).filter(Boolean))
+    const descriptions = Array.from(
+      new Set((assigned ?? []).map((r) => (r.description ?? "").trim()).filter(Boolean))
     );
-    for (const cp of counterparties) {
-      await rememberCounterpartyRule(org.id, cp, slug, sb);
+    for (const desc of descriptions) {
+      await rememberDescriptionRule(org.id, desc, slug, sb);
       remembered += 1;
-      // Propagate to ALL of this counterparty's bank rows (exact name match),
-      // OVERWRITING any existing category — the latest vendor decision wins
-      // everywhere. Exclude the rows the user explicitly clicked (already set to
-      // "manual" above); the rest are provenance "rule".
+      // Propagate ONLY to bank rows with the IDENTICAL description (exact,
+      // case-insensitive; wildcards escaped) — never across the whole merchant.
+      // Exclude the rows the user explicitly clicked (already set to "manual"
+      // above); the rest are provenance "rule".
       const { data: matches } = await sb
         .from("transactions")
         .select("id")
         .eq("org_id", org.id)
         .eq("ledger", "bank")
-        .ilike("counterparty_name", likeEscape(cp));
+        .ilike("description", likeEscape(desc));
       const matchIds = (matches ?? []).map((m) => m.id as string).filter((id) => !ids.includes(id));
       if (matchIds.length) {
         await applyCategory(sb, org.id, matchIds, slug, treatment, "rule", null, true);
