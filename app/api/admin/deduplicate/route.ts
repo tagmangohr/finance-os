@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { canManageOrg } from "@/lib/org/permissions";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 
 /**
@@ -39,6 +40,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+
+  // Defense-in-depth beyond the shared secret: this endpoint DELETES transactions +
+  // connectors, so also require an authenticated caller who owns/administers THIS
+  // org. Even a leaked ADMIN_SECRET then can't wipe an org the caller doesn't manage.
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!(await canManageOrg(supabase, user.id, org_id))) {
+    return NextResponse.json({ error: "Forbidden — you don't manage this organisation" }, { status: 403 });
+  }
 
   // ── 1. Deduplicate transactions ───────────────────────────────────────────
   // Fetch all rows with external_ids, oldest-first
