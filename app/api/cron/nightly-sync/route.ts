@@ -6,6 +6,7 @@ import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLi
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
+import { reconcileCashfreeFees } from "@/lib/connectors/cashfree-fees";
 import { refreshMercuryBalances } from "@/lib/expenses/mercury-balances";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector } from "@/lib/connectors/links";
@@ -163,6 +164,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (res.polled) console.log(`[cron/nightly-sync] cashfree subs polled=${res.polled} inserted=${res.inserted} updated=${res.updated} (${c.id})`);
       } catch (e) {
         console.error(`[cron/nightly-sync] subscription poll failed (${c.id}):`, e);
+      }
+      // Cashfree fees live ONLY in the Settlement Recon feed and settle a day or two
+      // late — the webhooks carry none. Sweep a TRAILING window every night (not the
+      // forward payment checkpoint) so late-settling fees AND any window Cashfree's
+      // flaky recon failed on are always back-filled onto metadata.fee. Fill-only.
+      try {
+        const feeFrom = new Date(Date.now() - 75 * 86_400_000);
+        const res = await reconcileCashfreeFees(sb, c, { fromDate: feeFrom, toDate: now, deadlineMs: Date.now() + 45_000 });
+        if (res.updated) { console.log(`[cron/nightly-sync] cashfree fees filled=${res.updated}/${res.feesSeen} (${c.id})`); invalidateOrg(c.org_id); }
+      } catch (e) {
+        console.error(`[cron/nightly-sync] cashfree fee reconcile failed (${c.id}):`, e);
       }
     }
     for (const c of subApiConnectors) {
