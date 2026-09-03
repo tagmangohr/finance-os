@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { selectAll } from "@/lib/supabase/paginate";
 import { monthStartISO } from "@/lib/utils";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -264,6 +265,101 @@ export async function getBankTransactions(
   if (countRes.error) throw new Error(`Bank txn count failed: ${countRes.error.message}`);
   if (rowsRes.error) throw new Error(`Bank txn page failed: ${rowsRes.error.message}`);
   return { rows: (rowsRes.data ?? []) as BankTxn[], total: countRes.count ?? 0, page, pageSize };
+}
+
+// ─── Category drill, grouped by vendor ────────────────────────────────────────
+
+export type BankGroupTxn = {
+  id: string;
+  transaction_date: string | null;
+  transaction_at: string | null;
+  type: "credit" | "debit";
+  amount: number;
+  amount_base: number | null;
+  status: string | null;
+  description: string | null;
+};
+
+export type BankVendorGroup = {
+  key: string;               // stable grouping key (vendor name lower, or solo:<id>)
+  name: string;              // display label (vendor name, or the memo for solo rows)
+  amount: number;            // signed total in base currency (credit +, debit −)
+  count: number;             // number of transactions in the group
+  solo: boolean;             // true = a counterparty-less row shown on its own
+  txns: BankGroupTxn[];      // members, newest first
+};
+
+export type BankCategoryGroups = { groups: BankVendorGroup[]; total: number; truncated: boolean };
+
+// DISPLAY-only grouping key: collapse whitespace runs, trim. The stored
+// counterparty_name is never modified; two spellings that differ only by spacing
+// group together (same rule the P&L drill uses).
+const normVendor = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim();
+
+/**
+ * The category-drill drawer, grouped by VENDOR. Drains every bank row for the
+ * category + range (no 100-row cap) and folds them into one entry per counterparty
+ * — total + count + its transactions (newest first) — so a vendor appears ONCE and
+ * expands to its line items. Counterparty-less rows (raw bank memos) are kept as
+ * individual entries. Groups are ordered by |amount| desc (largest spend first).
+ * Bank-category sets are bounded (one category within a range), so a full drain is
+ * cheap; a hard CAP guards against a pathological all-time range.
+ */
+export async function getBankCategoryGroups(
+  orgId: string,
+  supabase: SupabaseClient,
+  f: BankTxnFilters
+): Promise<BankCategoryGroups> {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = f.from || monthStartISO(new Date());
+  const to = f.to || today;
+  const cols =
+    "id, transaction_date, transaction_at, type, amount, amount_base, counterparty_name, description, status";
+  const CAP = 20000;
+
+  type Row = BankGroupTxn & { counterparty_name: string | null };
+  const rows = (await selectAll<Row>((lo, hi) => {
+    const q = supabase.from("transactions").select(cols);
+    applyBankTxnFilters(q as unknown as BankFilterBuilder, orgId, from, to, f);
+    return (q as unknown as {
+      order: (c: string, o: { ascending: boolean; nullsFirst?: boolean }) => typeof q;
+      range: (a: number, b: number) => PromiseLike<{ data: Row[] | null; error: { message: string } | null }>;
+    })
+      .order("transaction_date", { ascending: false })
+      .order("transaction_at", { ascending: false, nullsFirst: false })
+      .order("id", { ascending: false })
+      .range(lo, hi);
+  })).slice(0, CAP);
+
+  const truncated = rows.length >= CAP;
+  const byKey = new Map<string, BankVendorGroup>();
+  for (const r of rows) {
+    const vendor = normVendor(r.counterparty_name);
+    // No counterparty → its own standalone entry (never folded with other memos).
+    const key = vendor ? `v:${vendor.toLowerCase()}` : `solo:${r.id}`;
+    const base = Number(r.amount_base ?? r.amount) || 0;
+    const signed = r.type === "credit" ? base : -base;
+    const txn: BankGroupTxn = {
+      id: r.id, transaction_date: r.transaction_date, transaction_at: r.transaction_at,
+      type: r.type, amount: r.amount, amount_base: r.amount_base, status: r.status, description: r.description,
+    };
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.amount += signed; existing.count += 1; existing.txns.push(txn);
+    } else {
+      byKey.set(key, {
+        key,
+        name: vendor || normVendor(r.description) || "—",
+        amount: signed,
+        count: 1,
+        solo: !vendor,
+        txns: [txn],
+      });
+    }
+  }
+  // rows arrive newest-first, so each group's txns are already in date-desc order.
+  const groups = [...byKey.values()].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return { groups, total: rows.length, truncated };
 }
 
 /**

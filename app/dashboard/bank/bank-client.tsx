@@ -14,7 +14,7 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { FloatingPanel } from "@/components/ui/floating-panel";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
-import type { BankOverview, BankTxn } from "@/lib/expenses/reports";
+import type { BankOverview, BankTxn, BankVendorGroup } from "@/lib/expenses/reports";
 import type { LedgerCategory } from "@/lib/expenses/types";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 
@@ -52,6 +52,8 @@ type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
 
 // ─── Category drill drawer (click an "Expenses by category" row) ───────────────
+// Grouped by VENDOR: each counterparty appears ONCE (total + count) and expands to
+// its transactions, newest first. Vendors ordered by largest spend. No row cap.
 function CategoryDrillDrawer({
   drill, onClose, from, to,
 }: {
@@ -60,40 +62,43 @@ function CategoryDrillDrawer({
   from: string;
   to: string;
 }) {
-  const [rows, setRows] = useState<BankTxn[]>([]);
-  const [total, setTotal] = useState(0);
+  const [groups, setGroups] = useState<BankVendorGroup[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const open = drill != null;
 
-  useEffect(() => { if (open) setQuery(""); }, [open, drill?.slug]);
+  useEffect(() => { if (open) { setQuery(""); setExpanded(new Set()); } }, [open, drill?.slug]);
 
   useEffect(() => {
     if (!open || !drill) return;
     let cancelled = false;
     setLoading(true);
-    setRows([]);
-    const params = new URLSearchParams({
-      from, to, category: drill.slug, view: "expense", status: "all", page: "0", pageSize: "100",
-    });
-    fetch(`/api/bank/transactions?${params.toString()}`)
+    setGroups([]);
+    const params = new URLSearchParams({ from, to, category: drill.slug, view: "expense", status: "all" });
+    fetch(`/api/bank/drill-groups?${params.toString()}`)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
-        // Largest spend first (item 7).
-        const sorted = [...((d.rows ?? []) as BankTxn[])].sort(
-          (a, b) => Math.abs(Number(b.amount_base ?? b.amount) || 0) - Math.abs(Number(a.amount_base ?? a.amount) || 0)
-        );
-        setRows(sorted); setTotal(d.total ?? 0);
+        setGroups((d.groups ?? []) as BankVendorGroup[]);
+        setTruncated(Boolean(d.truncated));
       })
-      .catch(() => { if (!cancelled) setRows([]); })
+      .catch(() => { if (!cancelled) setGroups([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, drill, from, to]);
 
-  const shown = query.trim()
-    ? rows.filter((t) => `${t.counterparty_name ?? ""} ${t.description ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()))
-    : rows;
+  const ql = query.trim().toLowerCase();
+  const shown = ql
+    ? groups.filter((g) => g.name.toLowerCase().includes(ql) || g.txns.some((t) => (t.description ?? "").toLowerCase().includes(ql)))
+    : groups;
+  const txnCount = shown.reduce((s, g) => s + g.count, 0);
+
+  const toggle = (key: string) =>
+    setExpanded((prev) => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; });
+
+  const amt = (n: number, credit: boolean) => `${credit ? "+" : "−"}${inr(Math.abs(n))}`;
 
   return (
     <FloatingPanel
@@ -102,26 +107,60 @@ function CategoryDrillDrawer({
       title={drill?.label ?? ""}
       subtitle="Expense transactions in range"
       headerRight={<span className="num text-[13px] font-semibold text-foreground pr-1">{inr(drill?.amount ?? 0)}</span>}
-      search={{ value: query, onChange: setQuery, placeholder: "Search counterparty, memo…" }}
+      search={{ value: query, onChange: setQuery, placeholder: "Search vendor, memo…" }}
     >
       <div className="px-4 py-2 border-b border-border sticky top-0 bg-card/95 backdrop-blur z-[1]">
-        <span className="text-[12px] text-muted-foreground">{loading ? "Loading…" : `${(query ? shown.length : drill?.count ?? 0).toLocaleString("en-IN")} transaction${(query ? shown.length : drill?.count ?? 0) === 1 ? "" : "s"}`}</span>
+        <span className="text-[12px] text-muted-foreground">
+          {loading ? "Loading…" : `${shown.length.toLocaleString("en-IN")} vendor${shown.length === 1 ? "" : "s"} · ${txnCount.toLocaleString("en-IN")} transaction${txnCount === 1 ? "" : "s"}`}
+        </span>
       </div>
       {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-10 rounded-lg bg-muted/50 animate-pulse" />)}</div>}
       {!loading && shown.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{query ? "No matches." : "No transactions."}</p>}
-      {!loading && shown.map((t) => (
-        <div key={t.id} className="px-4 py-2 flex items-center gap-3 border-b border-border/40">
-          <div className="min-w-0 flex-1">
-            <p className="text-[12.5px] text-foreground truncate">{t.counterparty_name ?? t.description ?? "—"}</p>
-            <p className="text-[11px] text-muted-foreground">{formatDate(t.transaction_date)}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
+      {!loading && shown.map((g) => {
+        // A single-transaction entry (a one-off vendor, or a counterparty-less memo)
+        // is shown as a plain row — nothing to expand.
+        if (g.count === 1) {
+          const t = g.txns[0];
+          return (
+            <div key={g.key} className="px-4 py-2 flex items-center gap-3 border-b border-border/40">
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] text-foreground truncate">{g.name}</p>
+                <p className="text-[11px] text-muted-foreground">{t.transaction_date ? formatDate(t.transaction_date) : "—"}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
+              </div>
+              <p className={cn("num text-[12.5px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>{amt(Number(t.amount_base ?? t.amount), t.type === "credit")}</p>
+            </div>
+          );
+        }
+        const isOpen = expanded.has(g.key);
+        return (
+          <div key={g.key} className="border-b border-border/40">
+            <button
+              type="button"
+              onClick={() => toggle(g.key)}
+              className="w-full px-4 py-2 flex items-center gap-2.5 text-left hover:bg-muted/40 transition-colors"
+            >
+              <ChevronRight className={cn("h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[12.5px] text-foreground truncate">{g.name}</p>
+                <p className="text-[11px] text-muted-foreground">{g.count} transactions</p>
+              </div>
+              <p className={cn("num text-[12.5px] font-medium flex-shrink-0", g.amount > 0 ? "text-emerald-600" : "text-foreground")}>{amt(g.amount, g.amount > 0)}</p>
+            </button>
+            {isOpen && (
+              <div className="bg-muted/20">
+                {g.txns.map((t) => (
+                  <div key={t.id} className="pl-11 pr-4 py-1.5 flex items-center gap-3 border-t border-border/30">
+                    <p className="text-[11.5px] text-muted-foreground flex-1">{t.transaction_date ? formatDate(t.transaction_date) : "—"}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
+                    <p className={cn("num text-[12px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>{amt(Number(t.amount_base ?? t.amount), t.type === "credit")}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <p className={cn("num text-[12.5px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
-            {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}
-          </p>
-        </div>
-      ))}
-      {!loading && total > rows.length && (
-        <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the first {rows.length} of {total.toLocaleString("en-IN")}.</p>
+        );
+      })}
+      {!loading && truncated && (
+        <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the first 20,000 transactions.</p>
       )}
     </FloatingPanel>
   );
