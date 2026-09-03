@@ -58,9 +58,14 @@ export class RazorpayConnector {
         Authorization: this.authHeader,
         "Content-Type": "application/json",
       },
-      // Hard timeout — prevents a slow Razorpay response from eating the
-      // entire Vercel function budget (10 s on Hobby, 60 s on Pro).
-      signal: AbortSignal.timeout(5000),
+      // Hard per-request timeout — a backstop against a hung Razorpay response
+      // eating the function budget, NOT a tight SLA. It was 5s, which this account's
+      // payments API regularly exceeds under load — every sync then aborted, its
+      // checkpoint froze, and the nightly reconcile silently stopped advancing
+      // (pending charges never flipped to captured). 20s clears the normal-but-slow
+      // responses while still bounding a truly stuck request; the sync runs in the
+      // 60s/300s worker budgets, so 20s per page is safe.
+      signal: AbortSignal.timeout(20000),
       next: { revalidate: 0 },
     });
 
