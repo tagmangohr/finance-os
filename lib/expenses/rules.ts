@@ -15,7 +15,7 @@ export function likeEscape(v: string): string {
 export async function getRules(orgId: string, supabase: SupabaseClient): Promise<CategoryRule[]> {
   const { data } = await supabase
     .from("category_rules")
-    .select("id, org_id, match_field, match_type, match_value, category_slug, priority, source")
+    .select("id, org_id, match_field, match_type, match_value, match_counterparty, category_slug, priority, source")
     .or(`org_id.is.null,org_id.eq.${orgId}`)
     .order("priority", { ascending: true });
   return (data ?? []) as CategoryRule[];
@@ -44,7 +44,18 @@ export function matchRule(txn: MatchableTxn, rules: CategoryRule[]): string | nu
     const hay = field.toLowerCase();
     const needle = r.match_value.toLowerCase();
     const hit = r.match_type === "exact" ? hay === needle : hay.includes(needle);
-    if (hit) return r.category_slug;
+    if (!hit) continue;
+    // Composite COUNTERPARTY scope. A rule remembered for one merchant only
+    // applies to rows with that same counterparty. This is what stops a generic
+    // shared description (e.g. Mercury's "Send Money transaction initiated on
+    // Mercury", identical across 35 different payees) from dragging one merchant's
+    // category onto all the others. Unscoped rules (match_counterparty NULL) keep
+    // their original behaviour. A scope mismatch falls through to lower-priority
+    // rules rather than returning — a broader counterparty rule may still apply.
+    if (r.match_counterparty) {
+      if ((txn.counterparty_name ?? "").toLowerCase() !== r.match_counterparty.toLowerCase()) continue;
+    }
+    return r.category_slug;
   }
   return null;
 }
@@ -61,20 +72,26 @@ export function matchRule(txn: MatchableTxn, rules: CategoryRule[]): string | nu
 export async function rememberDescriptionRule(
   orgId: string,
   description: string,
+  counterparty: string | null,
   slug: string,
   supabase: SupabaseClient
 ): Promise<void> {
   const value = description.trim();
   if (!value) return;
+  // Scope the rule to the counterparty so it can never leak onto a different
+  // merchant that shares this description. A missing counterparty stays unscoped
+  // (NULL) — the caller only reaches here for rows that HAVE a counterparty.
+  const cp = (counterparty ?? "").trim() || null;
 
-  const { data: existing } = await supabase
+  let lookup = supabase
     .from("category_rules")
     .select("id")
     .eq("org_id", orgId)
     .eq("match_field", "description")
     .eq("match_type", "exact")
-    .ilike("match_value", likeEscape(value)) // exact, case-insensitive (wildcards escaped)
-    .maybeSingle();
+    .ilike("match_value", likeEscape(value)); // exact, case-insensitive (wildcards escaped)
+  lookup = cp ? lookup.ilike("match_counterparty", likeEscape(cp)) : lookup.is("match_counterparty", null);
+  const { data: existing } = await lookup.maybeSingle();
 
   if (existing?.id) {
     await supabase
@@ -87,6 +104,7 @@ export async function rememberDescriptionRule(
       match_field: "description",
       match_type: "exact",
       match_value: value,
+      match_counterparty: cp,
       category_slug: slug,
       priority: 40, // above counterparty (50) → a specific description wins over the merchant
       source: "manual",

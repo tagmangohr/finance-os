@@ -18,6 +18,12 @@ export type CategoryRule = {
   match_field: "counterparty" | "description" | "source";
   match_type: "exact" | "contains";
   match_value: string;
+  // Optional COUNTERPARTY scope. When set, the rule matches ONLY rows whose
+  // counterparty_name also equals this (exact, case-insensitive) — so a rule
+  // remembered for a specific merchant can't leak onto a different merchant that
+  // happens to share the same (often generic) description. NULL = unscoped (legacy
+  // description/counterparty rules keep their original single-field behaviour).
+  match_counterparty: string | null;
   category_slug: string;
   priority: number;
   source: "seed" | "manual";
