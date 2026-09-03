@@ -526,12 +526,28 @@ export async function persistTransactions(
       const fields = { ...refreshFields, status: guardStatusDowngrade(existing.status, refreshFields.status) };
       if (!hasTransactionChanged(existing, fields)) continue;
       touched = true;
+      const writingPending = fields.status === "pending";
       updateThunks.push(async () => {
-        const { error } = await supabase
+        let query = supabase
           .from("transactions")
           .update(fields)
           .eq("id", existing.id)
           .eq("org_id", orgId);
+        // ATOMIC downgrade guard. guardStatusDowngrade() above decides against THIS
+        // row's status as READ at fetch time. But two SUBSCRIPTION_AUTH_STATUS webhooks
+        // for the same charge (one "pending", one "failed"/"success") can arrive in the
+        // same second and run as CONCURRENT function invocations: each reads the
+        // pre-write status, both pass the in-memory guard, and last-write-wins can still
+        // land the "pending" on top of a row the other invocation just made terminal
+        // (this stranded rahulmeena0397's failed mandates as "pending"). When we are
+        // about to write "pending", make the write itself conditional on the row not
+        // being terminal AT THE DATABASE — so a concurrent terminal write turns this one
+        // into a 0-row no-op instead of clobbering it. Null-safe: a NULL status (never
+        // occurs today, but cheap to honour) is still allowed through.
+        if (writingPending) {
+          query = query.or("status.is.null,status.not.in.(completed,refunded,failed)");
+        }
+        const { error } = await query;
         if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
       });
     }
