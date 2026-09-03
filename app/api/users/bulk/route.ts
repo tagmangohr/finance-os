@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { canManageOrg } from "@/lib/org/permissions";
 import { addOrLinkMember } from "@/lib/org/add-member";
+import { disableLoginIfOrphaned } from "@/lib/org/account-access";
 
 export const maxDuration = 60;
 
@@ -87,7 +88,7 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const service = await createServiceClient();
 
   const { data: targets, error: readErr } = await service
-    .from("org_members").select("id, org_id, invited_email").in("id", ids);
+    .from("org_members").select("id, org_id, invited_email, user_id").in("id", ids);
   if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
 
   // Authorize per distinct org once.
@@ -103,6 +104,8 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
     const { error } = await service.from("org_members").update({ status: "revoked" }).eq("id", t.id);
     if (error) { failed.push({ id: t.id, error: error.message }); continue; }
     revoked.push(t.id);
+    // Block their login entirely — but only if they now have no access in any org.
+    await disableLoginIfOrphaned(service, (t as { user_id: string | null }).user_id);
     try {
       await service.from("member_activity").insert({
         org_id: t.org_id, actor_user_id: user.id, actor_email: user.email ?? null,

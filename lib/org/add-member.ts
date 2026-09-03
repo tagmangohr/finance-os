@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import type { createServiceClient } from "@/lib/supabase/server";
+import { enableLogin } from "@/lib/org/account-access";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
@@ -110,6 +111,10 @@ export async function addOrLinkMember(service: ServiceClient, input: AddMemberIn
     : await service.from("org_members").insert(memberFields).select(MEMBER_COLS).single();
 
   if (error || !member) return { ok: false, status: 500, error: error?.message ?? "Insert failed" };
+
+  // Lift any login ban — a previously-removed person who was disabled can now sign
+  // in again for this org. No-op for brand-new / never-banned accounts.
+  await enableLogin(service, userId);
 
   // Audit (best-effort).
   try {

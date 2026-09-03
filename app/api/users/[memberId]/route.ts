@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { canManageOrg } from "@/lib/org/permissions";
+import { disableLoginIfOrphaned } from "@/lib/org/account-access";
 
 const ROLES = ["admin", "manager", "viewer"] as const;
 
@@ -103,7 +104,7 @@ export async function DELETE(
 
   const { data: target } = await service
     .from("org_members")
-    .select("id, org_id")
+    .select("id, org_id, user_id")
     .eq("id", memberId)
     .maybeSingle();
   if (!target) return NextResponse.json({ error: "Member not found" }, { status: 404 });
@@ -118,6 +119,9 @@ export async function DELETE(
     .eq("id", memberId);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Block their login entirely — but only if they now have no access in any org.
+  await disableLoginIfOrphaned(service, target.user_id);
 
   // Audit: record the removal (best-effort).
   try {
