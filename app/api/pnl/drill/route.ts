@@ -157,7 +157,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // early "bank:<customer>" return above.
     q = q.eq("type", "credit").in("ledger", ["payments", "sales"]).in("status", ["completed", "refunded"]);
   } else if (key === "refunds") {
-    q = q.eq("ledger", "payments").or("and(type.eq.debit,category.eq.refund),and(type.eq.credit,status.eq.refunded)");
+    // Refunds = the separate refund ROWS only (the explicit refund event), matching
+    // the Payments/Raw-Data Refunds card. We deliberately DON'T also count the
+    // original payment flipped to status='refunded' — gateways that emit both
+    // (Stripe, Razorpay) would otherwise be subtracted twice (double-count). Keep
+    // this predicate identical to _dm_refunds so the drill list ties to the line.
+    q = q.eq("ledger", "payments").eq("type", "debit").eq("category", "refund").eq("status", "completed");
   } else if (key === "__pg_fees__") {
     q = q.in("status", ["completed", "refunded"]).or("metadata->>fee.not.is.null,metadata->>fees.not.is.null");
   } else if (key.startsWith("income:")) {
