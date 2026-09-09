@@ -25,6 +25,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     from: isDate(sp.get("from")) ? sp.get("from")! : undefined,
     to: isDate(sp.get("to")) ? sp.get("to")! : undefined,
     status: sp.get("status") ?? undefined,
+    // NOTE: intentionally NOT forwarding the table's account/card/search filters.
+    // This drawer explains a row of the range-scoped "Expenses by category" chart,
+    // so its total must reconcile with that chart (range + view + category), not the
+    // transactions table's ad-hoc filters.
     category: sp.get("category") ?? undefined,
     view: (["all", "expense", "income", "excluded", "review"].includes(view ?? "") ? view : "all") as BankTxnFilters["view"],
   };

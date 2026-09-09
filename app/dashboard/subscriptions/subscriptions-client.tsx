@@ -259,22 +259,31 @@ function CustomersSection({ grace }: { grace: number }) {
     return () => { if (debRef.current) clearTimeout(debRef.current); };
   }, [search]);
 
+  // Latest-wins: abort the prior request so a slow earlier segment/filter response
+  // can't land after a newer one and show the wrong rows/total.
+  const loadAbort = useRef<AbortController | null>(null);
   const load = useCallback(async () => {
+    loadAbort.current?.abort();
+    const ctrl = new AbortController();
+    loadAbort.current = ctrl;
     setLoading(true);
     const qs = new URLSearchParams({ segment, grace: String(grace), sort, page: String(page), pageSize: String(pageSize), search: debounced });
     if (from) qs.set("from", from);
     if (to) qs.set("to", to);
     try {
-      const res = await fetch(`/api/subscriptions/list?${qs}`);
+      const res = await fetch(`/api/subscriptions/list?${qs}`, { signal: ctrl.signal });
       const j = await res.json();
       setRows(j.rows ?? []); setTotal(j.total ?? 0);
-    } catch { setRows([]); setTotal(0); }
-    setLoading(false);
+    } catch (e) { if (e instanceof DOMException && e.name === "AbortError") return; setRows([]); setTotal(0); }
+    finally { if (!ctrl.signal.aborted) setLoading(false); }
   }, [segment, grace, sort, page, debounced, from, to]);
 
   useEffect(() => { load(); }, [load]);
 
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  // Reclamp if a filter shrank the result set while we were on a high page, so the
+  // footer can't read "Page 3 of 1" over an empty body.
+  useEffect(() => { if (page > pages) setPage(pages); }, [page, pages]);
   const exportHref = (fmt: string) => {
     const q = new URLSearchParams({ report: segment, format: fmt, grace: String(grace) });
     if (from) q.set("from", from);

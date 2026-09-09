@@ -66,7 +66,11 @@ export async function categorizeBankTransactions(
       .eq("org_id", orgId)
       .eq("ledger", "bank")
       .is("category", null)
+      // `id` tiebreaker: transaction_date is non-unique, and OFFSET paging over a
+      // non-unique sort can skip or repeat rows at page boundaries — deterministic
+      // ordering closes that (fill-only, so a skipped row would stay uncategorized).
       .order("transaction_date", { ascending: false })
+      .order("id", { ascending: true })
       .range(from, to)
   );
 

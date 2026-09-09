@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -198,7 +198,14 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
     return () => clearTimeout(t);
   }, [qInput]);
 
+  // Abort the prior in-flight request so a slow earlier response can't land after a
+  // newer one and overwrite the current rows/total ("latest-wins" — same guard the
+  // Data tab uses). Without it, fast filter/page switching can show stale rows.
+  const rowsAbort = useRef<AbortController | null>(null);
   const fetchRows = useCallback(async () => {
+    rowsAbort.current?.abort();
+    const ctrl = new AbortController();
+    rowsAbort.current = ctrl;
     setLoadingRows(true);
     try {
       const params = new URLSearchParams({
@@ -206,14 +213,15 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         view: filter, status: statusFilter, account: accountFilter, card: cardFilter,
         search: q, page: String(page), pageSize: String(PAGE),
       });
-      const res = await fetch(`/api/bank/transactions?${params.toString()}`);
+      const res = await fetch(`/api/bank/transactions?${params.toString()}`, { signal: ctrl.signal });
       const j = await res.json();
       if (res.ok) { setRows(j.rows ?? []); setTotal(j.total ?? 0); }
       else setMsg(j.error ?? "Failed to load transactions");
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return; // superseded — ignore
       setMsg("Failed to load transactions");
     } finally {
-      setLoadingRows(false);
+      if (!ctrl.signal.aborted) setLoadingRows(false);
     }
   }, [data.period.from, data.period.to, filter, statusFilter, accountFilter, cardFilter, q, page]);
 
@@ -701,7 +709,12 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
                   </td>
                   <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
                   <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
-                    {t.type === "credit" ? "+" : "−"}{inr(Number(t.amount_base ?? t.amount))}
+                    {/* INR column. If a non-INR row hasn't been FX-converted yet
+                        (amount_base null), don't stamp ₹ on the raw foreign amount —
+                        show "—"; the native-currency column beside it has the real value. */}
+                    {t.amount_base == null && t.currency !== "INR"
+                      ? "—"
+                      : `${t.type === "credit" ? "+" : "−"}${inr(Number(t.amount_base ?? t.amount))}`}
                   </td>
                   <td className="text-right tabular-nums whitespace-nowrap text-muted-foreground">
                     {t.currency !== "INR" ? `${t.type === "credit" ? "+" : "−"}${formatCurrency(Number(t.amount), t.currency)}` : "—"}

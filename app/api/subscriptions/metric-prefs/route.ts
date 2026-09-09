@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
+import { isAuthFailure, requireOrgRead } from "@/lib/api/auth";
 import { getSubMetricPrefs, sanitizeSubPrefs } from "@/lib/subscriptions/metric-prefs";
 
 /** GET /api/subscriptions/metric-prefs?org_id= — caller's pinned subscription metrics. */
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const orgId = req.nextUrl.searchParams.get("org_id");
   if (!orgId) return NextResponse.json({ error: "org_id required" }, { status: 400 });
-  const auth = await requireOrgAccess(orgId);
+  const auth = await requireOrgRead(orgId); // own-row prefs → any active member
   if (isAuthFailure(auth)) return auth.error;
   const prefs = await getSubMetricPrefs(auth.userId, auth.org.id, auth.supabase);
   return NextResponse.json(prefs);
@@ -19,7 +19,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
 
   const orgId = body.org_id;
   if (!orgId) return NextResponse.json({ error: "org_id required" }, { status: 400 });
-  const auth = await requireOrgAccess(orgId);
+  const auth = await requireOrgRead(orgId); // own-row prefs → any active member
   if (isAuthFailure(auth)) return auth.error;
 
   const clean = sanitizeSubPrefs(body.pinned, body.visibleCount);

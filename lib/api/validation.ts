@@ -189,5 +189,9 @@ export function sanitizeSearchTerm(value: string | null): string | null {
   const trimmed = value.trim().slice(0, 100);
   if (!trimmed) return null;
 
-  return trimmed.replace(/[,%()]/g, " ");
+  // Strip PostgREST filter-syntax chars (comma/parens), THEN escape the LIKE
+  // wildcards `\ % _`. Escaping (not just %) is required so a search-only member
+  // can't pass "___" (three single-char wildcards) to match every row via
+  // ilike("%…%") — the same escaping the partner API (v1/payments) already does.
+  return trimmed.replace(/[,()]/g, " ").replace(/[\\%_]/g, (ch) => `\\${ch}`);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ShoppingBag, TrendingUp, Hash, Receipt, Search, Plug, Layers, SlidersHorizontal, ArrowUp, ArrowDown, Check, RotateCcw } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
@@ -84,15 +84,22 @@ export function SalesClient({
     } catch { /* keep edits */ } finally { setSaving(false); }
   };
 
+  // Latest-wins: abort the prior request so a slow earlier response can't overwrite
+  // a newer one (rapid dimension/filter switching would otherwise show stale data).
+  const dimAbort = useRef<AbortController | null>(null);
   const changeDimension = async (dim: string) => {
     setDimension(dim);
     setLoadingDim(true);
+    dimAbort.current?.abort();
+    const ctrl = new AbortController();
+    dimAbort.current = ctrl;
     try {
       const params = new URLSearchParams({ from: data.period.from, to: data.period.to, dimension: dim });
-      const res = await fetch(`/api/sales/overview?${params.toString()}`);
+      const res = await fetch(`/api/sales/overview?${params.toString()}`, { signal: ctrl.signal });
       const j = await res.json();
       if (res.ok) setOverview(j as SalesOverview);
-    } catch { /* keep last */ } finally { setLoadingDim(false); }
+    } catch (e) { if (e instanceof DOMException && e.name === "AbortError") return; /* keep last */ }
+    finally { if (!ctrl.signal.aborted) setLoadingDim(false); }
   };
 
   // ── Transactions table (server-paginated) ──
@@ -105,17 +112,22 @@ export function SalesClient({
   const [page, setPage] = useState(0);
   useEffect(() => { const t = setTimeout(() => { setQ(qInput); setPage(0); }, 350); return () => clearTimeout(t); }, [qInput]);
 
+  const rowsAbort = useRef<AbortController | null>(null);
   const fetchRows = useCallback(async () => {
+    rowsAbort.current?.abort();
+    const ctrl = new AbortController();
+    rowsAbort.current = ctrl;
     setLoadingRows(true);
     try {
       const params = new URLSearchParams({
         from: data.period.from, to: data.period.to,
         search: q, source, page: String(page), pageSize: String(PAGE),
       });
-      const res = await fetch(`/api/sales/transactions?${params.toString()}`);
+      const res = await fetch(`/api/sales/transactions?${params.toString()}`, { signal: ctrl.signal });
       const j = await res.json();
       if (res.ok) { setRows(j.rows ?? []); setTotal(j.total ?? 0); }
-    } catch { /* noop */ } finally { setLoadingRows(false); }
+    } catch (e) { if (e instanceof DOMException && e.name === "AbortError") return; /* noop */ }
+    finally { if (!ctrl.signal.aborted) setLoadingRows(false); }
   }, [data.period.from, data.period.to, q, source, page]);
   useEffect(() => { fetchRows(); }, [fetchRows]);
 

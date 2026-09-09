@@ -4,6 +4,7 @@ import { isAuthFailure, requireConnectorAccess } from "@/lib/api/auth";
 import { parseCsvFile, parseExcelFile, autoDetectMapping } from "@/lib/connectors/csv-parser";
 import { CsvColumnMapping, NormalizedTransaction } from "@/lib/normalizer";
 import { getExistingExternalIds } from "@/lib/db/dedup";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 import type { Database } from "@/lib/supabase/types";
 
 type TransactionInsert =
@@ -187,6 +188,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     .from("connectors")
     .update({ last_synced_at: new Date().toISOString() })
     .eq("id", connectorId);
+
+  // A CSV import is a user write — bust the per-org data cache so Bank/dashboard
+  // aggregates reflect the new rows immediately (gateway sync does the same).
+  if (imported > 0) invalidateOrg(auth.org.id, { immediate: true });
 
   return NextResponse.json({ imported, skipped });
 }

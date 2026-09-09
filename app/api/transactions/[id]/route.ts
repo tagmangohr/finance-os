@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { createServiceClient } from "@/lib/supabase/server";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,6 +76,10 @@ export async function PATCH(
     .select("*")
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Manual edit of amount/type/date changes the aggregates — bust the org cache so
+  // the dashboard/P&L don't serve a stale total until the TTL expires.
+  invalidateOrg(org.id, { immediate: true });
 
   return NextResponse.json({ transaction: updated });
 }

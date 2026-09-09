@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getActiveOrg } from "@/lib/org/active-org";
+import { requireOrgAccess, isAuthFailure } from "@/lib/api/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { saveSalesViewConfig, type SalesViewConfig, type SalesColumn, type SalesColType } from "@/lib/sales/view-config";
 
@@ -43,6 +44,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (pageAccess !== null && !pageAccess.includes("sales")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
+  // This saves the ORG-SHARED Sales view config — a write everyone sees. Page access
+  // alone is a READ gate (a viewer can hold the "sales" grant), so also require a
+  // writable role (owner/admin/manager). Without this a read-only member could
+  // overwrite the whole org's Sales columns.
+  const wr = await requireOrgAccess(org.id);
+  if (isAuthFailure(wr)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const config = sanitize(await req.json().catch(() => null));
   if (!config) return NextResponse.json({ error: "Invalid config" }, { status: 400 });
   try {

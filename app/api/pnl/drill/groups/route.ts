@@ -5,6 +5,7 @@ import { disputeLinkId, fetchLinkedIdentities, resolveDisputeIdentity } from "@/
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30; // JS-side drains (limit 5k-20k) need headroom past the platform default
 
 const ISO = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
 const LIMIT = 50;

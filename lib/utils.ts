@@ -47,20 +47,27 @@ export function formatCurrency(
   }).format(amount);
 }
 
-// Format date — always local, exact
-export function formatDate(date: string | Date): string {
+// Format date — always local, exact. date-fns `format`/`formatDistanceToNow` THROW
+// a RangeError on an invalid/NaN date, and a single bad value would crash the whole
+// table/page that renders it. Guard centrally: an unparseable value renders "—".
+function toValidDate(date: string | Date): Date | null {
   const d = typeof date === "string" ? new Date(date) : date;
-  return format(d, "dd MMM yyyy");
+  return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+}
+
+export function formatDate(date: string | Date): string {
+  const d = toValidDate(date);
+  return d ? format(d, "dd MMM yyyy") : "—";
 }
 
 export function formatDateShort(date: string | Date): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return format(d, "dd MMM");
+  const d = toValidDate(date);
+  return d ? format(d, "dd MMM") : "—";
 }
 
 export function formatDateRelative(date: string | Date): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return formatDistanceToNow(d, { addSuffix: true });
+  const d = toValidDate(date);
+  return d ? formatDistanceToNow(d, { addSuffix: true }) : "—";
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   validateConnectorConfig,
 } from "@/lib/api/validation";
 import { createServiceClient } from "@/lib/supabase/server";
+import { invalidateOrg } from "@/lib/cache/org-cache";
 import { enqueueBackfill, drainSyncJobs } from "@/lib/connectors/jobs";
 import { isLinkConnector } from "@/lib/connectors/links";
 import { fyStartISO } from "@/lib/utils";
@@ -236,6 +237,9 @@ export async function PATCH(request: Request) {
         try {
           const svc = await createServiceClient();
           await svc.rpc("resync_connector_pnl_flags" as never, { p_conn: id } as never);
+          // The resync rebuilds the DB rollups but not the Next per-org data cache
+          // — bust it so the dashboard/P&L reflect the re-scoped connector money.
+          invalidateOrg(auth.org.id, { immediate: true });
         } catch (e) {
           console.error("[connectors/manage] resync_connector_pnl_flags failed:", e);
         }
@@ -281,6 +285,10 @@ export async function DELETE(request: Request) {
       .eq("org_id", auth.org.id);
 
     if (error) throw error;
+
+    // Deleting a connector removes its transactions — bust the org cache so
+    // aggregates don't keep showing the deleted connector's money until the TTL.
+    invalidateOrg(auth.org.id, { immediate: true });
 
     return NextResponse.json({ success: true });
   } catch (err) {

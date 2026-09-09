@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { hasPageAccessForOrg } from "@/lib/org/page-access";
+import { requireOrgAccess, isAuthFailure } from "@/lib/api/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,7 +27,11 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
   if (!org || !line_slug || typeof growth_pct !== "number" || !Number.isFinite(growth_pct)) {
     return NextResponse.json({ error: "org, line_slug, numeric growth_pct required" }, { status: 400 });
   }
-  if (!(await hasPageAccessForOrg(org, "forecast"))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  // Writing an org-shared forecast override is a WRITE — require a writable role
+  // (owner/admin/manager), not just the read-level "forecast" page grant (a viewer
+  // can hold that grant and would otherwise be able to alter everyone's forecast).
+  const wr = await requireOrgAccess(org);
+  if (isAuthFailure(wr)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const supabase = await createServiceClient();
   const { error } = await supabase
@@ -40,7 +45,9 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
 export async function DELETE(req: NextRequest): Promise<NextResponse> {
   const org = req.nextUrl.searchParams.get("org");
   if (!org) return NextResponse.json({ error: "org required" }, { status: 400 });
-  if (!(await hasPageAccessForOrg(org, "forecast"))) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  // Clearing all overrides is a WRITE — require a writable role, not just the grant.
+  const wr = await requireOrgAccess(org);
+  if (isAuthFailure(wr)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const supabase = await createServiceClient();
   const { error } = await supabase.from("forecast_growth").delete().eq("org_id", org);

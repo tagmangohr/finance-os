@@ -63,7 +63,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       .select("id, external_id")
       .eq("org_id", org_id)
       .not("external_id", "is", null)
+      // `id` tiebreaker so OFFSET paging over the non-unique created_at can't skip
+      // or repeat rows at a page boundary (which would miss or double-handle a dup).
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(offset, offset + BATCH - 1);
 
     if (error) {
