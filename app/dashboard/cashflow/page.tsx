@@ -8,8 +8,7 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
 import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
-import { InflowOutflowChart } from "@/components/charts/inflow-outflow-chart";
-import { CategoryChart } from "@/components/charts/category-chart";
+import { InflowOutflowChart, CategoryChart } from "@/components/charts/lazy";
 import { formatCurrency } from "@/lib/utils";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

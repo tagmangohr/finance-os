@@ -8,7 +8,7 @@ import { MetricCard } from "@/components/dashboard/metric-card";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
 import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
-import { RevenueChart } from "@/components/charts/revenue-chart";
+import { RevenueChart } from "@/components/charts/lazy";
 import { formatCurrency } from "@/lib/utils";
 
 type CustomerLite = { name: string; total_revenue: number };
