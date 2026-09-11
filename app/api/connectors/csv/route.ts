@@ -166,9 +166,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     );
 
     if (newRows.length > 0) {
+      // Idempotent against the global (org_id, external_id) guard (migration 105):
+      // skip rows already present instead of failing the whole import on one dup.
       const { error: insertErr, count } = await auth.supabase
         .from("transactions")
-        .insert(newRows, { count: "exact" });
+        .upsert(newRows, { onConflict: "org_id,external_id", ignoreDuplicates: true, count: "exact" });
 
       if (insertErr) {
         return NextResponse.json(
@@ -177,7 +179,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         );
       }
 
-      imported = count ?? newRows.length;
+      imported = count ?? 0;
     }
 
     skipped = rows.length - imported;

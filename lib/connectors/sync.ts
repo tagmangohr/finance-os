@@ -405,23 +405,32 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value ?? null);
 }
 
-// A settled charge must never fall back to "pending". Gateways can emit a later,
-// out-of-order event that folds onto the same row — e.g. Cashfree fires a
-// SUBSCRIPTION_AUTH_STATUS (the MANDATE/autopay authorization, which can read
-// "pending" while the bank confirms it) AFTER the charge's SUBSCRIPTION_PAYMENT_SUCCESS.
-// With plain last-write-wins that mandate "pending" overwrote the completed charge,
-// dropping it out of revenue (1,195 charges / ₹44.1L were stuck this way). This guard
-// keeps status monotonic: a "pending" never overwrites an already-terminal status.
-// Every legitimate transition still flows (pending→completed, completed→refunded,
-// failed→completed) — only the downgrade-to-pending is blocked.
-const TERMINAL_STATUSES = new Set(["completed", "refunded", "failed"]);
+// Status must move MONOTONICALLY forward in finality — a later, out-of-order event
+// must never move a charge backward. Gateways re-deliver / interleave events: Cashfree
+// fires a SUBSCRIPTION_AUTH_STATUS ("pending" mandate) AFTER the charge succeeded
+// (1,195 charges / ₹44.1L were stranded "pending" this way); App Store re-delivers a
+// renewal ("completed") AFTER a REFUND folded onto the same row, un-refunding it.
+// Ranks: pending(0) < completed = failed (1) < refunded (2). So pending→completed,
+// completed→refunded, failed→completed all flow; but a LOWER-finality incoming status
+// (completed/pending onto refunded, pending onto completed) is refused. A genuine new
+// attempt is a new external_id (new row), so this only blocks the erroneous races.
+const STATUS_FINALITY: Record<string, number> = { pending: 0, failed: 1, completed: 1, refunded: 2 };
+// For the ATOMIC db guard: when writing status X, the statuses with STRICTLY higher
+// finality that the write must not clobber (used as a conditional WHERE).
+const HIGHER_FINALITY_THAN: Record<string, string[]> = {
+  pending: ["completed", "failed", "refunded"],
+  completed: ["refunded"],
+  failed: ["refunded"],
+  // refunded: nothing is higher-finality, so no guard needed.
+};
 function guardStatusDowngrade(
   existingStatus: string | null | undefined,
   incomingStatus: TransactionUpdate["status"]
 ): TransactionUpdate["status"] {
-  return incomingStatus === "pending" && existingStatus != null && TERMINAL_STATUSES.has(existingStatus)
-    ? (existingStatus as TransactionUpdate["status"]) // a terminal status from the same union → safe
-    : incomingStatus;
+  if (existingStatus == null || incomingStatus == null) return incomingStatus;
+  const ex = STATUS_FINALITY[existingStatus] ?? 0;
+  const inc = STATUS_FINALITY[incomingStatus] ?? 0;
+  return inc < ex ? (existingStatus as TransactionUpdate["status"]) : incomingStatus; // never downgrade finality
 }
 
 function hasTransactionChanged(
@@ -493,21 +502,18 @@ export async function persistTransactions(
   const existingRows = rows.filter((r) => r.external_id && existingByExternalId.has(r.external_id));
 
   if (newRows.length > 0) {
+    // Idempotent insert against the global (org_id, external_id) uniqueness guard
+    // (migration 105): ON CONFLICT DO NOTHING inserts the new rows and silently skips
+    // any a concurrent sync — or a reconnect under a DIFFERENT connector — already
+    // wrote. This is per-row, so a single duplicate can't drop the whole batch (a
+    // plain insert is all-or-nothing and would skip EVERY new row on one conflict).
+    // NULL-external_id rows never conflict (nulls are distinct) and insert normally.
     const { error, count } = await supabase
       .from("transactions")
-      .insert(newRows, { count: "exact" });
-    if (error) {
-      // 23505 = unique_violation: a concurrent sync inserted some rows first. The
-      // partial unique index can't be referenced by upsert, so plain insert +
-      // catching 23505 is correct — treat as skipped (data already present).
-      if (error.code === "23505") {
-        out.skipped += newRows.length;
-      } else {
-        throw new Error(`Insert failed: ${error.message}`);
-      }
-    } else {
-      out.inserted = count ?? newRows.length;
-    }
+      .upsert(newRows, { onConflict: "org_id,external_id", ignoreDuplicates: true, count: "exact" });
+    if (error) throw new Error(`Insert failed: ${error.message}`);
+    out.inserted = count ?? 0;
+    out.skipped += newRows.length - (count ?? 0);
   }
 
   // Refresh changed existing rows through a BOUNDED pool (not an unbounded
@@ -526,26 +532,25 @@ export async function persistTransactions(
       const fields = { ...refreshFields, status: guardStatusDowngrade(existing.status, refreshFields.status) };
       if (!hasTransactionChanged(existing, fields)) continue;
       touched = true;
-      const writingPending = fields.status === "pending";
+      // Statuses with strictly higher finality that this write must not clobber.
+      const higherFinality = HIGHER_FINALITY_THAN[fields.status ?? ""];
       updateThunks.push(async () => {
         let query = supabase
           .from("transactions")
           .update(fields)
           .eq("id", existing.id)
           .eq("org_id", orgId);
-        // ATOMIC downgrade guard. guardStatusDowngrade() above decides against THIS
-        // row's status as READ at fetch time. But two SUBSCRIPTION_AUTH_STATUS webhooks
-        // for the same charge (one "pending", one "failed"/"success") can arrive in the
-        // same second and run as CONCURRENT function invocations: each reads the
-        // pre-write status, both pass the in-memory guard, and last-write-wins can still
-        // land the "pending" on top of a row the other invocation just made terminal
-        // (this stranded rahulmeena0397's failed mandates as "pending"). When we are
-        // about to write "pending", make the write itself conditional on the row not
-        // being terminal AT THE DATABASE — so a concurrent terminal write turns this one
-        // into a 0-row no-op instead of clobbering it. Null-safe: a NULL status (never
-        // occurs today, but cheap to honour) is still allowed through.
-        if (writingPending) {
-          query = query.or("status.is.null,status.not.in.(completed,refunded,failed)");
+        // ATOMIC finality guard. guardStatusDowngrade() above decides against THIS row's
+        // status as READ at fetch time. But two events for the same charge can arrive in
+        // the same second and run as CONCURRENT invocations: each reads the pre-write
+        // status, both pass the in-memory guard, and last-write-wins could still land a
+        // lower-finality status on top of a row the other invocation just moved forward
+        // (e.g. a re-delivered "completed" clobbering a "refunded", or "pending" clobbering
+        // a settled charge). So make the write itself conditional on the row not already
+        // holding a HIGHER-finality status — a concurrent forward write turns this one into
+        // a 0-row no-op. Null-safe: a NULL status is still allowed through.
+        if (higherFinality && higherFinality.length) {
+          query = query.or(`status.is.null,status.not.in.(${higherFinality.join(",")})`);
         }
         const { error } = await query;
         if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
