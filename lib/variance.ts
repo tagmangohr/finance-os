@@ -80,8 +80,29 @@ export async function getVariance(orgId: string, fyStart: number, today = new Da
   const expenseSlugs = [...planComp.keys()].filter((s) => s !== "__gross__" && s !== "__refunds__");
   const cmCats = new Set(CM_CONFIG.flatMap((t) => t.cats).filter((s) => s !== "__pg_fees__"));
 
-  // Derived plan series.
-  const planNetRev: Record<string, number> = {}, planOpex: Record<string, number> = {}, planNetProfit: Record<string, number> = {};
+  // Other Income (non-operating: interest, reimbursements, misc receipts) is planned
+  // per line — seeded from the FY's first-month actual and compounded at its trend
+  // (flat when the forecast has no growth model for it), same as every other component.
+  // These rows are kind "revenue" with id `inc_<slug>`; they are NOT operating revenue
+  // and never enter Net Revenue / the CM tiers — only Net Profit, below opex.
+  const planOtherInc = new Map<string, Record<string, number>>();
+  for (const row of pnl.rows) {
+    if (row.kind !== "revenue" || !row.id.startsWith("inc_")) continue;
+    const slug = row.id.slice(4);
+    const seed = row.monthly[firstKey] ?? 0;
+    const g = (growthOf.get(slug) ?? 0) / 100;
+    const series: Record<string, number> = {};
+    monthKeys.forEach((k, i) => { series[k] = seed * Math.pow(1 + g, i); });
+    planOtherInc.set(slug, series);
+  }
+
+  // Derived plan series — mirror the actual P&L math (lib/pnl.ts):
+  //   Net Operating Income = Net Revenue − Total Opex
+  //   Net Profit           = Net Operating Income + Other Income
+  // Lost chargebacks are not forecasted, so the plan assumes zero; the actual loss then
+  // reads as an (unfavourable) Net Revenue variance rather than a planned deduction.
+  const planNetRev: Record<string, number> = {}, planOpex: Record<string, number> = {};
+  const planNoi: Record<string, number> = {}, planOtherIncTotal: Record<string, number> = {}, planNetProfit: Record<string, number> = {};
   const planCm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of monthKeys) {
     const gross = planCat("__gross__", k), refunds = planCat("__refunds__", k), fees = planCat("__pg_fees__", k);
@@ -89,15 +110,24 @@ export async function getVariance(orgId: string, fyStart: number, today = new Da
     planNetRev[k] = nr;
     const opexCats = expenseSlugs.filter((s) => s !== "__pg_fees__").reduce((a, s) => a + planCat(s, k), 0);
     planOpex[k] = fees + opexCats;
-    planNetProfit[k] = nr - planOpex[k];
+    const noi = nr - planOpex[k];
+    planNoi[k] = noi;
+    const oi = [...planOtherInc.values()].reduce((a, s) => a + (s[k] ?? 0), 0);
+    planOtherIncTotal[k] = oi;
+    planNetProfit[k] = noi + oi;
     let running = nr;
     for (const t of CM_CONFIG) { running -= t.cats.reduce((a, s) => a + planCat(s, k), 0); planCm[t.id][k] = running; }
   }
 
   const planForRow = (row: PnlRow): Record<string, number> => {
-    if (isComponentKind(row.kind)) { const s = componentSlug(row.id); return (s && planComp.get(s)) || {}; }
+    if (isComponentKind(row.kind)) {
+      if (row.id.startsWith("inc_")) return planOtherInc.get(row.id.slice(4)) ?? {};
+      const s = componentSlug(row.id); return (s && planComp.get(s)) || {};
+    }
     if (row.id === "net_revenue") return planNetRev;
     if (row.id === "total_opex") return planOpex;
+    if (row.id === "net_operating_income") return planNoi;
+    if (row.id === "other_income_total") return planOtherIncTotal;
     if (row.id === "net_profit") return planNetProfit;
     if (planCm[row.id]) return planCm[row.id];
     return {}; // margin — derived by the client from net_profit/net_revenue plan
