@@ -847,6 +847,7 @@ const ACTION_META: Record<string, { label: string; Icon: typeof History; tone: s
   permission_change: { label: "Permissions changed",  Icon: ShieldCheck,  tone: "text-primary" },
   member_added:      { label: "Added to organisation", Icon: UserPlus,    tone: "text-success" },
   member_removed:    { label: "Removed from org",      Icon: Trash2,      tone: "text-destructive" },
+  password_reset:    { label: "Password reset",         Icon: KeyRound,    tone: "text-primary" },
 };
 
 function ActivityDialog({ member, onClose }: { member: OrgMember; onClose: () => void }) {
@@ -966,6 +967,23 @@ function MemberRow({
 }) {
   const [revoking, setRevoking] = React.useState(false);
   const [showActivity, setShowActivity] = React.useState(false);
+  const [resetting, setResetting] = React.useState(false);
+  const [resetCreds, setResetCreds] = React.useState<{ email: string; password: string } | null>(null);
+
+  const doReset = async () => {
+    if (!confirm(`Reset the password for ${member.invited_email}? They'll get a new temporary password and be asked to set their own on next login.`)) return;
+    setResetting(true);
+    try {
+      const res = await fetch(`/api/users/${member.id}/reset-password`, { method: "POST" });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error);
+      setResetCreds(d.credentials);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to reset password");
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const doRevoke = async () => {
     if (!confirm(`Remove ${member.invited_email} from this organisation?`)) return;
@@ -1047,6 +1065,16 @@ function MemberRow({
         >
           <Settings2 className="w-3.5 h-3.5" />
         </button>
+        {member.status === "active" && (
+          <button
+            onClick={doReset}
+            disabled={resetting}
+            title="Reset password"
+            className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-primary hover:bg-accent transition-all"
+          >
+            {resetting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+          </button>
+        )}
         <button
           onClick={doRevoke}
           disabled={revoking}
@@ -1058,6 +1086,32 @@ function MemberRow({
       </div>
 
       {showActivity && <ActivityDialog member={member} onClose={() => setShowActivity(false)} />}
+
+      {resetCreds && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setResetCreds(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <KeyRound className="w-4 h-4 text-primary" />
+              <h3 className="text-[14px] font-semibold text-foreground">Password reset</h3>
+            </div>
+            <p className="text-[12px] text-muted-foreground mb-4">
+              Share these with {member.full_name || member.invited_email}. They&apos;ll be asked to set their own
+              password the next time they sign in.
+            </p>
+            <div className="space-y-3">
+              <CopyField label="Email" value={resetCreds.email} />
+              <CopyField label="Temporary password" value={resetCreds.password} />
+            </div>
+            <Button className="w-full mt-4" onClick={() => setResetCreds(null)}>Done</Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
