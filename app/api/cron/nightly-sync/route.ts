@@ -3,6 +3,7 @@ import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { detectCashfreeSubDoubleCounts } from "@/lib/ops/sub-integrity";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
@@ -228,6 +229,31 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(orgId);
       } catch (e) {
         console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
+      }
+    }
+    // Cashfree recurring-charge double-count watchdog (last 30 days, all orgs). Read-only,
+    // non-fatal. The dedup invariant (cf_pay_<cf_txn_id> collapses webhook/poller/recon
+    // onto one row) is validated at 0 across full history; this catches a future regression.
+    // Recorded to cron_runs for audit; the Sync Health page surfaces any finding as a red flag.
+    {
+      const wStart = Date.now();
+      try {
+        const dupes = await detectCashfreeSubDoubleCounts(sb, { sinceDays: 30 });
+        // Per-org counts so the Sync Health page can read this org's flag cheaply.
+        const byOrg: Record<string, number> = {};
+        for (const g of dupes.groups) byOrg[g.orgId] = (byOrg[g.orgId] ?? 0) + 1;
+        await logCronRun(sb, "sub-dupe-watch", wStart, "ok", null, {
+          scanned: dupes.scanned,
+          offending: dupes.groups.length,
+          byOrg,
+          sample: dupes.groups.slice(0, 5),
+        });
+        if (dupes.groups.length) {
+          console.error(`[cron/nightly-sync] ⚠ ${dupes.groups.length} possible subscription double-count group(s) in last 30d`);
+        }
+      } catch (e) {
+        await logCronRun(sb, "sub-dupe-watch", wStart, "failed", e instanceof Error ? e.message : String(e));
+        console.error("[cron/nightly-sync] sub-dupe watch failed:", e);
       }
     }
   });

@@ -141,9 +141,32 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     };
   });
 
+  // Cashfree recurring-charge double-count watchdog. The nightly sync runs the actual
+  // 30-day scan (detectCashfreeSubDoubleCounts) across all orgs and records a per-org
+  // count in the `sub-dupe-watch` cron_runs meta — so here we just read that latest
+  // result cheaply instead of re-scanning thousands of rows on every page open. Baseline
+  // is 0; freshness is ~last night, which is fine for this insurance signal. Non-fatal.
+  let subDupeFlag: string | null = null;
+  try {
+    const { data: watch } = await supabase
+      .from("cron_runs")
+      .select("meta")
+      .eq("job_name", "sub-dupe-watch")
+      .eq("status", "ok")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const byOrg = ((watch?.meta as { byOrg?: Record<string, number> } | null)?.byOrg) ?? {};
+    const n = byOrg[orgId] ?? 0;
+    if (n > 0) {
+      subDupeFlag = `${n} possible duplicate subscription charge${n === 1 ? "" : "s"} flagged by last night's check — the same amount booked twice on one day for one subscription (check Subscriptions/Payments)`;
+    }
+  } catch { /* watchdog is best-effort; never fail the health page on it */ }
+
   const redFlags: string[] = [
     ...connectorHealth.filter((c) => c.health === "red").map((c) => `${c.name ?? c.type}: ${c.reason}`),
     ...crons.filter((c) => c.health === "red").map((c) => `Cron "${c.jobName}" last run failed`),
+    ...(subDupeFlag ? [subDupeFlag] : []),
   ];
 
   return { connectors: connectorHealth, crons, redFlags, generatedAt: new Date().toISOString() };
