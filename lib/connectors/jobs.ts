@@ -531,6 +531,16 @@ async function processLegacyJob(supabase: SupabaseLike, job: SyncJobRow, connect
       fromDate: new Date(job.window_from),
       toDate: new Date(job.window_to),
     });
+    // A gateway fetch failure is SWALLOWED into result.warnings (not thrown), so a
+    // window that actually FAILED would otherwise be marked "done" and the checkpoint
+    // advanced past it — permanently dropping those rows (the item-9 bug). Treat a
+    // warning-laden result as a RETRYABLE failure: the queue retries it with backoff and
+    // the checkpoint stays put, so nothing is silently skipped. A window that keeps
+    // failing to the retry ceiling stays 'failed' and shows as a red flag on Sync Health.
+    if (result.warnings.length > 0) {
+      await finishJob(supabase, job, { ok: false, error: result.warnings.join(" | "), permanent: false });
+      return job.attempts >= job.max_attempts ? "failed" : "progress";
+    }
     await finishJob(supabase, job, { ok: true, result });
     if (job.advance_checkpoint) await advanceCheckpoint(supabase, connector.id, new Date(job.window_to));
     return "done";

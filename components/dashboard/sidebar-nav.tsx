@@ -43,6 +43,7 @@ const NAV_GROUPS: NavGroup[] = [
 
 const SETUP_NAV: NavItem[] = [
   { href: "/dashboard/connectors", slug: "connectors", label: "Connectors", Icon: Plug },
+  { href: "/dashboard/health",     slug: "health",     label: "Sync Health", Icon: Activity },
   { href: "/dashboard/profile",    label: "Profile",   Icon: User },
   { href: "/dashboard/users",      label: "Team",      Icon: Users, ownerOnly: true },
   { href: "/dashboard/settings",   label: "Settings",  Icon: Settings, ownerOnly: true },

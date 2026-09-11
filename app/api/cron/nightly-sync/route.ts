@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
+import { logCronRun } from "@/lib/ops/cron-runs";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
@@ -44,13 +45,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+  const startedAt = Date.now();
   const { data: connectors, error } = await supabase
     .from("connectors")
     .select("*")
     .eq("status", "active")
     .in("type", SYNCABLE_TYPES);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    await logCronRun(supabase, "nightly-sync", startedAt, "failed", error.message);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   if (!connectors || connectors.length === 0) {
+    await logCronRun(supabase, "nightly-sync", startedAt, "ok", null, { enqueued: 0 });
     return NextResponse.json({ message: "No active connectors", enqueued: 0 });
   }
 
@@ -226,6 +232,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
   });
 
+  await logCronRun(supabase, "nightly-sync", startedAt, "ok", null, {
+    connectors_enqueued: enqueued, links_synced: links, stripe_events_delta: eventsDelta,
+    stripe_fees_filled: feesFilled, fx_reconciled: fxReconciled, skipped_already_running: skipped,
+  });
   return NextResponse.json({
     message: "Nightly reconcile started",
     stripe_events_delta: eventsDelta,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { logCronRun } from "@/lib/ops/cron-runs";
 import { syncDriveFile } from "@/lib/drive/sync";
 import type { DriveConnection, DriveFile } from "@/lib/drive/types";
 
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+  const startedAt = Date.now();
 
   // ── Find files due for a check ─────────────────────────────────────────────
   const cutoff = new Date(Date.now() - 55 * 60 * 1000).toISOString();
@@ -40,6 +42,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .limit(50); // safety cap per run
 
   if (filesErr) {
+    await logCronRun(supabase, "drive-sync", startedAt, "failed", filesErr.message);
     return NextResponse.json({ error: filesErr.message }, { status: 500 });
   }
 
@@ -84,6 +87,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   console.log(
     `[cron/drive-sync] ${new Date().toISOString()} — ${files.length} files checked, ${totalInserted} new txns, ${totalUpdated} updated`
+  );
+
+  const fileErrors = summary.filter((s) => s.status === "error");
+  await logCronRun(
+    supabase, "drive-sync", startedAt,
+    fileErrors.length > 0 ? "failed" : "ok",
+    fileErrors[0]?.reason ?? null,
+    { files: files.length, inserted: totalInserted, updated: totalUpdated, errors: fileErrors.length }
   );
 
   return NextResponse.json({

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { recordCronRun } from "@/lib/ops/cron-runs";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
@@ -45,7 +46,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
-
+  try {
+   const out = await recordCronRun(supabase, "snapshot", async () => {
   // ── Daily self-healing reconciliation (migration 098) ───────────────────────
   // Re-derive ALL metric rollups from the raw ledger so any incremental-trigger
   // drift (e.g. a reprocess that double-applied +NEW) is corrected before anything
@@ -67,14 +69,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     .select("org_id")
     .eq("status", "active");
 
-  if (connErr) {
-    return NextResponse.json({ error: connErr.message }, { status: 500 });
-  }
+  if (connErr) throw new Error(connErr.message);
 
   const orgIds = [...new Set((activeConnectors ?? []).map((c) => c.org_id))];
 
   if (orgIds.length === 0) {
-    return NextResponse.json({ message: "No active orgs", processed: 0 });
+    return { message: "No active orgs", processed: 0, rollups_reconciled: rollupsReconciled, detail: [] };
   }
 
   const today = new Date().toISOString().split("T")[0];
@@ -129,10 +129,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   console.log(`[cron/snapshot] ${new Date().toISOString()} — processed ${orgIds.length} orgs`);
 
-  return NextResponse.json({
-    message:            "OK",
-    processed:          orgIds.length,
-    rollups_reconciled: rollupsReconciled,
-    detail:             summary,
-  });
+  return { message: "OK", processed: orgIds.length, rollups_reconciled: rollupsReconciled, detail: summary };
+   });
+   return NextResponse.json(out);
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "snapshot failed" }, { status: 500 });
+  }
 }
