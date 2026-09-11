@@ -491,7 +491,7 @@ export async function persistTransactions(
   // Convert foreign-currency rows to the base currency (INR) — the settling
   // gateway can't always provide it (a USD Stripe account never sees INR), so we
   // convert via ECB rates at each transaction's date.
-  await enrichRowsWithFx(rows);
+  await enrichRowsWithFx(rows, supabase);
 
   const externalIds = rows.map((r) => r.external_id).filter(Boolean) as string[];
   const existingByExternalId = externalIds.length
@@ -664,7 +664,7 @@ export async function replaceConnectorTransactions(
   if (transactions.length === 0) return { inserted: 0 };
 
   const rows = toInsertRows(orgId, connectorId, transactions);
-  await enrichRowsWithFx(rows); // INR equivalent for any foreign-currency rows
+  await enrichRowsWithFx(rows, supabase); // INR equivalent for any foreign-currency rows
 
   const { error: delErr } = await supabase
     .from("transactions")
@@ -705,7 +705,7 @@ export async function mergeConnectorTransactions(
   if (transactions.length === 0) return { inserted: 0, updated: 0 };
 
   const rows = toInsertRows(orgId, connectorId, transactions);
-  await enrichRowsWithFx(rows);
+  await enrichRowsWithFx(rows, supabase);
 
   // One-time cleanup: drop legacy null-external_id rows for this connector (they
   // can't be merged and would otherwise co-exist with the new keyed rows). NEVER

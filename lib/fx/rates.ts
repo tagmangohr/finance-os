@@ -121,7 +121,7 @@ type FxRow = {
  * value and aren't already in the base currency. Mutates rows in place. One FX
  * fetch per distinct currency (a range covering all its dates).
  */
-export async function enrichRowsWithFx(rows: FxRow[]): Promise<void> {
+export async function enrichRowsWithFx(rows: FxRow[], fallbackClient?: SupabaseClient): Promise<void> {
   const need = rows.filter(
     (r) => r.amount_base == null && r.currency && r.currency !== BASE_CURRENCY
   );
@@ -142,6 +142,32 @@ export async function enrichRowsWithFx(rows: FxRow[]): Promise<void> {
         r.amount_base = Math.round(r.amount * rate * 100) / 100;
         r.base_currency = BASE_CURRENCY;
         r.fx_rate = rate;
+      }
+    }
+
+    // Any rows still unconverted here mean the live ECB fetch failed (network/timeout)
+    // or no prior rate was in range. Rather than leave amount_base NULL — which makes
+    // aggregation sum the raw foreign amount as if it were INR (~88x off) until the
+    // backfill cron catches it — fall back to the LAST-KNOWN rate for this currency
+    // (the most recent one we ever stored). The nightly reconcileFxRates then corrects
+    // it to the authoritative published rate. This guarantees a rate is always present.
+    const stillNeed = rs.filter((r) => r.amount_base == null);
+    if (stillNeed.length > 0 && fallbackClient) {
+      const { data: last } = await fallbackClient
+        .from("transactions")
+        .select("fx_rate")
+        .eq("currency", currency)
+        .not("fx_rate", "is", null)
+        .order("transaction_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const lastKnown = (last?.fx_rate as number | null | undefined) ?? null;
+      if (lastKnown != null) {
+        for (const r of stillNeed) {
+          r.amount_base = Math.round(r.amount * lastKnown * 100) / 100;
+          r.base_currency = BASE_CURRENCY;
+          r.fx_rate = lastKnown;
+        }
       }
     }
   }

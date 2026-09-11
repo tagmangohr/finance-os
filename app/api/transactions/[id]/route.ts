@@ -52,15 +52,23 @@ export async function PATCH(
   const sb = await createServiceClient();
   const { data: existing } = await sb
     .from("transactions")
-    .select("id, org_id, currency, amount_base, metadata")
+    .select("id, org_id, currency, amount_base, fx_rate, metadata")
     .eq("id", id)
     .eq("org_id", org.id)
     .maybeSingle();
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // Keep INR base amount in step when the amount is edited.
-  if (patch.amount !== undefined && (existing.currency === "INR" || existing.amount_base == null)) {
-    patch.amount_base = patch.amount;
+  // Keep the INR base amount (amount_base — what every rupee aggregate sums on) in
+  // step when the amount is edited. INR / not-yet-converted rows are 1:1; a foreign
+  // row is RE-converted at its stored rate, so the edit actually moves the ₹ total
+  // instead of leaving amount_base stale.
+  if (patch.amount !== undefined) {
+    const newAmount = patch.amount as number;
+    if (existing.currency === "INR" || existing.amount_base == null) {
+      patch.amount_base = newAmount;
+    } else if (existing.fx_rate != null) {
+      patch.amount_base = Math.round(newAmount * (existing.fx_rate as number) * 100) / 100;
+    }
   }
 
   // Record which fields are manually owned so merge-sync won't overwrite them.
