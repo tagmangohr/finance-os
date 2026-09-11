@@ -60,24 +60,25 @@ export async function POST(
   // Admins (and the owner) may reset any member, INCLUDING peer admins — an admin is a
   // trusted role that already manages the team, so admin-to-admin reset is allowed.
 
-  // ORG-SCOPED SHARED-ACCOUNT GUARD (cross-org takeover). One person can belong to
-  // several orgs on ONE login (addOrLinkMember reuses an existing account by email).
-  // Resetting hands the actor a working credential for EVERY org that login can reach,
-  // so it's only safe if the actor manages ALL of them. Gather the person's other orgs
-  // — memberships AND any org they OWN — and refuse if the actor doesn't manage even one.
-  const [{ data: otherMemberships }, { data: ownedOrgs }] = await Promise.all([
-    service.from("org_members").select("org_id").eq("user_id", target.user_id).eq("status", "active").neq("org_id", target.org_id),
-    service.from("organizations").select("id").eq("owner_id", target.user_id),
-  ]);
-  const otherOrgIds = new Set<string>([
-    ...(otherMemberships ?? []).map((m) => m.org_id as string),
-    ...(ownedOrgs ?? []).map((o) => o.id as string),
-  ]);
-  otherOrgIds.delete(target.org_id); // the current org is already authorized
-  for (const otherOrgId of otherOrgIds) {
-    if (!(await canManageOrg(service, user.id, otherOrgId))) {
+  // ORG-SCOPED SHARED-ACCOUNT GUARD (cross-org takeover). A person can be an active
+  // MEMBER of several shared orgs on ONE login (addOrLinkMember reuses an existing
+  // account by email). Resetting hands the actor a working credential for all of them,
+  // so only allow it when the actor manages every such org.
+  //
+  // We intentionally DON'T count an org the person merely OWNS: every user gets a
+  // personal org auto-created at signup (their own empty space, not another team's
+  // data), so counting owned orgs would block almost every reset. The real risk is
+  // shared MEMBERSHIP in another team's org.
+  const { data: otherMemberships } = await service
+    .from("org_members")
+    .select("org_id")
+    .eq("user_id", target.user_id)
+    .eq("status", "active")
+    .neq("org_id", target.org_id);
+  for (const m of otherMemberships ?? []) {
+    if (!(await canManageOrg(service, user.id, m.org_id as string))) {
       return NextResponse.json({
-        error: "This person also belongs to an organisation you don't manage, so their password can't be reset from here. They can change it themselves from Account → Change Password.",
+        error: "This person is also an active member of another organisation you don't manage, so their password can't be reset from here.",
       }, { status: 409 });
     }
   }
