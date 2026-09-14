@@ -286,4 +286,4 @@ export const DEFAULT_PINNED = [
   "refund_rate", "gross_volume_90d",
 ];
 export const DEFAULT_VISIBLE_COUNT = 6;
-export const VISIBLE_COUNT_OPTIONS = [4, 6, 8, 10];
+export const VISIBLE_COUNT_OPTIONS = [4, 6, 8, 10, 15, 20];

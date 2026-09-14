@@ -155,7 +155,6 @@ export function MetricStrip({ computed, initialPinned, initialVisibleCount, orgI
                 trendLabel={c.trendLabel}
                 icon={<def.icon className="w-4 h-4" />}
                 accentColor={def.accent}
-                sparklineData={c.available ? c.spark : undefined}
               />
             </div>
           );
