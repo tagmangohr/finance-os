@@ -22,7 +22,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 type InflowRow = { label: string; inflow: number; outflow: number };
 
-// Aggregate daily cash flow into the last ~8 months for the grouped bars.
+// Aggregate daily cash flow into the last ~6 months for the grouped bars.
 function buildInflowOutflow(s: DashboardSummary): InflowRow[] {
   const byMonth = new Map<string, { inflow: number; outflow: number }>();
   for (const d of s.cashFlowData) {
@@ -33,14 +33,12 @@ function buildInflowOutflow(s: DashboardSummary): InflowRow[] {
   }
   return [...byMonth.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-8)
+    .slice(-6)
     .map(([k, v]) => ({ label: MONTHS[Number(k.slice(5, 7)) - 1] ?? k, inflow: v.inflow, outflow: v.outflow }));
 }
 
 // Sample inflow/outflow so the dashboard looks alive before any source is connected.
 const SAMPLE_INFLOW: InflowRow[] = [
-  { label: "Feb", inflow: 620000, outflow: 500000 },
-  { label: "Mar", inflow: 680000, outflow: 460000 },
   { label: "Apr", inflow: 550000, outflow: 580000 },
   { label: "May", inflow: 800000, outflow: 400000 },
   { label: "Jun", inflow: 720000, outflow: 600000 },
@@ -111,8 +109,8 @@ export default async function DashboardPage() {
 
       {/* Inflow vs outflow + MRR movement */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
-        <SectionCard title="Inflow vs Outflow" subtitle="last 8 months" className="lg:col-span-2"
-          action={<span className="text-[11px] text-muted-foreground"><span className="text-metric-revenue">●</span> in <span className="text-metric-runway">●</span> out</span>}>
+        <SectionCard title="Inflow vs Outflow" subtitle="last 6 months" className="lg:col-span-2"
+          action={<span className="text-[11px] text-muted-foreground"><span className="text-primary">●</span> in <span className="text-warning">●</span> out <span className="text-foreground">●</span> net</span>}>
           <InflowOutflowChart data={inflowOutflow} />
         </SectionCard>
         <MrrMovementPanel data={mrr} />

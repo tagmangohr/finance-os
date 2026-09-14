@@ -69,7 +69,7 @@ export function MetricCard({
         {hasTrend && (
           <span
             className={cn(
-              "shrink-0 inline-flex items-center gap-0.5 text-[10.5px] font-semibold px-1.5 py-0.5 rounded",
+              "shrink-0 inline-flex items-center gap-0.5 whitespace-nowrap text-[10.5px] font-semibold px-1.5 py-0.5 rounded",
               isUp ? "text-success bg-success/10" : "text-destructive bg-destructive/10"
             )}
           >
@@ -83,7 +83,7 @@ export function MetricCard({
       <div className="num text-[22px] font-bold tracking-[-0.02em] leading-[1.1] text-foreground">{value}</div>
 
       {/* Subtitle */}
-      {subtitle && <div className="text-[11px] text-muted-foreground leading-snug">{subtitle}</div>}
+      {subtitle && <div className="text-[11px] text-muted-foreground leading-snug truncate">{subtitle}</div>}
 
       {/* Sparkline — only when there's a series to show; no dead placeholder slot
           (that empty reserved space was what made every card look oversized). */}

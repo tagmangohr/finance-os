@@ -126,7 +126,7 @@ export function MetricStrip({ computed, initialPinned, initialVisibleCount, orgI
         <h2 className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wider">Key metrics</h2>
         <button
           onClick={openDrawer}
-          className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-medium text-muted-foreground hover:text-foreground border border-border hover:border-border/80 bg-card transition-colors"
+          className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-medium text-background bg-foreground hover:bg-foreground/90 border border-transparent transition-colors"
         >
           <SlidersHorizontal className="h-3.5 w-3.5" /> Customize
         </button>
@@ -155,6 +155,7 @@ export function MetricStrip({ computed, initialPinned, initialVisibleCount, orgI
                 trendLabel={c.trendLabel}
                 icon={<def.icon className="w-4 h-4" />}
                 accentColor={def.accent}
+                className="h-full min-h-[100px]"
               />
             </div>
           );
