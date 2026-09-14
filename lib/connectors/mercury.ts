@@ -48,6 +48,29 @@ export class MercuryConnector {
     return [...(deposit.accounts ?? []), ...creditAccounts];
   }
 
+  /** Mercury Treasury (money-market / T-bill sweep) is LIQUID business cash exposed on a
+   *  SEPARATE /treasury endpoint — it is NOT in /accounts, which is why balance syncs that
+   *  only read /accounts miss it entirely (often the bulk of a company's cash). Returned
+   *  here as treasury-kind USD accounts so the balance sync counts them (CASH_KINDS
+   *  includes 'treasury'). Best-effort: empty on any error or for orgs without Treasury.
+   *  Deliberately NOT merged into fetchAccounts — transaction sync reads
+   *  /account/{id}/transactions, which does not apply to a treasury holding. */
+  async fetchTreasuryAccounts(): Promise<MercuryAccount[]> {
+    const t = await this.getJson<{ accounts?: MercuryTreasuryAccount[] }>(`${MERCURY_BASE}/treasury`)
+      .catch(() => ({ accounts: [] as MercuryTreasuryAccount[] }));
+    return (t.accounts ?? []).map((a) => ({
+      id: a.id,
+      name: "Mercury Treasury",
+      nickname: "Mercury Treasury",
+      kind: "treasury",
+      type: "mercury",
+      status: a.status ?? null,
+      currency: "USD",
+      currentBalance: a.currentBalance ?? a.availableBalance ?? null,
+      availableBalance: a.availableBalance ?? a.currentBalance ?? null,
+    }));
+  }
+
   /** Fetch all transactions across all accounts within [fromDate, toDate].
    *  Each row is tagged with its account's `kind` (checking/credit/treasury/…). */
   async fetchTransactions(fromDate: Date, toDate: Date): Promise<NormalizedTransaction[]> {
@@ -81,6 +104,14 @@ export class MercuryConnector {
     return out;
   }
 }
+
+/** Shape of a Mercury Treasury account from GET /treasury (money-market holding). */
+type MercuryTreasuryAccount = {
+  id: string;
+  status?: string | null;
+  currentBalance?: number | null;
+  availableBalance?: number | null;
+};
 
 export type MercuryAccount = {
   id: string;

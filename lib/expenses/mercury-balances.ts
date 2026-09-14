@@ -24,7 +24,12 @@ export async function refreshMercuryBalances(supabase: SupabaseClient, connector
 
   let accounts;
   try {
-    accounts = await new MercuryConnector(apiToken).fetchAccounts();
+    // Deposit + credit accounts (from /accounts, /credit) PLUS treasury (from /treasury —
+    // a separate endpoint). Treasury is liquid business cash and is often where most of the
+    // balance sits, so a balance sync that skips it badly understates cash.
+    const conn = new MercuryConnector(apiToken);
+    const [core, treasury] = await Promise.all([conn.fetchAccounts(), conn.fetchTreasuryAccounts()]);
+    accounts = [...core, ...treasury];
   } catch (e) {
     console.error("[mercury-balances] fetchAccounts failed:", e);
     return 0;
