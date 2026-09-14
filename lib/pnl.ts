@@ -12,7 +12,7 @@ const REVENUE_INCOME_CATS = new Set(["customer_payment"]);
 export { CM_CONFIG, CM_CAT_ORDER };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-export type PnlMode = "monthly" | "quarterly" | "annual" | "custom";
+export type PnlMode = "monthly" | "quarterly" | "annual" | "custom" | "month";
 export type PnlRowKind = "revenue" | "deduction" | "subtotal" | "expense" | "cm" | "total" | "margin";
 
 export interface PnlRow {
@@ -123,6 +123,13 @@ function buildColumns(params: PnlParams): { columns: PnlColumn[]; periodLabel: s
     const cols = keys.map((k) => ({ key: k, label: monthLabel(k), monthKeys: [k] }));
     return { columns: cols, periodLabel: `${monthLabel(fromKey)} – ${monthLabel(toKey)}` };
   }
+  if (params.mode === "month" && params.month) {
+    // Exactly one month — a single column (the founder's "just show me August" view).
+    const k = params.month;
+    const [y, m] = k.split("-").map(Number);
+    const full = `${MONTH_ABBR[m - 1]} ${y}`;
+    return { columns: [{ key: k, label: monthLabel(k), monthKeys: [k] }], periodLabel: full };
+  }
   // monthly (default)
   const keys = fyMonthKeys(params.fyStart);
   return { columns: keys.map((k) => ({ key: k, label: monthLabel(k), monthKeys: [k] })), periodLabel: fyLabel(params.fyStart) };
@@ -134,6 +141,7 @@ export interface PnlParams {
   from?: string;
   to?: string;
   years?: number;
+  month?: string;                  // 'YYYY-MM' — the single month for mode='month'
 }
 
 // aggregate a row's monthly series over a set of month keys
@@ -195,7 +203,9 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     const k = monthKeyFromDate(r.transaction_date);
     const amt = Number(r.amount_base ?? r.amount) || 0;
     const signed = r.type === "credit" ? amt : -amt; // income: credit +, clawback −
-    const slug = r.category ?? "other_income";
+    // Normalise like the line-items RPC (113): null OR empty category → 'other_income',
+    // so the grid row's drill key ('income:other_income') matches its expandable parties.
+    const slug = r.category && r.category !== "" ? r.category : "other_income";
     if (REVENUE_INCOME_CATS.has(slug)) { bankRevenue[k] = (bankRevenue[k] ?? 0) + signed; continue; }
     let e = incomeCats.get(slug);
     if (!e) { e = { label: catLabels.get(slug) ?? slug, values: {} }; incomeCats.set(slug, e); }

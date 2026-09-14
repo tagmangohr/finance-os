@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Download, Sparkles, Zap, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Download, Sparkles, Zap, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight, Flag, ListTree, Check, X, Loader2, ClipboardList } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { sourceLabel } from "@/lib/finance/transaction-status";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
@@ -29,6 +29,19 @@ const lastDayIso = (monthKey: string): string => {
 };
 const sumKeys = (monthly: Record<string, number>, keys: string[]) => keys.reduce((a, k) => a + (monthly[k] ?? 0), 0);
 
+// ─── Expand (line items) + Review flags ────────────────────────────────────────
+type LineItem = { month: string; drill_key: string; party: string; amount: number; txn_count: number };
+// One vendor/gateway under a P&L row, with its per-month series across the window.
+type PartyRow = { party: string; monthly: Record<string, number>; count: Record<string, number>; total: number };
+type ReviewFlag = {
+  id: string; drill_key: string; party: string; party_label: string | null; category_label: string | null;
+  period_from: string; period_to: string; period_label: string | null; amount_snapshot: number | null;
+  note: string | null; status: "open" | "resolved"; created_by_email: string | null; created_at: string;
+  resolved_by_email: string | null; resolved_at: string | null;
+};
+// Stable identity of a flaggable line item for a period (matches uq_pnl_flag_open).
+const flagKey = (drillKey: string, party: string, from: string, to: string) => `${drillKey}|${party}|${from}|${to}`;
+
 // ─── exact-figure tooltip (single fixed element, avoids table clipping) ────────
 const TipCtx = React.createContext<(text: string | null, x?: number, y?: number) => void>(() => {});
 
@@ -42,45 +55,57 @@ const groupDisplayName = (drillKey: string, name: string) =>
   // disputes_lost top level = payment gateway (stem) → pretty gateway label
   : (GATEWAY_KEYS.has(drillKey) || drillKey === "disputes_lost" ? sourceLabel(name === "—" ? null : name) : name);
 
-function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: string; from: string; to: string; g: Group }) {
-  const [open, setOpen] = React.useState(false);
+function GroupRow({ orgId, drillKey, from, to, g, onFlag, flagged, defaultOpen }: { orgId: string; drillKey: string; from: string; to: string; g: Group; onFlag?: (g: Group) => void; flagged?: boolean; defaultOpen?: boolean }) {
+  const [open, setOpen] = React.useState(Boolean(defaultOpen));
   const [txns, setTxns] = React.useState<DrillTxn[] | null>(null);
   const [subs, setSubs] = React.useState<Group[] | null>(null); // disputes: customers under a gateway
   const [loading, setLoading] = React.useState(false);
   // Disputes drill is two-level: gateway (this row) → customers (on expand).
   const isDisputes = drillKey === "disputes_lost";
 
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && txns == null && subs == null) {
-      setLoading(true);
-      if (isDisputes) {
-        const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, gateway: g.name });
-        fetch(`/api/pnl/drill/groups?${q}`)
-          .then((r) => r.json())
-          .then((d) => setSubs([...(d.groups ?? [])].sort((a: Group, b: Group) => Math.abs(b.amount) - Math.abs(a.amount))))
-          .catch(() => setSubs([]))
-          .finally(() => setLoading(false));
-      } else {
-        const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
-        fetch(`/api/pnl/drill?${q}`)
-          .then((r) => r.json())
-          .then((d) => setTxns([...(d.rows ?? [])].sort((a: DrillTxn, b: DrillTxn) => Math.abs(b.amount) - Math.abs(a.amount))))
-          .catch(() => setTxns([]))
-          .finally(() => setLoading(false));
-      }
+  const toggle = () => setOpen((o) => !o);
+
+  // Load the drill rows the first time this group is opened (covers defaultOpen too).
+  React.useEffect(() => {
+    if (!open || txns != null || subs != null || loading) return;
+    setLoading(true);
+    if (isDisputes) {
+      const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, gateway: g.name });
+      fetch(`/api/pnl/drill/groups?${q}`)
+        .then((r) => r.json())
+        .then((d) => setSubs([...(d.groups ?? [])].sort((a: Group, b: Group) => Math.abs(b.amount) - Math.abs(a.amount))))
+        .catch(() => setSubs([]))
+        .finally(() => setLoading(false));
+    } else {
+      const q = new URLSearchParams({ org: orgId, key: drillKey, from, to, party: g.name });
+      fetch(`/api/pnl/drill?${q}`)
+        .then((r) => r.json())
+        .then((d) => setTxns([...(d.rows ?? [])].sort((a: DrillTxn, b: DrillTxn) => Math.abs(b.amount) - Math.abs(a.amount))))
+        .catch(() => setTxns([]))
+        .finally(() => setLoading(false));
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   return (
     <div className="border-b border-border/60">
-      <button onClick={toggle} className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50 text-left">
-        <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} />
-        <span className="text-[12.5px] text-foreground truncate flex-1">{groupDisplayName(drillKey, g.name)}</span>
-        <span className="text-[10.5px] text-muted-foreground flex-shrink-0">{g.txn_count.toLocaleString("en-IN")}</span>
-        <span className="num text-[12.5px] font-semibold text-foreground flex-shrink-0 w-[92px] text-right">{moneyFull(g.amount)}</span>
-      </button>
+      <div className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-muted/50">
+        <button onClick={toggle} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+          <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} />
+          <span className="text-[12.5px] text-foreground truncate flex-1">{groupDisplayName(drillKey, g.name)}</span>
+          <span className="text-[10.5px] text-muted-foreground flex-shrink-0">{g.txn_count.toLocaleString("en-IN")}</span>
+          <span className="num text-[12.5px] font-semibold text-foreground flex-shrink-0 w-[92px] text-right">{moneyFull(g.amount)}</span>
+        </button>
+        {onFlag && (
+          <button
+            onClick={() => onFlag(g)}
+            title={flagged ? "Flagged for review — click to update the note" : "Flag for review"}
+            className={cn("flex-shrink-0 p-1 rounded-md transition-colors", flagged ? "text-amber-500 hover:bg-amber-500/10" : "text-muted-foreground/40 hover:text-amber-500 hover:bg-muted")}
+          >
+            <Flag className={cn("h-3.5 w-3.5", flagged && "fill-current")} />
+          </button>
+        )}
+      </div>
       {open && (
         <div className="bg-muted/20">
           {loading && <div className="px-4 py-2 space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-8 rounded" />)}</div>}
@@ -120,10 +145,15 @@ function GroupRow({ orgId, drillKey, from, to, g }: { orgId: string; drillKey: s
 }
 
 function DrillDrawer({
-  orgId, open, onClose, title, subtitle, drillKey, from, to, expectedTotal,
+  orgId, open, onClose, title, subtitle, drillKey, from, to, expectedTotal, singleParty, onFlag, flaggedSet,
 }: {
   orgId: string; open: boolean; onClose: () => void;
   title: string; subtitle: string; drillKey: string | null; from: string; to: string; expectedTotal: number;
+  // When set, the drawer is scoped to ONE vendor/gateway (a clicked line item) —
+  // it skips the groups fetch and shows just that party (expanded to its txns).
+  singleParty?: Group | null;
+  onFlag?: (g: Group, drillKey: string, from: string, to: string) => void;
+  flaggedSet?: Set<string>;
 }) {
   const [loading, setLoading] = React.useState(false);
   const [groups, setGroups] = React.useState<Group[]>([]);
@@ -135,6 +165,8 @@ function DrillDrawer({
 
   React.useEffect(() => {
     if (!open || !drillKey) return;
+    // Single-party scope: no groups fetch — render the one clicked party directly.
+    if (singleParty) { setGroups([singleParty]); setHasMore(false); setErr(null); setLoading(false); return; }
     let cancelled = false;
     setLoading(true); setErr(null); setGroups([]);
     const q = new URLSearchParams({ org: orgId, key: drillKey, from, to });
@@ -144,7 +176,7 @@ function DrillDrawer({
       .catch((e) => { if (!cancelled) setErr(e.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [open, drillKey, orgId, from, to]);
+  }, [open, drillKey, orgId, from, to, singleParty]);
 
   const byLabel = drillKey && GATEWAY_KEYS.has(drillKey) ? "gateway" : "vendor / customer";
   // Groups arrive sorted by value (desc); filter by the displayed name.
@@ -166,7 +198,14 @@ function DrillDrawer({
       {err && <p className="p-4 text-[12px] text-destructive">{err}</p>}
       {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-10 rounded-lg" />)}</div>}
       {!loading && !err && shown.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{query ? "No matches." : "Nothing in this slice."}</p>}
-      {!loading && drillKey && shown.map((g, i) => <GroupRow key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g} />)}
+      {!loading && drillKey && shown.map((g, i) => (
+        <GroupRow
+          key={`${g.name}-${i}`} orgId={orgId} drillKey={drillKey} from={from} to={to} g={g}
+          defaultOpen={Boolean(singleParty)}
+          onFlag={onFlag ? (grp) => onFlag(grp, drillKey, from, to) : undefined}
+          flagged={flaggedSet?.has(flagKey(drillKey, g.name, from, to))}
+        />
+      ))}
       {hasMore && !query && <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the top {groups.length} parties by value.</p>}
     </FloatingPanel>
   );
@@ -178,13 +217,83 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const [change, setChange] = React.useState<Mode>("abs");
   const [fyOpen, setFyOpen] = React.useState(false);
   const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
-  const [drill, setDrill] = React.useState<{ title: string; subtitle: string; key: string; from: string; to: string; total: number } | null>(null);
+  const [drill, setDrill] = React.useState<{ title: string; subtitle: string; catLabel: string; key: string; from: string; to: string; total: number; party?: Group | null } | null>(null);
+  const [monthOpen, setMonthOpen] = React.useState(false); // single-month picker dropdown
+
+  // ── Expand → vendor/gateway line items (lazy: fetched only when first expanded) ──
+  const [expandAll, setExpandAll] = React.useState(false);
+  const [rowOverride, setRowOverride] = React.useState<Record<string, boolean>>({});
+  const [lineItems, setLineItems] = React.useState<LineItem[] | null>(null);
+  const [liLoading, setLiLoading] = React.useState(false);
+  const isRowOpen = (id: string) => rowOverride[id] ?? expandAll;
+  const anyOpen = expandAll || Object.values(rowOverride).some(Boolean);
+  const toggleRow = (id: string) => setRowOverride((o) => ({ ...o, [id]: !(o[id] ?? expandAll) }));
+  // Global toggle: "Expand all" / "Collapse all" — clears per-row overrides so the
+  // switch is decisive (every expandable row follows it).
+  const toggleAll = () => { setExpandAll((v) => !v); setRowOverride({}); };
+
+  // ── Review flags ──
+  const [flags, setFlags] = React.useState<ReviewFlag[]>([]);      // OPEN flags (for markers)
+  const [reviewOpen, setReviewOpen] = React.useState(false);
+  const flaggedSet = React.useMemo(() => new Set(flags.map((f) => flagKey(f.drill_key, f.party, f.period_from, f.period_to))), [flags]);
 
   const setTipCb = React.useCallback((text: string | null, x?: number, y?: number) => {
     setTip(text ? { text, x: x ?? 0, y: y ?? 0 } : null);
   }, []);
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
+
+  // Full window (all month keys) — the span the line-items + flag markers cover.
+  const windowRange = React.useMemo(() => {
+    const keys = data.columns.flatMap((c) => c.monthKeys).sort();
+    if (keys.length === 0) return null;
+    return { from: `${keys[0]}-01`, to: lastDayIso(keys[keys.length - 1]) };
+  }, [data.columns]);
+
+  // Reset expansion + line items whenever the viewed window changes.
+  const windowKey = windowRange ? `${windowRange.from}|${windowRange.to}` : "";
+  React.useEffect(() => { setLineItems(null); setExpandAll(false); setRowOverride({}); }, [windowKey]);
+
+  // Fetch line items the first time anything is expanded (once per window).
+  React.useEffect(() => {
+    if (data.preview || !anyOpen || lineItems != null || liLoading || !windowRange) return;
+    let cancelled = false;
+    setLiLoading(true);
+    const q = new URLSearchParams({ org: orgId, from: windowRange.from, to: windowRange.to });
+    fetch(`/api/pnl/lineitems?${q}`)
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((d) => { if (!cancelled) setLineItems((d.items ?? []) as LineItem[]); })
+      .catch(() => { if (!cancelled) setLineItems([]); })
+      .finally(() => { if (!cancelled) setLiLoading(false); });
+    return () => { cancelled = true; };
+  }, [anyOpen, lineItems, liLoading, windowRange, orgId, data.preview]);
+
+  // Load OPEN flags for markers + the review count (skipped in sample preview).
+  const refreshFlags = React.useCallback(() => {
+    if (data.preview) return;
+    fetch(`/api/pnl/review?status=open`)
+      .then((r) => (r.ok ? r.json() : { flags: [] }))
+      .then((d) => setFlags((d.flags ?? []) as ReviewFlag[]))
+      .catch(() => { /* markers are best-effort */ });
+  }, [data.preview]);
+  React.useEffect(() => { refreshFlags(); }, [refreshFlags]);
+
+  // drill_keys that actually have line items (so we only show a chevron where it expands).
+  const expandableKeys = React.useMemo(() => new Set((lineItems ?? []).map((li) => li.drill_key)), [lineItems]);
+  // Which parties (with per-month series) sit under a given drill key, biggest first.
+  const partiesFor = React.useCallback((drillK: string): PartyRow[] => {
+    if (!lineItems) return [];
+    const by = new Map<string, PartyRow>();
+    for (const li of lineItems) {
+      if (li.drill_key !== drillK) continue;
+      let e = by.get(li.party);
+      if (!e) { e = { party: li.party, monthly: {}, count: {}, total: 0 }; by.set(li.party, e); }
+      e.monthly[li.month] = (e.monthly[li.month] ?? 0) + li.amount;
+      e.count[li.month] = (e.count[li.month] ?? 0) + li.txn_count;
+      e.total += li.amount;
+    }
+    return [...by.values()].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+  }, [lineItems]);
 
   // The last two rows (Net Profit + Net Margin) are pinned to the bottom of the
   // scroll box. They stay in <tbody> (NOT <tfoot> — Safari doesn't honor
@@ -201,7 +310,9 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   // Display columns: month/year columns + a Total column (except annual mode).
   const displayCols: PnlColumn[] = React.useMemo(() => {
-    if (data.mode === "annual") return data.columns;
+    // No redundant Total column for annual (each col is already a full year) or the
+    // single-month view (the one column IS the total).
+    if (data.mode === "annual" || data.mode === "month") return data.columns;
     const allKeys = data.columns.flatMap((c) => c.monthKeys);
     return [...data.columns, { key: "__total__", label: "Total", monthKeys: allKeys }];
   }, [data.columns, data.mode]);
@@ -234,28 +345,83 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     return v < 0 ? `−${money(v)}` : money(v);
   }
 
+  const colRange = (col: PnlColumn) => ({
+    from: `${col.monthKeys[0]}-01`,
+    to: lastDayIso(col.monthKeys[col.monthKeys.length - 1]),
+    label: col.key === "__total__" ? data.periodLabel : col.label,
+  });
+
   function openDrill(row: PnlRow, col: PnlColumn) {
     if (!row.drill) return;
-    const from = `${col.monthKeys[0]}-01`;
-    const to = lastDayIso(col.monthKeys[col.monthKeys.length - 1]);
-    setDrill({ title: row.label, subtitle: col.key === "__total__" ? data.periodLabel : col.label, key: row.drill, from, to, total: aggVal(row, col) });
+    const { from, to, label } = colRange(col);
+    setDrill({ title: row.label, subtitle: label, catLabel: row.label, key: row.drill, from, to, total: aggVal(row, col), party: null });
   }
+
+  // A vendor/gateway sub-row cell → drill scoped to that ONE party (its txns).
+  function openParty(row: PnlRow, col: PnlColumn, p: PartyRow) {
+    if (!row.drill) return;
+    const { from, to, label } = colRange(col);
+    const g: Group = { name: p.party, amount: sumKeys(p.monthly, col.monthKeys), txn_count: sumKeys(p.count, col.monthKeys) };
+    setDrill({ title: `${row.label} · ${groupDisplayName(row.drill, p.party)}`, subtitle: label, catLabel: row.label, key: row.drill, from, to, total: g.amount, party: g });
+  }
+
+  // ── review flag actions ──
+  const raiseFlag = React.useCallback((g: Group, drillK: string, from: string, to: string, opts: { categoryLabel: string; periodLabel: string }) => {
+    const note = window.prompt(`Flag "${groupDisplayName(drillK, g.name)}" (${opts.periodLabel}) for the accounting team to review.\n\nAdd a note (optional):`, "");
+    if (note === null) return; // cancelled
+    fetch(`/api/pnl/review`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        drill_key: drillK, party: g.name, party_label: groupDisplayName(drillK, g.name),
+        category_label: opts.categoryLabel, period_from: from, period_to: to, period_label: opts.periodLabel,
+        amount: g.amount, note: note.trim(),
+      }),
+    }).then((r) => { if (r.ok) refreshFlags(); }).catch(() => { /* ignore */ });
+  }, [refreshFlags]);
+
+  const resolveFlag = React.useCallback((id: string, status: "open" | "resolved") => {
+    fetch(`/api/pnl/review`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    }).then((r) => { if (r.ok) refreshFlags(); }).catch(() => { /* ignore */ });
+  }, [refreshFlags]);
 
   // ── period controls ──
   const goMode = (mode: string) => {
     if (mode === "custom") navigate(`/dashboard/pnl?mode=custom&from=${data.from}&to=${data.to}`);
+    else if (mode === "month") navigate(`/dashboard/pnl?mode=month&month=${new Date().toISOString().slice(0, 7)}`);
     else navigate(`/dashboard/pnl?mode=${mode}&fy=${data.fyStart}`);
   };
   const today = new Date().toISOString().slice(0, 10);
   const exportHref = (fmt: string) => {
-    const q = new URLSearchParams({ mode: data.mode, fy: String(data.fyStart), format: fmt });
-    if (data.mode === "custom") { q.set("from", data.from ?? ""); q.set("to", data.to ?? ""); }
+    const q = new URLSearchParams({ format: fmt });
+    if (data.mode === "month") {
+      // Export reuses the custom-range path for a single month (export route has no month mode).
+      const mk = data.columns[0]?.monthKeys[0] ?? new Date().toISOString().slice(0, 7);
+      q.set("mode", "custom"); q.set("from", `${mk}-01`); q.set("to", lastDayIso(mk));
+    } else {
+      q.set("mode", data.mode); q.set("fy", String(data.fyStart));
+      if (data.mode === "custom") { q.set("from", data.from ?? ""); q.set("to", data.to ?? ""); }
+    }
     return `/api/pnl/export?${q}`;
   };
 
   const ModeBtn = ({ m, label }: { m: string; label: string }) => (
     <button onClick={() => goMode(m)} className={cn("h-8 px-3 text-[12px] font-medium transition-colors", data.mode === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
   );
+
+  // Months to offer in the single-month picker: the selected FY's 12 months, current + prior FY.
+  const monthOptions = React.useMemo(() => {
+    const opts: { key: string; label: string }[] = [];
+    const now = new Date();
+    for (let i = 0; i < 24; i++) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+      const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      opts.push({ key, label: d.toLocaleString("en-US", { month: "short", year: "numeric", timeZone: "UTC" }) });
+    }
+    return opts;
+  }, []);
+  const currentMonthKey = data.mode === "month" ? (data.columns[0]?.monthKeys[0] ?? "") : "";
 
   // Renders one P&L row. `stickyBottom` (px, or 0) pins it as a sticky footer row
   // — the cells (not the <tr>, which doesn't stick reliably) get position:sticky +
@@ -270,6 +436,10 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     const sticky = stickyBottom !== undefined;
     // Opaque band colour for the pinned rows (translucent tints would bleed).
     const footerBg = isTotalRow ? "bg-muted" : "bg-card";
+    // Expandable = a drillable line that actually has vendor/gateway line items.
+    const canExpand = Boolean(row.drill) && !sticky && !data.preview && expandableKeys.has(row.drill as string);
+    const open = canExpand && isRowOpen(row.id);
+    const parties = open ? partiesFor(row.drill as string) : [];
     return (
       <React.Fragment key={row.id}>
         {row.section && !sticky && (
@@ -299,12 +469,20 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               isTotalRow && "font-bold",
               row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
             )}
-          >{row.label}</td>
-          {displayCols.map((col) => {
+          >
+            {canExpand ? (
+              <button type="button" onClick={() => toggleRow(row.id)} className="inline-flex items-center gap-1 text-left hover:opacity-80" title={open ? "Collapse" : "Expand line items"}>
+                <ChevronRight className={cn("h-3 w-3 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} />
+                {row.label}
+              </button>
+            ) : row.label}
+          </td>
+          {displayCols.map((col, cIdx) => {
             const v = aggVal(row, col);
             const pct = pctVal(row, col);
             const delta = deltaVal(row, col);
             const drillable = Boolean(row.drill) && v !== 0;
+            const zebra = !sticky && col.key !== "__total__" && cIdx % 2 === 1;
             const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
             const valueCls = cn(
               "inline-block leading-tight",
@@ -321,6 +499,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 style={sticky ? { bottom: stickyBottom } : undefined}
                 className={cn(
                   "text-right px-3 py-2 num align-top border-l border-border/60",
+                  zebra && "bg-foreground/[0.025]",   // alternate-column banding
                   !sticky && col.key === "__total__" && "bg-muted/30",
                   // Footer rows (Net Profit / Net Margin): the number cells must
                   // ALSO be position:sticky — otherwise the inline `bottom` offset
@@ -350,6 +529,53 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             );
           })}
         </tr>
+
+        {/* Vendor / gateway line items under an expanded row. */}
+        {open && liLoading && parties.length === 0 && (
+          <tr className="border-b border-border/40">
+            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-2 pl-10 text-[11.5px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" /> Loading line items…</span>
+            </td>
+          </tr>
+        )}
+        {open && !liLoading && parties.length === 0 && (
+          <tr className="border-b border-border/40">
+            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-1.5 pl-10 text-[11px] text-muted-foreground/70">No line items.</td>
+          </tr>
+        )}
+        {open && parties.map((p) => (
+          <tr key={`${row.id}::${p.party}`} className="border-b border-border/30 bg-card/60">
+            <td className="sticky left-0 z-[1] bg-card px-3 py-1.5 pl-10 whitespace-nowrap border-r border-border text-[12px] text-foreground/75">
+              <span className="block max-w-[220px] truncate" title={groupDisplayName(row.drill as string, p.party)}>{groupDisplayName(row.drill as string, p.party)}</span>
+            </td>
+            {displayCols.map((col, cIdx) => {
+              const v = sumKeys(p.monthly, col.monthKeys);
+              const cnt = sumKeys(p.count, col.monthKeys);
+              const { from, to } = colRange(col);
+              const isFlagged = flaggedSet.has(flagKey(row.drill as string, p.party, from, to));
+              const zebra = col.key !== "__total__" && cIdx % 2 === 1;
+              const full = moneyFull(v);
+              return (
+                <td
+                  key={col.key}
+                  className={cn("text-right px-3 py-1.5 num align-top border-l border-border/50", zebra && "bg-foreground/[0.025]", col.key === "__total__" && "bg-muted/30")}
+                  onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                  onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                  onMouseLeave={() => setTipCb(null)}
+                >
+                  {v === 0 ? (
+                    <span className="text-muted-foreground/40">–</span>
+                  ) : (
+                    <button type="button" onClick={() => openParty(row, col, p)} className="inline-block leading-tight hover:underline decoration-dotted cursor-pointer" title={cnt > 0 ? `${cnt.toLocaleString("en-IN")} transaction${cnt === 1 ? "" : "s"} — click to view` : "Click to view transactions"}>
+                      {cellText(row, v)}
+                    </button>
+                  )}
+                  {isFlagged && <Flag className="inline-block h-2.5 w-2.5 ml-1 text-amber-500 fill-current align-baseline" />}
+                </td>
+              );
+            })}
+          </tr>
+        ))}
       </React.Fragment>
     );
   };
@@ -367,11 +593,35 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           <ModeBtn m="monthly" label="Monthly" />
           <ModeBtn m="quarterly" label="Quarterly" />
           <ModeBtn m="annual" label="Annual" />
+          <ModeBtn m="month" label="Month" />
           <ModeBtn m="custom" label="Custom" />
         </div>
 
-        {/* FY dropdown (monthly + annual) */}
-        {data.mode !== "custom" && (
+        {/* single-month picker */}
+        {data.mode === "month" && (
+          <div className="relative">
+            <button onClick={() => setMonthOpen((o) => !o)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12.5px] font-medium hover:bg-muted">
+              {data.periodLabel}
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+            {monthOpen && (
+              <>
+                <div className="fixed inset-0 z-[90]" onClick={() => setMonthOpen(false)} />
+                <div className="absolute right-0 mt-1 w-44 max-h-72 overflow-auto rounded-lg border border-border bg-card shadow-lg z-[91] py-1">
+                  {monthOptions.map((mo) => (
+                    <button key={mo.key} onClick={() => { setMonthOpen(false); navigate(`/dashboard/pnl?mode=month&month=${mo.key}`); }}
+                      className={cn("w-full text-left px-3 py-1.5 text-[12.5px] hover:bg-muted", mo.key === currentMonthKey ? "text-primary font-semibold" : "text-foreground")}>
+                      {mo.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* FY dropdown (monthly + quarterly + annual) */}
+        {data.mode !== "custom" && data.mode !== "month" && (
           <div className="relative">
             <button onClick={() => setFyOpen((o) => !o)} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12.5px] font-medium hover:bg-muted">
               {data.mode === "annual" ? `ending FY ${data.fyStart}-${String((data.fyStart + 1) % 100).padStart(2, "0")}` : `FY ${data.fyStart}-${String((data.fyStart + 1) % 100).padStart(2, "0")}`}
@@ -412,10 +662,37 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         </div>
 
         {!data.preview && (
-          <div className="inline-flex gap-1.5">
-            <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> CSV</a>
-            <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> Excel</a>
-          </div>
+          <>
+            {/* Expand → show every line's vendors/gateways inline (Excel outline feel).
+                Hidden in Annual mode (a 5-year vendor-grain scan is heavy + rarely useful). */}
+            {data.mode !== "annual" && (
+              <button
+                onClick={toggleAll}
+                className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[12px] font-medium transition-colors",
+                  anyOpen ? "bg-sidebar text-white border-sidebar" : "border-border text-foreground hover:bg-muted")}
+                title="Expand all rows into their vendor / gateway line items"
+              >
+                <ListTree className="h-3.5 w-3.5" />
+                {expandAll ? "Collapse all" : "Expand all"}
+                {liLoading && <Loader2 className="h-3 w-3 animate-spin" />}
+              </button>
+            )}
+
+            {/* Review queue */}
+            <button
+              onClick={() => setReviewOpen(true)}
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12px] font-medium hover:bg-muted"
+              title="Items flagged for the accounting team to review"
+            >
+              <ClipboardList className="h-3.5 w-3.5" /> Review
+              {flags.length > 0 && <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-semibold">{flags.length}</span>}
+            </button>
+
+            <div className="inline-flex gap-1.5">
+              <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> CSV</a>
+              <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted"><Download className="h-3.5 w-3.5" /> Excel</a>
+            </div>
+          </>
         )}
       </PageHeader>
 
@@ -459,8 +736,66 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
       <DrillDrawer orgId={orgId} open={drill != null} onClose={() => setDrill(null)}
         title={drill?.title ?? ""} subtitle={drill?.subtitle ?? ""} drillKey={drill?.key ?? null}
-        from={drill?.from ?? ""} to={drill?.to ?? ""} expectedTotal={drill?.total ?? 0} />
+        from={drill?.from ?? ""} to={drill?.to ?? ""} expectedTotal={drill?.total ?? 0}
+        singleParty={drill?.party ?? null}
+        flaggedSet={flaggedSet}
+        onFlag={data.preview ? undefined : (g, drillK, from, to) => raiseFlag(g, drillK, from, to, { categoryLabel: drill?.catLabel ?? drillK, periodLabel: drill?.subtitle ?? "" })}
+      />
+
+      <ReviewPanel open={reviewOpen} onClose={() => setReviewOpen(false)} onChanged={refreshFlags} onResolve={resolveFlag} />
     </div>
     </TipCtx.Provider>
+  );
+}
+
+// ─── Review queue (accounting worklist) ────────────────────────────────────────
+function ReviewPanel({ open, onClose, onChanged, onResolve }: { open: boolean; onClose: () => void; onChanged: () => void; onResolve: (id: string, status: "open" | "resolved") => void }) {
+  const [tab, setTab] = React.useState<"open" | "resolved">("open");
+  const [rows, setRows] = React.useState<ReviewFlag[]>([]);
+  const [loading, setLoading] = React.useState(false);
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    fetch(`/api/pnl/review?status=${tab}`)
+      .then((r) => (r.ok ? r.json() : { flags: [] }))
+      .then((d) => setRows((d.flags ?? []) as ReviewFlag[]))
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
+  }, [tab]);
+  React.useEffect(() => { if (open) load(); }, [open, load]);
+
+  const act = (id: string, status: "open" | "resolved") => { onResolve(id, status); onChanged(); setTimeout(load, 250); };
+
+  return (
+    <FloatingPanel open={open} onClose={onClose} title="Review queue" subtitle="Items flagged for the accounting team">
+      <div className="px-4 py-2 border-b border-border flex items-center gap-1 sticky top-0 bg-card/95 backdrop-blur z-[1]">
+        {(["open", "resolved"] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)} className={cn("h-7 px-3 rounded-md text-[12px] font-medium capitalize", tab === t ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{t}</button>
+        ))}
+      </div>
+      {loading && <div className="p-4 space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-16 rounded-lg" />)}</div>}
+      {!loading && rows.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{tab === "open" ? "No open items. Flag a vendor from any expanded row." : "No resolved items yet."}</p>}
+      {!loading && rows.map((f) => (
+        <div key={f.id} className="px-4 py-3 border-b border-border/60">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-semibold text-foreground truncate">{f.party_label || f.party}</p>
+              <p className="text-[11.5px] text-muted-foreground">{[f.category_label, f.period_label].filter(Boolean).join(" · ")}</p>
+              {f.note && <p className="text-[12px] text-foreground/80 mt-1 whitespace-pre-wrap break-words">{f.note}</p>}
+              <p className="text-[10.5px] text-muted-foreground/70 mt-1">
+                {f.amount_snapshot != null && <span className="num">{moneyFull(f.amount_snapshot)}</span>}
+                {f.created_by_email ? ` · raised by ${f.created_by_email}` : ""}
+                {f.status === "resolved" && f.resolved_by_email ? ` · resolved by ${f.resolved_by_email}` : ""}
+              </p>
+            </div>
+            {tab === "open" ? (
+              <button onClick={() => act(f.id, "resolved")} className="flex-shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-md bg-success/10 text-success text-[11.5px] font-medium hover:bg-success/20"><Check className="h-3.5 w-3.5" /> Resolve</button>
+            ) : (
+              <button onClick={() => act(f.id, "open")} className="flex-shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-border text-[11.5px] font-medium hover:bg-muted"><X className="h-3.5 w-3.5" /> Reopen</button>
+            )}
+          </div>
+        </div>
+      ))}
+    </FloatingPanel>
   );
 }

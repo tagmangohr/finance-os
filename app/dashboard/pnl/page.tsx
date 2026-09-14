@@ -7,11 +7,12 @@ import { getPnl, samplePnl, fyStartForDate, type PnlMode, type PnlParams } from 
 import { PnlClient } from "./pnl-client";
 
 const ISO = (v: string | undefined) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+const MONTH = (v: string | undefined) => (v && /^\d{4}-(0[1-9]|1[0-2])$/.test(v) ? v : undefined);
 
 export default async function PnlPage({
   searchParams,
 }: {
-  searchParams: Promise<{ mode?: string; fy?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ mode?: string; fy?: string; from?: string; to?: string; month?: string }>;
 }) {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
@@ -21,13 +22,18 @@ export default async function PnlPage({
   const currentFy = fyStartForDate(new Date());
   const parsed = Number(sp.fy);
   const fyStart = Number.isFinite(parsed) && parsed >= 2020 && parsed <= currentFy ? parsed : currentFy;
-  const mode: PnlMode = sp.mode === "annual" || sp.mode === "custom" || sp.mode === "quarterly" ? sp.mode : "monthly";
+  const mode: PnlMode =
+    sp.mode === "annual" || sp.mode === "custom" || sp.mode === "quarterly" || sp.mode === "month"
+      ? sp.mode
+      : "monthly";
 
   // Custom range defaults to the current FY-to-date if params are missing/invalid.
   const from = ISO(sp.from) ?? `${currentFy}-04-01`;
   const to = ISO(sp.to) ?? new Date().toISOString().slice(0, 10);
+  // Single-month view defaults to the current calendar month.
+  const month = MONTH(sp.month) ?? new Date().toISOString().slice(0, 7);
 
-  const params: PnlParams = { mode, fyStart, from, to, years: 5 };
+  const params: PnlParams = { mode, fyStart, from, to, month, years: 5 };
 
   const preview = !(await orgHasConnectors(orgId));
   const data = preview ? samplePnl(params) : await getPnl(orgId, params);
