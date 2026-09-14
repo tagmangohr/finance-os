@@ -69,26 +69,34 @@ export async function calculateRunway(
     totalReversals90d = reversals90.reduce((s, t) => s + baseAmt(t), 0);
   }
 
-  // Cash balance: prefer the stored snapshot; else a 90-day net proxy (credits −
-  // burn debits over the same window — avoids all-time payout/settlement inflation).
-  let cashBalance = snapshotResult.data?.cash_balance != null
-    ? Number(snapshotResult.data.cash_balance)
-    : Math.max(0, totalCredits90d - totalDebits90d);
+  // Cash balance: prefer a POSITIVE stored snapshot, else a 90-day net proxy (credits −
+  // burn debits over the same window — avoids all-time payout/settlement inflation). A
+  // zero/absent snapshot must NOT read as "no cash" when the ledger shows a real position.
+  const snapCash = Number(snapshotResult.data?.cash_balance ?? 0);
+  let cashBalance = snapCash > 0 ? snapCash : Math.max(0, totalCredits90d - totalDebits90d);
 
-  // Prefer the TRUE cash position from stored Mercury balances when available
-  // (checking + savings + treasury − card owed). Service-client only (RLS); on the
-  // user-client path this returns no data and we keep the transaction-derived proxy.
+  // Prefer the TRUE cash position from stored Mercury balances — but ONLY when it reports
+  // a POSITIVE balance. An all-zero balance set (the balance sync hasn't populated real
+  // figures) must not zero out cash. Service-client only (RLS); on the user-client path
+  // this returns no data and we keep the transaction-derived proxy.
   try {
     const merc = await getMercuryCashPosition(orgId, supabase);
-    if (merc.hasData) cashBalance = Math.max(0, merc.cashBase);
+    if (merc.hasData && merc.cashBase > 0) cashBalance = merc.cashBase;
   } catch { /* keep proxy */ }
 
-  // Average monthly burn = (operating-expense debits − expense reversals) / 3 months.
-  const avgMonthlyBurn = Math.max(0, totalDebits90d - totalReversals90d) / 3;
+  // Gross monthly spend = (operating-expense debits − expense reversals) / 3 months.
+  // Kept as `burn_rate` for consumers that report "monthly burn" (the spend rate).
+  const grossMonthlyBurn = Math.max(0, totalDebits90d - totalReversals90d) / 3;
+  // NET monthly burn ALSO subtracts income (credits). Runway must be income-aware: a
+  // business whose income covers its expenses is cash-flow POSITIVE and isn't burning
+  // down its cash, so its runway is effectively infinite — matching the dashboard runway
+  // metric (expense − net revenue). The old code divided cash by GROSS burn, ignoring
+  // income, and so reported a short/"burning" runway for a profitable company.
+  const netMonthlyBurn = (totalDebits90d - totalReversals90d - totalCredits90d) / 3;
 
-  const burnRate = avgMonthlyBurn;
+  const burnRate = grossMonthlyBurn;
   const runwayDays =
-    burnRate > 0 ? Math.floor((cashBalance / burnRate) * 30) : 9999;
+    netMonthlyBurn > 0 ? Math.floor((cashBalance / netMonthlyBurn) * 30) : 9999;
 
   // Projected zero date
   const projectedZeroDate = new Date(today);

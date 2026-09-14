@@ -117,7 +117,7 @@ export function AnalyticsClient({ data }: { data: AnalyticsData }) {
   return (
     <div className="space-y-3 max-w-[1400px]">
       <PageHeader title="Analytics" subtitle={`Revenue, expenses & profitability · ${data.periodLabel}`}>
-        <DateRangePicker from={data.from} to={data.to} max={today} align="end" onChange={(f, t) => navigate(`/dashboard/analytics?from=${f}&to=${t}`)} />
+        <DateRangePicker from={data.from} to={data.to} max={today} align="end" variant="dark" onChange={(f, t) => navigate(`/dashboard/analytics?from=${f}&to=${t}`)} />
       </PageHeader>
 
       {data.preview && (

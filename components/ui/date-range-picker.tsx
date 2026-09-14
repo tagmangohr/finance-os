@@ -60,9 +60,11 @@ interface DateRangePickerProps {
   max?: string;                       // latest selectable day (YYYY-MM-DD)
   align?: "start" | "end";
   className?: string;
+  /** "dark" renders a high-contrast black trigger (default keeps the light outline). */
+  variant?: "default" | "dark";
 }
 
-export function DateRangePicker({ from, to, onChange, max, align = "start", className }: DateRangePickerProps) {
+export function DateRangePicker({ from, to, onChange, max, align = "start", className, variant = "default" }: DateRangePickerProps) {
   const today = React.useMemo(() => new Date(), []);
   const fromD = parse(from);
   const toD = parse(to);
@@ -118,11 +120,14 @@ export function DateRangePicker({ from, to, onChange, max, align = "start", clas
       <DropdownMenu.Trigger asChild>
         <button
           className={cn(
-            "flex items-center gap-2 h-9 px-3 rounded-lg border border-border bg-accent/40 text-[12px] text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors whitespace-nowrap",
+            "flex items-center gap-2 h-9 px-3 rounded-lg text-[12px] transition-colors whitespace-nowrap",
+            variant === "dark"
+              ? "border border-transparent bg-foreground text-background hover:bg-foreground/90"
+              : "border border-border bg-accent/40 text-muted-foreground hover:text-foreground hover:border-border/80",
             className
           )}
         >
-          <Calendar className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/70" />
+          <Calendar className={cn("h-3.5 w-3.5 flex-shrink-0", variant === "dark" ? "text-background/70" : "text-muted-foreground/70")} />
           <span className="num">{label}</span>
         </button>
       </DropdownMenu.Trigger>
