@@ -243,9 +243,13 @@ export const METRICS: MetricDef[] = [
       // Prefer the real bank balance for cash (same as the Cash Balance metric).
       const cash = d.bankCash?.hasData ? d.bankCash.cashBase : (d.totals.lifetimeInflow - d.totals.lifetimeOutflow);
       const c = complete(d.monthly).slice(-3);
-      const burn = c.reduce((s, m) => s + (m.expense - m.net), 0) / (c.length || 1);
-      if (burn <= 0) return { value: Infinity, display: "∞", available: true, note: "profitable" };
-      return { value: (cash / burn) * 30, display: formatRunway((cash / burn) * 30), available: true };
+      // Days of cash at the current GROSS spend rate ("survival runway" if income stopped)
+      // — always a concrete figure, never ∞. Net burn would be ≤ 0 (infinite) for a
+      // profitable company, but the requirement is an exact days figure.
+      const grossBurn = c.reduce((s, m) => s + m.expense, 0) / (c.length || 1);
+      if (grossBurn <= 0) return { value: Infinity, display: "∞", available: true, note: "no spend" };
+      const days = (cash / grossBurn) * 30;
+      return { value: days, display: formatRunway(days), available: true, note: "at current spend" };
     },
   },
   {

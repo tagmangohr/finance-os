@@ -84,19 +84,17 @@ export async function calculateRunway(
     if (merc.hasData && merc.cashBase > 0) cashBalance = merc.cashBase;
   } catch { /* keep proxy */ }
 
-  // Gross monthly spend = (operating-expense debits − expense reversals) / 3 months.
-  // Kept as `burn_rate` for consumers that report "monthly burn" (the spend rate).
+  // Monthly burn = gross operating spend (operating-expense debits − expense reversals) / 3.
   const grossMonthlyBurn = Math.max(0, totalDebits90d - totalReversals90d) / 3;
-  // NET monthly burn ALSO subtracts income (credits). Runway must be income-aware: a
-  // business whose income covers its expenses is cash-flow POSITIVE and isn't burning
-  // down its cash, so its runway is effectively infinite — matching the dashboard runway
-  // metric (expense − net revenue). The old code divided cash by GROSS burn, ignoring
-  // income, and so reported a short/"burning" runway for a profitable company.
-  const netMonthlyBurn = (totalDebits90d - totalReversals90d - totalCredits90d) / 3;
 
   const burnRate = grossMonthlyBurn;
+  // Runway = days of cash left at the current SPEND rate — i.e. how long cash lasts if
+  // income stopped. This is the conservative "survival runway" and is always a concrete
+  // number (finite whenever there is any spend). We deliberately do NOT divide by NET
+  // burn (spend − income): for a profitable company net burn is ≤ 0, which yields an
+  // infinite/undefined runway, and the requirement is an exact days figure.
   const runwayDays =
-    netMonthlyBurn > 0 ? Math.floor((cashBalance / netMonthlyBurn) * 30) : 9999;
+    grossMonthlyBurn > 0 ? Math.floor((cashBalance / grossMonthlyBurn) * 30) : 9999;
 
   // Projected zero date
   const projectedZeroDate = new Date(today);
