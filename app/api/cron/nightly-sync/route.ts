@@ -231,25 +231,31 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
       }
     }
-    // Cashfree recurring-charge double-count watchdog (last 30 days, all orgs). Read-only,
-    // non-fatal. The dedup invariant (cf_pay_<cf_txn_id> collapses webhook/poller/recon
-    // onto one row) is validated at 0 across full history; this catches a future regression.
-    // Recorded to cron_runs for audit; the Sync Health page surfaces any finding as a red flag.
+    // Cashfree recurring-charge double-count watchdog (last 30 days). Read-only, non-fatal.
+    // The dedup invariant (cf_pay_<cf_txn_id> collapses webhook/poller/recon onto one row)
+    // is validated at 0 across full history; this catches a future regression. Scanned
+    // PER-ORG (only orgs with a Cashfree connector) so each query hits an org_id-leading
+    // index instead of full-scanning the whole transactions table. Recorded to cron_runs;
+    // the Sync Health page surfaces any finding as a red flag.
     {
       const wStart = Date.now();
       try {
-        const dupes = await detectCashfreeSubDoubleCounts(sb, { sinceDays: 30 });
-        // Per-org counts so the Sync Health page can read this org's flag cheaply.
+        const cfOrgIds = Array.from(new Set(cashfreeConnectors.map((c) => c.org_id)));
         const byOrg: Record<string, number> = {};
-        for (const g of dupes.groups) byOrg[g.orgId] = (byOrg[g.orgId] ?? 0) + 1;
-        await logCronRun(sb, "sub-dupe-watch", wStart, "ok", null, {
-          scanned: dupes.scanned,
-          offending: dupes.groups.length,
-          byOrg,
-          sample: dupes.groups.slice(0, 5),
-        });
-        if (dupes.groups.length) {
-          console.error(`[cron/nightly-sync] ⚠ ${dupes.groups.length} possible subscription double-count group(s) in last 30d`);
+        const sample: Awaited<ReturnType<typeof detectCashfreeSubDoubleCounts>>["groups"] = [];
+        let scanned = 0;
+        for (const oid of cfOrgIds) {
+          const dupes = await detectCashfreeSubDoubleCounts(sb, { orgId: oid, sinceDays: 30 });
+          scanned += dupes.scanned;
+          if (dupes.groups.length) {
+            byOrg[oid] = dupes.groups.length;
+            for (const g of dupes.groups.slice(0, 5)) if (sample.length < 5) sample.push(g);
+          }
+        }
+        const offending = Object.values(byOrg).reduce((a, b) => a + b, 0);
+        await logCronRun(sb, "sub-dupe-watch", wStart, "ok", null, { scanned, offending, byOrg, sample });
+        if (offending) {
+          console.error(`[cron/nightly-sync] ⚠ ${offending} possible subscription double-count group(s) in last 30d`);
         }
       } catch (e) {
         await logCronRun(sb, "sub-dupe-watch", wStart, "failed", e instanceof Error ? e.message : String(e));

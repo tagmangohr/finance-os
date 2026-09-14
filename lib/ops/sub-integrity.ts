@@ -56,8 +56,14 @@ export async function detectCashfreeSubDoubleCounts(
       .select("org_id, external_id, subscription_id, amount, transaction_date")
       .eq("source", "cashfree")
       .eq("status", "completed")
+      .eq("type", "credit") // recurring charges are credits; also lets an org-leading index serve this
       .not("subscription_id", "is", null)
+      // transaction_date is NOT unique — a bare date sort makes OFFSET pagination unstable
+      // (ties can shift across page boundaries, skipping rows), which for a dedup watchdog
+      // means silently missing one half of a duplicate. The `id` tiebreaker makes the total
+      // order deterministic so every row is visited exactly once.
       .order("transaction_date", { ascending: false })
+      .order("id", { ascending: true })
       .range(from, from + PAGE - 1);
     if (opts.orgId) q = q.eq("org_id", opts.orgId);
     if (sinceDate) q = q.gte("transaction_date", sinceDate);
