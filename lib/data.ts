@@ -4,6 +4,7 @@ import { baseAmt } from "@/lib/utils";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { calculateRunway } from "@/lib/intelligence/runway";
+import { getMercuryCashPosition } from "@/lib/expenses/mercury-balances";
 import { getMetricData } from "@/lib/metrics/aggregate";
 import { EMPTY_METRIC_DATA, type MetricData } from "@/lib/metrics/types";
 import { selectAll } from "@/lib/supabase/paginate";
@@ -113,6 +114,7 @@ const financialSummaryCached = cachedOrgLoader(
     debtorsResult,
     categoryResult,
     metricData,
+    mercuryCash,
   ] = await Promise.all([
     supabase
       .from("financial_snapshots")
@@ -143,7 +145,14 @@ const financialSummaryCached = cachedOrgLoader(
       .limit(8),
     // Server-side aggregation — uncapped, scales past the 1000-row PostgREST limit.
     getMetricData(orgId, supabase),
+    // Real cash on hand from a linked bank (Mercury): checking + savings + treasury
+    // − card owed. Lets the cash/runway metrics show the TRUE bank balance instead of
+    // the lifetime-net proxy when a bank is connected.
+    getMercuryCashPosition(orgId, supabase),
   ]);
+
+  // Surface the real bank cash to the metric registry (cash_balance + runway).
+  metricData.bankCash = { cashBase: mercuryCash.cashBase, hasData: mercuryCash.hasData };
 
   const snapshots = snapshotResult.data ?? [];
   const snapshot = snapshots[0] ?? null;

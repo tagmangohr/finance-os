@@ -24,6 +24,9 @@ export type MetricData = {
   totals: { lifetimeInflow: number; lifetimeOutflow: number };
   hasExpenses: boolean;
   source: "views" | "fallback";
+  /** Real cash on hand from a linked bank (Mercury), in INR. Present only when a bank
+   *  is connected; when absent, cash metrics fall back to the lifetime-net proxy. */
+  bankCash?: { cashBase: number; hasData: boolean } | null;
 };
 
 export const EMPTY_METRIC_DATA: MetricData = {

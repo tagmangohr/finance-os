@@ -211,8 +211,13 @@ export const METRICS: MetricDef[] = [
   {
     key: "cash_balance", label: "Cash Balance", group: "cash", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-cash))", icon: Wallet,
-    description: "Approximate cash position (collections − outflows). Firms up when a bank source is linked.",
+    description: "Cash on hand. Uses the linked bank's real balance (checking + savings + treasury − card owed); falls back to an approximate collections − outflows proxy when no bank is connected.",
     compute: (d) => {
+      // Real bank balance when a bank (Mercury) is linked — the true cash position,
+      // matching the Bank/Analytics/AI pages. Otherwise the lifetime-net proxy.
+      if (d.bankCash?.hasData) {
+        return { value: d.bankCash.cashBase, display: cur(d.bankCash.cashBase), available: true, note: "Bank balance" };
+      }
       const v = d.totals.lifetimeInflow - d.totals.lifetimeOutflow;
       return { value: v, display: cur(v), available: true, note: "Approx · link a bank for exact" };
     },
@@ -235,7 +240,8 @@ export const METRICS: MetricDef[] = [
     description: "Months of cash left at the current net burn. Needs expense data.",
     compute: (d) => {
       if (!d.hasExpenses) return unavailable("Connect expenses");
-      const cash = d.totals.lifetimeInflow - d.totals.lifetimeOutflow;
+      // Prefer the real bank balance for cash (same as the Cash Balance metric).
+      const cash = d.bankCash?.hasData ? d.bankCash.cashBase : (d.totals.lifetimeInflow - d.totals.lifetimeOutflow);
       const c = complete(d.monthly).slice(-3);
       const burn = c.reduce((s, m) => s + (m.expense - m.net), 0) / (c.length || 1);
       if (burn <= 0) return { value: Infinity, display: "∞", available: true, note: "profitable" };
