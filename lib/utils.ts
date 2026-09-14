@@ -108,15 +108,18 @@ export function formatPercent(value: number, decimals: number = 1): string {
 
 // Format days into human-readable runway
 export function formatRunway(days: number): string {
-  if (days <= 0) return "Critical — No runway";
-  if (days < 30) return `${days} days`;
-  if (days < 365) {
-    const months = Math.floor(days / 30);
-    const remainingDays = days % 30;
+  // Callers pass an unrounded float (cash ÷ burn × 30); round to whole days so the
+  // display never leaks "8.262434… days". Infinity is handled by callers before here.
+  const d = Math.round(days);
+  if (d <= 0) return "Critical — No runway";
+  if (d < 30) return `${d} days`;
+  if (d < 365) {
+    const months = Math.floor(d / 30);
+    const remainingDays = d % 30;
     return remainingDays > 0 ? `${months}mo ${remainingDays}d` : `${months} months`;
   }
-  const years = Math.floor(days / 365);
-  const months = Math.floor((days % 365) / 30);
+  const years = Math.floor(d / 365);
+  const months = Math.floor((d % 365) / 30);
   return months > 0 ? `${years}y ${months}mo` : `${years} years`;
 }
 
