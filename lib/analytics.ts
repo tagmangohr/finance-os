@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { sourceLabel } from "@/lib/finance/transaction-status";
 import { getPnl, samplePnl, fyStartForDate, type PnlData, type PnlRow } from "@/lib/pnl";
@@ -182,6 +183,19 @@ export async function getAnalytics(orgId: string, from: string, to: string): Pro
 
   return built;
 }
+
+/**
+ * Cached Analytics loader. The page is `force-dynamic`, so it re-ran this whole
+ * aggregate (P&L backbone + dash_metrics_monthly + gateway + runway + health) on EVERY
+ * navigation. The numbers are org-scoped and only change when a sync ingests rows or a
+ * bank row is re-categorized — both bust the org tag (invalidateOrg) — so memoize by
+ * (org, from, to) with the standard 1h self-healing TTL. getAnalytics already uses the
+ * service client, so it is safe inside unstable_cache. Warm loads are served in ms.
+ */
+export const getAnalyticsCached = cachedOrgLoader(
+  (orgId: string, from: string, to: string) => getAnalytics(orgId, from, to),
+  ["analytics-overview"]
+);
 
 /** Sum payment-status counts over the range from the tiny daily rollup (keyset by
  *  day so a multi-year custom range isn't capped at 1000 rows). */

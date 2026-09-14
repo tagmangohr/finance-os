@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 import { redirect } from "next/navigation";
 import { getOrgId, orgHasConnectors } from "@/lib/data";
 import { requireRouteAccess } from "@/lib/org/page-access";
-import { getAnalytics, sampleAnalytics } from "@/lib/analytics";
+import { getAnalyticsCached, sampleAnalytics } from "@/lib/analytics";
 import { fyStartForDate } from "@/lib/pnl";
 import { AnalyticsClient } from "./analytics-client";
 
@@ -24,7 +24,7 @@ export default async function AnalyticsPage({
   const to = ISO(sp.to) ?? new Date().toISOString().slice(0, 10);
 
   const preview = !(await orgHasConnectors(orgId));
-  const data = preview ? sampleAnalytics(from, to) : await getAnalytics(orgId, from, to);
+  const data = preview ? sampleAnalytics(from, to) : await getAnalyticsCached(orgId, from, to);
 
   return <AnalyticsClient data={data} />;
 }
