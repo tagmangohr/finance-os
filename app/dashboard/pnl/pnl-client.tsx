@@ -255,8 +255,13 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   React.useEffect(() => { setLineItems(null); setExpandAll(false); setRowOverride({}); }, [windowKey]);
 
   // Fetch line items the first time anything is expanded (once per window).
+  // NB: `liLoading` must NOT be in the deps/guard — setting it true would re-run
+  // this effect, whose cleanup cancels the in-flight fetch, so the spinner would
+  // never clear and the data would be discarded (the "stuck processing" bug).
+  // `lineItems == null` already prevents a duplicate fetch. Always clear the
+  // spinner in finally (even if cancelled) so it can never get stuck.
   React.useEffect(() => {
-    if (data.preview || !anyOpen || lineItems != null || liLoading || !windowRange) return;
+    if (data.preview || !anyOpen || lineItems != null || !windowRange) return;
     let cancelled = false;
     setLiLoading(true);
     const q = new URLSearchParams({ org: orgId, from: windowRange.from, to: windowRange.to });
@@ -264,9 +269,9 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => { if (!cancelled) setLineItems((d.items ?? []) as LineItem[]); })
       .catch(() => { if (!cancelled) setLineItems([]); })
-      .finally(() => { if (!cancelled) setLiLoading(false); });
+      .finally(() => setLiLoading(false));
     return () => { cancelled = true; };
-  }, [anyOpen, lineItems, liLoading, windowRange, orgId, data.preview]);
+  }, [anyOpen, lineItems, windowRange, orgId, data.preview]);
 
   // Load OPEN flags for markers + the review count (skipped in sample preview).
   const refreshFlags = React.useCallback(() => {
