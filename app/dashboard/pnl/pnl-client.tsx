@@ -315,12 +315,21 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   // Display columns: month/year columns + a Total column (except annual mode).
   const displayCols: PnlColumn[] = React.useMemo(() => {
-    // No redundant Total column for annual (each col is already a full year) or the
-    // single-month view (the one column IS the total).
-    if (data.mode === "annual" || data.mode === "month") return data.columns;
+    if (data.mode === "annual") return data.columns;      // each col already a full year
+    if (data.mode === "month") {
+      // Single month: the one column IS the total. Add a "% of Net Revenue" column so
+      // the wide space earns its keep (each line's share of that month's Net Revenue).
+      const m = data.columns[0];
+      return m ? [m, { key: "__pct__", label: "% of Net Rev", monthKeys: m.monthKeys }] : data.columns;
+    }
     const allKeys = data.columns.flatMap((c) => c.monthKeys);
     return [...data.columns, { key: "__total__", label: "Total", monthKeys: allKeys }];
   }, [data.columns, data.mode]);
+
+  // Cap the grid width by column count so few-column views (a single month, a quarter)
+  // don't stretch full-width and fling the amount to the window edge with a void between.
+  // Month (2 cols) ≈ 820px; grows to the 1400 cap by ~5 columns.
+  const gridMaxWidth = Math.min(1400, 440 + displayCols.length * 190);
 
   const canMoM = data.mode !== "annual";
 
@@ -449,7 +458,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       <React.Fragment key={row.id}>
         {row.section && !sticky && (
           <tr>
-            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
+            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
           </tr>
         )}
         <tr
@@ -467,12 +476,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             className={cn(
               // Sticky label column MUST be opaque or right-scrolled month
               // values bleed through the translucent tints.
-              "sticky left-0 z-[1] px-3 py-2 whitespace-nowrap border-r border-border",
+              "sticky left-0 z-[1] px-4 py-2 whitespace-nowrap border-r border-border text-[14px]",
               (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
               sticky && `${footerBg} z-[8]`,
               strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
               isTotalRow && "font-bold",
-              row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+              row.kind === "expense" && "pl-7 text-[13.5px] text-muted-foreground font-normal"
             )}
           >
             {canExpand ? (
@@ -483,6 +492,26 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             ) : row.label}
           </td>
           {displayCols.map((col, cIdx) => {
+            // "% of Net Revenue" column (single-month view): each line's share of NR.
+            if (col.key === "__pct__") {
+              const nr = aggVal(rowsById["net_revenue"], col);
+              const amt = aggVal(row, col);
+              const share = nr ? (amt / nr) * 100 : null;
+              const showShare = row.kind !== "margin" && share != null && amt !== 0;
+              return (
+                <td
+                  key={col.key}
+                  style={sticky ? { bottom: stickyBottom } : undefined}
+                  className={cn(
+                    "text-right px-4 py-2 num align-top border-l border-border/60 text-[12.5px] text-muted-foreground",
+                    sticky && `sticky ${footerBg} z-[7]`,
+                    isTotalRow && "font-semibold text-foreground/80"
+                  )}
+                >
+                  {showShare ? `${share.toFixed(1)}%` : (row.kind === "margin" ? "" : "–")}
+                </td>
+              );
+            }
             const v = aggVal(row, col);
             const pct = pctVal(row, col);
             const delta = deltaVal(row, col);
@@ -503,7 +532,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 key={col.key}
                 style={sticky ? { bottom: stickyBottom } : undefined}
                 className={cn(
-                  "text-right px-3 py-2 num align-top border-l border-border/60",
+                  "text-right px-4 py-2 num align-top border-l border-border/60",
                   zebra && "bg-foreground/[0.025]",   // alternate-column banding
                   !sticky && col.key === "__total__" && "bg-muted/30",
                   // Footer rows (Net Profit / Net Margin): the number cells must
@@ -550,11 +579,21 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         )}
         {open && parties.map((p) => (
           <tr key={`${row.id}::${p.party}`} className="border-b border-border/30 bg-card/60">
-            <td className="sticky left-0 z-[1] bg-card px-3 py-1.5 pl-10 whitespace-nowrap border-r border-border text-[12px] text-foreground/75">
-              <span className="block max-w-[220px] truncate" title={groupDisplayName(row.drill as string, p.party)}>{groupDisplayName(row.drill as string, p.party)}</span>
+            <td className="sticky left-0 z-[1] bg-card px-4 py-1.5 pl-11 whitespace-nowrap border-r border-border text-[13px] text-foreground/75">
+              <span className="block max-w-[300px] truncate" title={groupDisplayName(row.drill as string, p.party)}>{groupDisplayName(row.drill as string, p.party)}</span>
             </td>
             {displayCols.map((col, cIdx) => {
               const v = sumKeys(p.monthly, col.monthKeys);
+              // "% of Net Revenue" column (single-month view) for a vendor/gateway line.
+              if (col.key === "__pct__") {
+                const nr = aggVal(rowsById["net_revenue"], col);
+                const share = nr ? (v / nr) * 100 : null;
+                return (
+                  <td key={col.key} className="text-right px-4 py-1.5 num text-[12px] text-muted-foreground/70 border-l border-border/50">
+                    {v !== 0 && share != null ? `${share.toFixed(1)}%` : ""}
+                  </td>
+                );
+              }
               const cnt = sumKeys(p.count, col.monthKeys);
               const { from, to } = colRange(col);
               const isFlagged = flaggedSet.has(flagKey(row.drill as string, p.party, from, to));
@@ -563,7 +602,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               return (
                 <td
                   key={col.key}
-                  className={cn("text-right px-3 py-1.5 num align-top border-l border-border/50", zebra && "bg-foreground/[0.025]", col.key === "__total__" && "bg-muted/30")}
+                  className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50", zebra && "bg-foreground/[0.025]", col.key === "__total__" && "bg-muted/30")}
                   onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseLeave={() => setTipCb(null)}
@@ -711,14 +750,14 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
       {/* grid — fills remaining height; header row (top) + line-item column (left)
           + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
-      <div className="flex-1 min-h-0 rounded-xl border border-border bg-card overflow-hidden">
+      <div className="flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
         <div className="h-full overflow-auto">
-          <table className="w-full border-collapse text-[12.5px]">
+          <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[13px] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
                 {displayCols.map((c) => (
-                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-white/10", c.key === "__total__" && "font-bold text-white")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-4 py-2.5 whitespace-nowrap min-w-[128px] border-l border-white/10", c.key === "__total__" && "font-bold text-white", c.key === "__pct__" && "text-white/60")}>{c.label}</th>
                 ))}
               </tr>
             </thead>
