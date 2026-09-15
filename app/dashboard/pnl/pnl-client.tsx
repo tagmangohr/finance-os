@@ -232,6 +232,14 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // content slides under a still cursor) can't re-render the whole table. That
   // re-render storm was the Expand-all scroll lag / mid-scroll tearing.
   const tipRef = React.useRef<HTMLDivElement>(null);
+  // Scroll box + table refs: during active scroll we set pointer-events:none on the
+  // TABLE so NO per-cell mouse handler (enter/leave/tooltip/flag-hover) fires — those
+  // dispatch 60×/s as rows slide under a still cursor with Expand all (≈7k cells) and
+  // starve the compositor → blank tiles ("data disappears") + jank. Handlers resume a
+  // beat after scrolling stops. Wheel/scrollbar keep working (the scroll box itself
+  // stays interactive; only the inner table is inert).
+  const tableRef = React.useRef<HTMLTableElement>(null);
+  const scrollIdle = React.useRef<number | undefined>(undefined);
   const [drill, setDrill] = React.useState<{ title: string; subtitle: string; catLabel: string; key: string; from: string; to: string; total: number; party?: Group | null } | null>(null);
   const [monthOpen, setMonthOpen] = React.useState(false); // single-month picker dropdown
 
@@ -270,6 +278,19 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     el.style.top = `${(y ?? 0) + 12}px`;
     el.style.display = "block";
   }, []);
+
+  // While scrolling: make the table inert (no cell handlers fire) + hide the tooltip.
+  // Restore interactivity ~150ms after the last scroll event (covers momentum/inertia).
+  const onGridScroll = React.useCallback(() => {
+    const t = tableRef.current;
+    if (t && t.style.pointerEvents !== "none") t.style.pointerEvents = "none";
+    setTipCb(null);
+    if (scrollIdle.current) window.clearTimeout(scrollIdle.current);
+    scrollIdle.current = window.setTimeout(() => {
+      if (tableRef.current) tableRef.current.style.pointerEvents = "";
+    }, 150);
+  }, [setTipCb]);
+  React.useEffect(() => () => { if (scrollIdle.current) window.clearTimeout(scrollIdle.current); }, []);
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
@@ -598,7 +619,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                   sticky && `sticky ${footerBg} z-[7]`
                 )}
                 onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
-                onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                 onMouseLeave={() => setTipCb(null)}
               >
                 {/* Flag THIS line for review straight from the cell — no drawer. Amber
@@ -677,7 +697,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                   key={col.key}
                   className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50 text-[length:var(--ps)] relative group/cell", zebra && "bg-foreground/[0.06]", col.key === "__total__" && "bg-muted/30")}
                   onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
-                  onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseLeave={() => setTipCb(null)}
                 >
                   {/* Flag THIS vendor line item for review (no drawer). Amber + persistent
@@ -844,8 +863,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       {/* grid — fills remaining height; header row (top) + line-item column (left)
           + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
       <div className="flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
-        <div className="h-full overflow-auto">
-          <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
+        <div className="h-full overflow-auto" onScroll={onGridScroll}>
+          <table ref={tableRef} className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
             <thead>
               <tr className="border-b-2 border-border">
                 <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
