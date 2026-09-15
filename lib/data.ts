@@ -233,9 +233,16 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { 
   const from = opts?.from || defFrom;
   const to = opts?.to || today;
 
-  const [mRes, cRes, customersResult] = await Promise.all([
+  const [mRes, cRes, topRes, payingRes, customersResult] = await Promise.all([
     supabase.rpc("metrics_monthly_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("revenue_by_currency_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Top customers by collected revenue — aggregated straight from transactions
+    // (migration 117), scoped to the same window as everything else on the tab.
+    supabase.rpc("revenue_top_customers" as never, { p_org: orgId, p_from: from, p_to: to, p_limit: 5 } as never),
+    // Distinct paying customers in the same window (drives the count + avg cards).
+    supabase.rpc("revenue_paying_customers" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Fallback source for customers if migration 117 isn't applied yet (entities is
+    // empty for gateway-only orgs, so this simply yields the pre-existing blank).
     supabase
       .from("entities")
       .select("*")
@@ -287,10 +294,33 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { 
     return { month: entry.month, revenue: entry.amount, momChange };
   });
 
+  // Total collected revenue for the window = Σ of the monthly series (same basis).
+  const totalRevenue = revenueByMonth.reduce((s, m) => s + m.amount, 0);
+
+  // Top customers: prefer the transactions-based RPC (117); fall back to the
+  // legacy entities table pre-migration (yields the old blank list, never an error).
+  type TopRow = { customer_key: string; name: string | null; revenue: number | string; txns: number | string };
+  const customers = (!topRes.error && Array.isArray(topRes.data))
+    ? (topRes.data as unknown as TopRow[]).map((r) => ({
+        name: r.name || r.customer_key,
+        total_revenue: Number(r.revenue ?? 0),
+        txns: Number(r.txns ?? 0),
+      }))
+    : ((customersResult.data ?? []) as { name: string; total_revenue: number | null }[]).map((c) => ({
+        name: c.name, total_revenue: Number(c.total_revenue ?? 0), txns: 0,
+      }));
+
+  // Distinct paying customers in the window (0 pre-migration → cards show "—").
+  const payingCustomers = (!payingRes.error && payingRes.data != null)
+    ? Number(payingRes.data)
+    : 0;
+
   return {
     revenueByMonth,
     currencyBreakdown,
-    customers:  customersResult.data ?? [],
+    customers,
+    totalRevenue,
+    payingCustomers,
     mrrTrend,
     mrr,
     arr,
