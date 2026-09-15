@@ -1,10 +1,12 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   TrendingUp, LayoutDashboard, Plug, Table2, Landmark, LogOut, User, Users,
-  Repeat, Activity, Sheet, LineChart, Scale, Settings, BarChart3, ShoppingBag, type LucideIcon,
+  Repeat, Activity, Sheet, LineChart, Scale, Settings, BarChart3, ShoppingBag,
+  PanelLeftClose, PanelLeftOpen, type LucideIcon,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -63,6 +65,8 @@ export interface SidebarNavProps {
   connectorCount?: number;
   liveCount?:      number;
   lastSyncedAt?:   string | null;
+  /** Initial collapsed state (read from cookie server-side to avoid a flash). */
+  defaultCollapsed?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -90,10 +94,22 @@ export function SidebarNav({
   connectorCount = 0,
   liveCount      = 0,
   lastSyncedAt,
+  defaultCollapsed = false,
 }: SidebarNavProps) {
   const pathname = usePathname();
   const router   = useRouter();
   const supabase = createClient();
+
+  // One-click collapse to an icon rail. Persisted in a cookie (read server-side in the
+  // layout) so it survives reloads and paints correctly on first render.
+  const [collapsed, setCollapsed] = React.useState(defaultCollapsed);
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try { document.cookie = `fos-sidebar-collapsed=${next ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`; } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -119,8 +135,10 @@ export function SidebarNav({
     return (
       <Link
         href={item.href}
+        title={collapsed ? item.label : undefined}
         className={cn(
-          "group relative flex items-center gap-2.5 px-2.5 py-[7px] rounded-lg text-[12.5px] font-medium transition-colors duration-150",
+          "group relative flex items-center rounded-lg text-[12.5px] font-medium transition-colors duration-150",
+          collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-2.5 py-[7px]",
           active ? "bg-primary/15 text-white" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-white"
         )}
       >
@@ -129,7 +147,7 @@ export function SidebarNav({
           "w-[15px] h-[15px] flex-shrink-0 transition-colors duration-150",
           active ? "text-primary" : "text-sidebar-muted group-hover:text-sidebar-foreground"
         )} />
-        <span className="flex-1">{item.label}</span>
+        {!collapsed && <span className="flex-1">{item.label}</span>}
       </Link>
     );
   };
@@ -140,33 +158,51 @@ export function SidebarNav({
   const setup = SETUP_NAV.filter(canSee);
 
   return (
-    <aside className="relative flex flex-col w-56 bg-sidebar border-r border-sidebar-border z-[1]">
+    <aside className={cn(
+      "relative flex flex-col bg-sidebar border-r border-sidebar-border z-[1] overflow-hidden transition-[width] duration-200 ease-out",
+      collapsed ? "w-14" : "w-56"
+    )}>
       {/* Ambient top gradient */}
       <div className="pointer-events-none absolute top-0 left-0 right-0 h-28 bg-gradient-to-b from-primary/[0.12] to-transparent" />
 
-      {/* Logo */}
-      <div className="relative flex items-center gap-2.5 px-4 pt-4 pb-4 border-b border-sidebar-border">
+      {/* Logo + collapse toggle */}
+      <div className={cn(
+        "relative flex items-center border-b border-sidebar-border pt-4 pb-4",
+        collapsed ? "flex-col gap-2 px-2" : "gap-2.5 px-4"
+      )}>
         <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-primary text-primary-foreground shadow-sm">
           <TrendingUp className="w-3.5 h-3.5" />
         </div>
-        <p className="font-semibold text-[13px] leading-none text-white tracking-tight">Finance OS</p>
+        {!collapsed && <p className="flex-1 font-semibold text-[13px] leading-none text-white tracking-tight">Finance OS</p>}
+        <button
+          onClick={toggleCollapsed}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="p-1 rounded-md text-sidebar-muted hover:bg-sidebar-accent hover:text-white transition-colors flex-shrink-0"
+        >
+          {collapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+        </button>
       </div>
 
-      {/* Org switcher */}
-      {accessibleOrgs.length > 0 && (
+      {/* Org switcher (hidden on the rail) */}
+      {!collapsed && accessibleOrgs.length > 0 && (
         <div className="px-2.5 pt-2.5">
           <OrgSwitcher orgs={accessibleOrgs} activeOrgId={org.id} canCreateOrg={canCreateOrg} />
         </div>
       )}
 
       {/* Grouped nav */}
-      <div className="flex-1 overflow-y-auto py-2 space-y-1">
-        {groups.map((g) => (
+      <div className="flex-1 overflow-y-auto overflow-x-hidden py-2 space-y-1">
+        {groups.map((g, gi) => (
           <div key={g.label}>
-            <div className="px-3 pt-2 pb-1">
-              <span className="text-[9.5px] font-bold tracking-[0.16em] text-sidebar-muted uppercase">{g.label}</span>
-            </div>
-            <nav className="px-2.5 space-y-px">
+            {collapsed
+              ? gi > 0 && <div className="mx-2 my-1.5 border-t border-sidebar-border/60" />
+              : (
+                <div className="px-3 pt-2 pb-1">
+                  <span className="text-[9.5px] font-bold tracking-[0.16em] text-sidebar-muted uppercase">{g.label}</span>
+                </div>
+              )}
+            <nav className={cn("space-y-px", collapsed ? "px-2" : "px-2.5")}>
               {g.items.map((item) => <NavLink key={item.href} item={item} />)}
             </nav>
           </div>
@@ -174,18 +210,22 @@ export function SidebarNav({
 
         {setup.length > 0 && (
           <div>
-            <div className="px-3 pt-2 pb-1">
-              <span className="text-[9.5px] font-bold tracking-[0.16em] text-sidebar-muted uppercase">Setup</span>
-            </div>
-            <nav className="px-2.5 space-y-px">
+            {collapsed
+              ? <div className="mx-2 my-1.5 border-t border-sidebar-border/60" />
+              : (
+                <div className="px-3 pt-2 pb-1">
+                  <span className="text-[9.5px] font-bold tracking-[0.16em] text-sidebar-muted uppercase">Setup</span>
+                </div>
+              )}
+            <nav className={cn("space-y-px", collapsed ? "px-2" : "px-2.5")}>
               {setup.map((item) => <NavLink key={item.href} item={item} />)}
             </nav>
           </div>
         )}
       </div>
 
-      {/* Connector / sync status */}
-      {connectorCount > 0 && (
+      {/* Connector / sync status (hidden on the rail) */}
+      {!collapsed && connectorCount > 0 && (
         <div className="mx-2.5 mb-2 p-2.5 border border-sidebar-border rounded-lg bg-sidebar-accent/60">
           <div className="flex items-center gap-2 text-[11px] text-sidebar-muted">
             <span className="w-1.5 h-1.5 rounded-full bg-success flex-shrink-0" />
@@ -203,25 +243,35 @@ export function SidebarNav({
       )}
 
       {/* User footer */}
-      <div className="p-2.5 border-t border-sidebar-border">
+      <div className={cn("border-t border-sidebar-border", collapsed ? "p-2 flex flex-col items-center gap-1" : "p-2.5")}>
         <Link
           href="/dashboard/profile"
-          className="flex items-center gap-2 px-2 py-1.5 mb-1 rounded-lg hover:bg-sidebar-accent transition-colors group"
+          title={collapsed ? displayName : undefined}
+          className={cn(
+            "flex items-center rounded-lg hover:bg-sidebar-accent transition-colors group",
+            collapsed ? "justify-center p-1" : "gap-2 px-2 py-1.5 mb-1"
+          )}
         >
           <div className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-primary-foreground bg-primary">
             {avatarLetter}
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[12px] font-medium text-sidebar-foreground truncate group-hover:text-white transition-colors">{displayName}</p>
-            <p className="text-[10px] text-sidebar-muted truncate">{userEmail}</p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="text-[12px] font-medium text-sidebar-foreground truncate group-hover:text-white transition-colors">{displayName}</p>
+              <p className="text-[10px] text-sidebar-muted truncate">{userEmail}</p>
+            </div>
+          )}
         </Link>
         <button
           onClick={handleSignOut}
-          className="flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-[12px] text-sidebar-muted hover:bg-destructive/15 hover:text-destructive transition-colors duration-150"
+          title={collapsed ? "Sign out" : undefined}
+          className={cn(
+            "flex items-center rounded-lg text-[12px] text-sidebar-muted hover:bg-destructive/15 hover:text-destructive transition-colors duration-150",
+            collapsed ? "justify-center p-2" : "gap-2 w-full px-2 py-1.5"
+          )}
         >
           <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
-          Sign out
+          {!collapsed && "Sign out"}
         </button>
       </div>
     </aside>

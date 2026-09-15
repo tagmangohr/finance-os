@@ -281,12 +281,24 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
-  // Full window (all month keys) — the span the line-items + flag markers cover.
+  // Full window (all month keys) — the span the flag markers + reset key cover.
   const windowRange = React.useMemo(() => {
     const keys = data.columns.flatMap((c) => c.monthKeys).sort();
     if (keys.length === 0) return null;
     return { from: `${keys[0]}-01`, to: lastDayIso(keys[keys.length - 1]) };
   }, [data.columns]);
+
+  // Selected month (Month mode only) — anchor for the 3-month-average feature.
+  const selMonth = data.mode === "month" ? (data.columns[0]?.monthKeys[0] ?? null) : null;
+
+  // Line-item FETCH range. Normally the visible window, but in Month mode we reach 3
+  // months further back so expanded vendor rows can show the same 3-month average as
+  // the P&L lines. The current-month column still sums only the selected month.
+  const liRange = React.useMemo(() => {
+    if (!windowRange) return null;
+    if (selMonth) return { from: `${addMonths(selMonth, -3)}-01`, to: windowRange.to };
+    return windowRange;
+  }, [windowRange, selMonth]);
 
   // Reset expansion + line items whenever the viewed window changes.
   const windowKey = windowRange ? `${windowRange.from}|${windowRange.to}` : "";
@@ -299,17 +311,17 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // `lineItems == null` already prevents a duplicate fetch. Always clear the
   // spinner in finally (even if cancelled) so it can never get stuck.
   React.useEffect(() => {
-    if (data.preview || !anyOpen || lineItems != null || !windowRange) return;
+    if (data.preview || !anyOpen || lineItems != null || !liRange) return;
     let cancelled = false;
     setLiLoading(true);
-    const q = new URLSearchParams({ org: orgId, from: windowRange.from, to: windowRange.to });
+    const q = new URLSearchParams({ org: orgId, from: liRange.from, to: liRange.to });
     fetch(`/api/pnl/lineitems?${q}`)
       .then((r) => (r.ok ? r.json() : { items: [] }))
       .then((d) => { if (!cancelled) setLineItems((d.items ?? []) as LineItem[]); })
       .catch(() => { if (!cancelled) setLineItems([]); })
       .finally(() => setLiLoading(false));
     return () => { cancelled = true; };
-  }, [anyOpen, lineItems, windowRange, orgId, data.preview]);
+  }, [anyOpen, lineItems, liRange, orgId, data.preview]);
 
   // Load OPEN flags for markers + the review count (skipped in sample preview).
   const refreshFlags = React.useCallback(() => {
@@ -324,7 +336,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // drill_keys that actually have line items (so we only show a chevron where it expands).
   const expandableKeys = React.useMemo(() => new Set((lineItems ?? []).map((li) => li.drill_key)), [lineItems]);
   // Which parties (with per-month series) sit under a given drill key, biggest first.
-  const partiesFor = React.useCallback((drillK: string): PartyRow[] => {
+  // `primaryKeys` (Month mode) scopes the sort + visibility to the SELECTED month even
+  // though `monthly` also carries the prior months (needed for the 3-month average) —
+  // so the vendor set + order stay exactly what you'd see for that month, no phantom
+  // rows from months that aren't on screen.
+  const partiesFor = React.useCallback((drillK: string, primaryKeys?: string[]): PartyRow[] => {
     if (!lineItems) return [];
     const by = new Map<string, PartyRow>();
     for (const li of lineItems) {
@@ -335,8 +351,26 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       e.count[li.month] = (e.count[li.month] ?? 0) + li.txn_count;
       e.total += li.amount;
     }
-    return [...by.values()].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+    const arr = [...by.values()];
+    if (primaryKeys && primaryKeys.length) {
+      const prim = (p: PartyRow) => primaryKeys.reduce((a, k) => a + (p.monthly[k] ?? 0), 0);
+      return arr.filter((p) => prim(p) !== 0).sort((a, b) => Math.abs(prim(b)) - Math.abs(prim(a)));
+    }
+    return arr.sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
   }, [lineItems]);
+
+  // ── Month mode: the "Last 3 months average" baseline (the 3 months BEFORE the
+  // selected one — a run-rate to compare THIS month against). row.monthly already
+  // holds 12 months of history (getPnl fetches a year back), so the average is free
+  // for the P&L lines; the wider line-item fetch (liRange) supplies it for vendors. ──
+  const prior3Keys = React.useMemo(
+    () => (selMonth ? [addMonths(selMonth, -3), addMonths(selMonth, -2), addMonths(selMonth, -1)] : []),
+    [selMonth],
+  );
+  const avg3 = React.useCallback(
+    (monthly: Record<string, number>) => (prior3Keys.length ? prior3Keys.reduce((a, k) => a + (monthly[k] ?? 0), 0) / prior3Keys.length : 0),
+    [prior3Keys],
+  );
 
   // The last two rows (Net Profit + Net Margin) are pinned to the bottom of the
   // scroll box. They stay in <tbody> (NOT <tfoot> — Safari doesn't honor
@@ -355,10 +389,18 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const displayCols: PnlColumn[] = React.useMemo(() => {
     if (data.mode === "annual") return data.columns;      // each col already a full year
     if (data.mode === "month") {
-      // Single month: the one column IS the total. Add a "% of Net Revenue" column so
-      // the wide space earns its keep (each line's share of that month's Net Revenue).
+      // Single month: the one column IS the total. Add a run-rate pair — "Last 3M avg"
+      // (average of the 3 prior months) and "vs 3M avg" (this month vs that baseline) —
+      // plus "% of Net Revenue", so the wide space earns its keep and you can see at a
+      // glance whether the month is above or below its recent trend.
       const m = data.columns[0];
-      return m ? [m, { key: "__pct__", label: "% of Net Rev", monthKeys: m.monthKeys }] : data.columns;
+      if (!m) return data.columns;
+      return [
+        m,
+        { key: "__avg3__", label: "Last 3M avg", monthKeys: m.monthKeys },
+        { key: "__davg3__", label: "vs 3M avg", monthKeys: m.monthKeys },
+        { key: "__pct__", label: "% of Net Rev", monthKeys: m.monthKeys },
+      ];
     }
     const allKeys = data.columns.flatMap((c) => c.monthKeys);
     return [...data.columns, { key: "__total__", label: "Total", monthKeys: allKeys }];
@@ -577,6 +619,50 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             ) : row.label}
           </td>
           {displayCols.map((col, cIdx) => {
+            // "Last 3M avg" column (Month mode): average of the 3 prior months.
+            if (col.key === "__avg3__") {
+              const a = row.kind === "margin" ? 0 : avg3(row.monthly);
+              const full = a !== 0 ? moneyFull(a) : "";
+              return (
+                <td
+                  key={col.key}
+                  style={sticky ? { bottom: stickyBottom } : undefined}
+                  className={cn(
+                    "text-right px-4 py-2 num align-top border-l border-border/60 text-[length:var(--ps)] text-muted-foreground",
+                    sticky && `sticky ${footerBg} z-[7]`,
+                    isTotalRow && "font-semibold text-foreground/80"
+                  )}
+                  onMouseEnter={(e) => a !== 0 && setTipCb(full, e.clientX, e.clientY)}
+                  onMouseLeave={() => setTipCb(null)}
+                >
+                  {row.kind === "margin" ? "" : (a === 0 ? "–" : cellText(row, a))}
+                </td>
+              );
+            }
+            // "vs 3M avg" column (Month mode): this month vs the 3-month baseline, %.
+            if (col.key === "__davg3__") {
+              const a = row.kind === "margin" ? 0 : avg3(row.monthly);
+              const cur = selMonth ? (row.monthly[selMonth] ?? 0) : 0;
+              const d = a !== 0 ? ((cur - a) / Math.abs(a)) * 100 : null;
+              return (
+                <td
+                  key={col.key}
+                  style={sticky ? { bottom: stickyBottom } : undefined}
+                  className={cn(
+                    "text-right px-4 py-2 num align-top border-l border-border/60 text-[length:var(--ps)]",
+                    sticky && `sticky ${footerBg} z-[7]`
+                  )}
+                >
+                  {row.kind === "margin" || d === null ? (
+                    <span className="text-muted-foreground/50">{row.kind === "margin" ? "" : "–"}</span>
+                  ) : (
+                    <span className={cn("inline-flex items-center justify-end gap-0.5 font-medium", (d >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive")}>
+                      {d >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}{Math.abs(d).toFixed(1)}%
+                    </span>
+                  )}
+                </td>
+              );
+            }
             // "% of Net Revenue" column (single-month view): each line's share of NR.
             if (col.key === "__pct__") {
               const nr = aggVal(rowsById["net_revenue"], col);
@@ -677,6 +763,29 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             </td>
             {displayCols.map((col, cIdx) => {
               const v = sumKeys(p.monthly, col.monthKeys);
+              // "Last 3M avg" for a vendor/gateway line (Month mode). v here = this month.
+              if (col.key === "__avg3__") {
+                const a = avg3(p.monthly);
+                return (
+                  <td key={col.key} className="text-right px-4 py-1.5 num text-[length:var(--ps)] text-muted-foreground/70 border-l border-border/50">
+                    {a !== 0 ? cellText(row, a) : "–"}
+                  </td>
+                );
+              }
+              // "vs 3M avg" for a vendor/gateway line (Month mode): this month vs baseline.
+              if (col.key === "__davg3__") {
+                const a = avg3(p.monthly);
+                const d = a !== 0 ? ((v - a) / Math.abs(a)) * 100 : null;
+                return (
+                  <td key={col.key} className="text-right px-4 py-1.5 num text-[length:var(--ps)] border-l border-border/50">
+                    {d === null ? <span className="text-muted-foreground/40">–</span> : (
+                      <span className={cn("inline-flex items-center justify-end gap-0.5", (d >= 0) === goodWhenUp(row) ? "text-success" : "text-destructive")}>
+                        {d >= 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}{Math.abs(d).toFixed(1)}%
+                      </span>
+                    )}
+                  </td>
+                );
+              }
               // "% of Net Revenue" column (single-month view) for a vendor/gateway line.
               if (col.key === "__pct__") {
                 const nr = aggVal(rowsById["net_revenue"], col);
@@ -731,7 +840,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     const sticky = stickyBottom !== undefined;
     const canExpand = Boolean(row.drill) && !sticky && !data.preview && expandableKeys.has(row.drill as string);
     const open = canExpand && isRowOpen(row.id);
-    const parties = open ? partiesFor(row.drill as string) : [];
+    const parties = open ? partiesFor(row.drill as string, selMonth ? [selMonth] : undefined) : [];
     return (
       <React.Fragment key={row.id}>
         {row.section && !sticky && renderSectionTr(row)}
@@ -762,7 +871,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       units.push({ t: "row", key: row.id, row });
       const canExpand = Boolean(row.drill) && !data.preview && expandableKeys.has(row.drill as string);
       if (!(canExpand && (rowOverride[row.id] ?? expandAll))) continue;
-      const parties = partiesFor(row.drill as string);
+      const parties = partiesFor(row.drill as string, selMonth ? [selMonth] : undefined);
       if (parties.length === 0) {
         units.push({ t: liLoading ? "loading" : "empty", key: `li:${row.id}`, row });
       } else {
@@ -770,7 +879,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       }
     }
     return units;
-  }, [data.rows, data.preview, FOOTER_IDS, expandableKeys, rowOverride, expandAll, liLoading, partiesFor]);
+  }, [data.rows, data.preview, FOOTER_IDS, expandableKeys, rowOverride, expandAll, liLoading, partiesFor, selMonth]);
 
   // Below this many rows the native table is already smooth — keep the proven,
   // SSR-friendly path and skip virtualization entirely (collapsed view, small FYs).
@@ -948,7 +1057,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               <tr className="border-b-2 border-border">
                 <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
                 {displayCols.map((c) => (
-                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-4 py-2.5 whitespace-nowrap min-w-[128px] border-l border-white/10", c.key === "__total__" && "font-bold text-white", c.key === "__pct__" && "text-white/60")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-4 py-2.5 whitespace-nowrap min-w-[128px] border-l border-white/10", c.key === "__total__" && "font-bold text-white", (c.key === "__pct__" || c.key === "__avg3__" || c.key === "__davg3__") && "text-white/60")}>{c.label}</th>
                 ))}
               </tr>
             </thead>

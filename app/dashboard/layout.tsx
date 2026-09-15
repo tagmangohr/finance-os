@@ -1,5 +1,6 @@
 import * as React from "react";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getActiveOrg } from "@/lib/org/active-org";
 import { SidebarNav } from "@/components/dashboard/sidebar-nav";
@@ -58,6 +59,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   const userName = (user.user_metadata?.full_name as string | undefined) ?? "";
 
+  // Sidebar collapsed preference (read server-side so the rail renders correctly on
+  // first paint — no expand→collapse flash / hydration mismatch).
+  const sidebarCollapsed = (await cookies()).get("fos-sidebar-collapsed")?.value === "1";
+
   return (
     <div className="flex h-screen bg-background overflow-hidden relative z-[1]">
       {/* Desktop sidebar */}
@@ -73,6 +78,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           connectorCount={connectorCount}
           liveCount={liveCount}
           lastSyncedAt={lastSyncedAt}
+          defaultCollapsed={sidebarCollapsed}
         />
       </div>
 
