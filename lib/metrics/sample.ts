@@ -35,5 +35,6 @@ export const SAMPLE_METRIC_DATA: MetricData = {
   hasExpenses: true,
   rangeLabel: "This FY",
   mtd: { current: 2_100_000, prior: 1_850_000 }, // +13.5% like-for-like MoM in preview
+  bankRevenue: 1_500_000, // sample bank-collected revenue, so Revenue > Gross Volume in preview
   source: "views",
 };

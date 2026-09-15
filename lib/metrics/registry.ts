@@ -40,19 +40,19 @@ export const METRICS: MetricDef[] = [
   {
     key: "revenue_mtd", label: "Revenue", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: TrendingUp,
-    description: "Gross revenue collected over the selected period (before refunds).",
-    compute: (d) => ({ value: d.health.grossVolume, display: cur(d.health.grossVolume), spark: d.monthly.slice(-8).map((x) => x.gross), available: true, period: rl(d) }),
+    description: "Gross revenue over the selected period (before refunds) — gateway payments plus customer payments collected directly into the bank. Matches the P&L's Gross Revenue.",
+    compute: (d) => { const v = d.health.grossVolume + (d.bankRevenue ?? 0); return { value: v, display: cur(v), spark: d.monthly.slice(-8).map((x) => x.gross), available: true, period: rl(d) }; },
   },
   {
     key: "net_revenue_mtd", label: "Net Revenue", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-margin))", icon: CircleDollarSign,
-    description: "Revenue after refunds and chargebacks over the selected period.",
-    compute: (d) => { const v = d.health.grossVolume - d.health.refundAmount; return { value: v, display: cur(v), spark: d.monthly.slice(-8).map((x) => x.net), available: true, period: rl(d) }; },
+    description: "Revenue after refunds over the selected period (gateway + bank-collected revenue, less refunds).",
+    compute: (d) => { const v = d.health.grossVolume + (d.bankRevenue ?? 0) - d.health.refundAmount; return { value: v, display: cur(v), spark: d.monthly.slice(-8).map((x) => x.net), available: true, period: rl(d) }; },
   },
   {
     key: "gross_volume_90d", label: "Gross Volume", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-cash))", icon: Activity,
-    description: "Total processed payment volume over the selected period (before refunds).",
+    description: "Total payment volume processed through the gateways over the selected period (before refunds). Gateway-only — excludes bank-collected revenue, so it can differ from Revenue.",
     compute: (d) => ({ value: d.health.grossVolume, display: cur(d.health.grossVolume), available: true, period: rl(d) }),
   },
   {

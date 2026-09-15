@@ -240,9 +240,13 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { 
   // aggregation over transactions can take ~15s for wide ranges, and it must NOT
   // block the Revenue page render — it's loaded async from the client via
   // /api/revenue/customers (see components/dashboard/revenue-customers.tsx).
-  const [mRes, cRes] = await Promise.all([
+  const [mRes, cRes, bankRes] = await Promise.all([
     supabase.rpc("metrics_monthly_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("revenue_by_currency_range" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Bank-collected customer-payment revenue (migration 123) — the piece the P&L
+    // counts but the gateway rollup doesn't. Folded into the monthly series below so
+    // Total Revenue / MRR / ARR / MoM / YoY match the P&L. Empty until 123 is applied.
+    supabase.rpc("dash_bank_revenue_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
   ]);
 
   // Fall back to the fixed 13-month views if the RPCs aren't applied yet (the
@@ -261,10 +265,26 @@ export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { 
     currencyRows = (cv.data ?? []) as unknown as typeof currencyRows;
   }
 
-  const revenueByMonth = monthlyRows.map((r) => ({
-    month: String(r.month).slice(0, 7),
-    amount: Number(r.gross_revenue ?? 0),
-  }));
+  // Bank-collected customer-payment revenue by month ("YYYY-MM" → INR), added on top
+  // of the gateway monthly series so every downstream number (Total Revenue, MRR,
+  // ARR, MoM, YoY) matches the P&L. Absent/0 until migration 123 is applied.
+  const bankByMonth = new Map<string, number>();
+  if (!bankRes.error) {
+    for (const r of ((bankRes.data ?? []) as { month: string; amount: number }[])) {
+      bankByMonth.set(String(r.month).slice(0, 7), Number(r.amount ?? 0));
+    }
+  }
+
+  const revenueByMonth = monthlyRows.map((r) => {
+    const month = String(r.month).slice(0, 7);
+    return { month, amount: Number(r.gross_revenue ?? 0) + (bankByMonth.get(month) ?? 0) };
+  });
+  // A month with bank income but no gateway row would otherwise be dropped — add it.
+  const gwMonths = new Set(revenueByMonth.map((m) => m.month));
+  for (const [month, amount] of bankByMonth) {
+    if (!gwMonths.has(month)) revenueByMonth.push({ month, amount });
+  }
+  revenueByMonth.sort((a, b) => a.month.localeCompare(b.month));
 
   // MRR = avg of last 3 months; ARR = ×12; MoM = last vs prev; YoY = last vs
   // earliest (~13 months ago). Derived from the monthly series (ascending).

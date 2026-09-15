@@ -81,9 +81,12 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
   const window = monthSpan(addMonths(curKey, -7), addMonths(curKey, -1)); // ordered month keys
 
   const supabase = await createServiceClient();
-  const [monthlyRes, pnlRes] = await Promise.all([
+  const [monthlyRes, pnlRes, bankRes] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Bank-collected customer-payment revenue (migration 123) — folded into gross so
+    // the Gross Revenue forecast baseline matches the P&L (not gateway-only). 0 pre-123.
+    supabase.rpc("dash_bank_revenue_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
   ]);
 
   type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
@@ -93,6 +96,10 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
 
   const gross: Record<string, number> = {}, refunds: Record<string, number> = {}, fees: Record<string, number> = {};
   for (const r of monthly) { const k = r.month.slice(0, 7); gross[k] = Number(r.gross_revenue) || 0; refunds[k] = Number(r.refunds) || 0; }
+  // Add bank-collected customer-payment revenue on top of gateway gross (matches the P&L).
+  if (!bankRes.error) for (const r of ((bankRes.data ?? []) as { month: string; amount: number }[])) {
+    const k = String(r.month).slice(0, 7); gross[k] = (gross[k] ?? 0) + Number(r.amount ?? 0);
+  }
   const cats = new Map<string, { label: string; values: Record<string, number> }>();
   for (const c of catRows) {
     const k = c.month.slice(0, 7);

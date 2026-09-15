@@ -32,8 +32,14 @@ export type MetricData = {
   /** Short label of the selected range (e.g. "This FY") — shown on range-scoped cards. */
   rangeLabel?: string;
   /** Like-for-like MoM: net revenue month-to-date vs the SAME number of days in the
-   *  prior month, so the growth % is honest mid-month. */
+   *  prior month, so the growth % is honest mid-month. Includes bank-collected
+   *  customer-payment revenue, so it moves in step with the Revenue card. */
   mtd?: { current: number; prior: number };
+  /** Bank-collected customer-payment revenue over the SELECTED range (ledger='bank',
+   *  pnl_treatment='income', category='customer_payment'), the piece the P&L counts
+   *  as revenue but the gateway rollup doesn't. Added on top of health.grossVolume so
+   *  "Revenue" matches the P&L. 0 until migration 123 is applied. */
+  bankRevenue?: number;
 };
 
 export const EMPTY_METRIC_DATA: MetricData = {

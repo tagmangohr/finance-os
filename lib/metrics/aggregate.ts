@@ -59,6 +59,27 @@ async function netOverRange(sb: SupabaseClient, org: string, from: string, to: s
   return Number(row.gross_volume ?? 0) - Number(row.refund_amount ?? 0);
 }
 
+// Bank-collected customer-payment revenue (ledger='bank', pnl_treatment='income',
+// category='customer_payment') over a day range — the piece the P&L counts as
+// revenue but the gateway rollup doesn't. Mirrors lib/pnl.ts exactly (migration 123).
+// Returns 0 if the RPC isn't applied yet, so Revenue stays gateway-only until then.
+async function bankRevRange(sb: SupabaseClient, org: string, from: string, to: string): Promise<number> {
+  const r = await sb.rpc("dash_bank_revenue_range" as never, { p_org: org, p_from: from, p_to: to } as never);
+  if (r.error) return 0; // missing fn (pre-123) or error → additive 0, never breaks the page
+  const v = r.data as unknown;
+  return typeof v === "number" ? v : Number((Array.isArray(v) ? v[0] : v) ?? 0);
+}
+// Same, month-wise ("YYYY-MM" → amount), for folding into the trailing monthly series.
+async function bankRevMonthly(sb: SupabaseClient, org: string, from: string, to: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const r = await sb.rpc("dash_bank_revenue_monthly" as never, { p_org: org, p_from: from, p_to: to } as never);
+  if (r.error) return out; // pre-123 → empty → series stays gateway-only
+  for (const row of ((r.data as Record<string, unknown>[]) ?? [])) {
+    out.set(String(row.month).slice(0, 7), Number(row.amount ?? 0));
+  }
+  return out;
+}
+
 /** Ordered "YYYY-MM" keys for the last N months, oldest first, ending this month. */
 function monthSkeleton(n: number): string[] {
   const now = new Date();
@@ -125,13 +146,17 @@ async function fromRollups(orgId: string, supabase: SupabaseClient, range: Metri
   const from = `${keys[0]}-01`;                       // monthly series: trailing ~13 months
   const to = new Date().toISOString().slice(0, 10);   //   (run-rate / growth are "as of now")
   const mtd = mtdRanges();
-  const [m, h, c, t, mtdCur, mtdPrior] = await Promise.all([
+  const [m, h, c, t, mtdCur, mtdPrior, bankRange, bankMon, bankMtdCur, bankMtdPrior] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     healthRange(supabase, orgId, range.from, range.to),        // health scoped to the SELECTED range
     customersRange(supabase, orgId, range.from, range.to),     // customers scoped to the SELECTED range
     supabase.rpc("dash_metrics_totals" as never, { p_org: orgId } as never),
     netOverRange(supabase, orgId, mtd.curFrom, mtd.curTo),     // like-for-like MoM inputs
     netOverRange(supabase, orgId, mtd.priorFrom, mtd.priorTo),
+    bankRevRange(supabase, orgId, range.from, range.to),       // bank-collected revenue, SELECTED range
+    bankRevMonthly(supabase, orgId, from, to),                 // bank-collected revenue, trailing series
+    bankRevRange(supabase, orgId, mtd.curFrom, mtd.curTo),     // bank piece of the MoM windows
+    bankRevRange(supabase, orgId, mtd.priorFrom, mtd.priorTo),
   ]);
   const errs = [m.error, h.error, c.error, t.error].filter(Boolean) as { code?: string; message?: string }[];
   if (errs.length) {
@@ -150,6 +175,15 @@ async function fromRollups(orgId: string, supabase: SupabaseClient, range: Metri
     expenseSeen += expense;
     byKey.set(key, { gross, refunds, net: gross - refunds, expense, txns: Number(row.txn_count ?? 0), customers: Number(row.paying_customers ?? 0) });
   }
+  // Fold bank-collected customer-payment revenue INTO monthly gross (one number, like
+  // the P&L). This cascades to MRR / ARR / YoY / YTD, the cashflow inflow chart, and
+  // burn — all of which derive from this series — so Revenue is consistent everywhere.
+  for (const [key, amt] of bankMon) {
+    const p = byKey.get(key) ?? { gross: 0, refunds: 0, net: 0, expense: 0, txns: 0, customers: 0 };
+    p.gross = (p.gross ?? 0) + amt;
+    p.net = (p.gross ?? 0) - (p.refunds ?? 0);
+    byKey.set(key, p);
+  }
   const hh = ((h.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
   const cc = ((c.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
   const tt = ((t.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
@@ -166,7 +200,9 @@ async function fromRollups(orgId: string, supabase: SupabaseClient, range: Metri
     totals: { lifetimeInflow: Number(tt.lifetime_inflow ?? 0), lifetimeOutflow: Number(tt.lifetime_outflow ?? 0) },
     hasExpenses: expenseSeen > 0,
     rangeLabel: range.label,
-    mtd: { current: mtdCur, prior: mtdPrior },
+    // MoM inputs include the bank piece too, so growth tracks the Revenue card.
+    mtd: { current: mtdCur + bankMtdCur, prior: mtdPrior + bankMtdPrior },
+    bankRevenue: bankRange,
     source: "views",
   };
 }
