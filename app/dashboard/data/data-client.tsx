@@ -1118,7 +1118,10 @@ function SummaryCard({
   const sign = showSign ? (amount >= 0 ? "+" : "−") : "";
 
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+    // flex-col + mt-auto on the amount pins it to the BOTTOM, so the figure sits on
+    // the same line across every card regardless of the optional "txns" line or a
+    // label that wraps to two lines. h-full lets it fill the (stretched) grid cell.
+    <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm h-full flex flex-col">
       <div className="flex items-center gap-1.5 mb-1.5">
         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
           {label}
@@ -1134,7 +1137,7 @@ function SummaryCard({
           {count.toLocaleString("en-IN")} txns
         </p>
       )}
-      <p className={cn("text-lg font-bold tabular-nums leading-none", colour)}>
+      <p className={cn("mt-auto text-lg font-bold tabular-nums leading-none", colour)}>
         {sign}₹{fmt(amount)}
       </p>
     </div>
