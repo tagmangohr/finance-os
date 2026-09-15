@@ -41,6 +41,16 @@ type ReviewFlag = {
 };
 // Stable identity of a flaggable line item for a period (matches uq_pnl_flag_open).
 const flagKey = (drillKey: string, party: string, from: string, to: string) => `${drillKey}|${party}|${from}|${to}`;
+// Sentinel party for a WHOLE-LINE flag (the category row itself, not one vendor).
+const LINE_PARTY = "*";
+
+// Text-size presets (px) driven by the header size control → CSS vars on the table.
+type SizeKey = "sm" | "md" | "lg";
+const SIZE_PRESETS: Record<SizeKey, { label: number; num: number; sub: number; sec: number }> = {
+  sm: { label: 13, num: 13, sub: 12, sec: 10 },
+  md: { label: 15, num: 15, sub: 13.5, sec: 11 },   // default — comfortable
+  lg: { label: 17, num: 16.5, sub: 15, sec: 12 },
+};
 
 // ─── exact-figure tooltip (single fixed element, avoids table clipping) ────────
 const TipCtx = React.createContext<(text: string | null, x?: number, y?: number) => void>(() => {});
@@ -232,6 +242,15 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // switch is decisive (every expandable row follows it).
   const toggleAll = () => { setExpandAll((v) => !v); setRowOverride({}); };
 
+  // ── Text size (compact / comfortable / large), remembered per browser ──
+  const [size, setSize] = React.useState<SizeKey>("md");
+  React.useEffect(() => {
+    try { const s = localStorage.getItem("pnl-size"); if (s === "sm" || s === "md" || s === "lg") setSize(s); } catch { /* private mode */ }
+  }, []);
+  const changeSize = (s: SizeKey) => { setSize(s); try { localStorage.setItem("pnl-size", s); } catch { /* ignore */ } };
+  const sz = SIZE_PRESETS[size];
+  const sizeVars = { "--pl": `${sz.label}px`, "--pn": `${sz.num}px`, "--ps": `${sz.sub}px`, "--pc": `${sz.sec}px` } as React.CSSProperties;
+
   // ── Review flags ──
   const [flags, setFlags] = React.useState<ReviewFlag[]>([]);      // OPEN flags (for markers)
   const [reviewOpen, setReviewOpen] = React.useState(false);
@@ -311,7 +330,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const [marginH, setMarginH] = React.useState(38);
   React.useLayoutEffect(() => {
     if (marginRowRef.current) setMarginH(marginRowRef.current.offsetHeight);
-  }, [data, change]);
+  }, [data, change, size]);
 
   // Display columns: month/year columns + a Total column (except annual mode).
   const displayCols: PnlColumn[] = React.useMemo(() => {
@@ -380,13 +399,14 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   }
 
   // ── review flag actions ──
-  const raiseFlag = React.useCallback((g: Group, drillK: string, from: string, to: string, opts: { categoryLabel: string; periodLabel: string }) => {
-    const note = window.prompt(`Flag "${groupDisplayName(drillK, g.name)}" (${opts.periodLabel}) for the accounting team to review.\n\nAdd a note (optional):`, "");
+  const raiseFlag = React.useCallback((g: Group, drillK: string, from: string, to: string, opts: { categoryLabel: string; periodLabel: string; partyLabel?: string }) => {
+    const label = opts.partyLabel ?? groupDisplayName(drillK, g.name);
+    const note = window.prompt(`Flag "${label}" (${opts.periodLabel}) for the accounting team to review.\n\nAdd a note (optional):`, "");
     if (note === null) return; // cancelled
     fetch(`/api/pnl/review`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        drill_key: drillK, party: g.name, party_label: groupDisplayName(drillK, g.name),
+        drill_key: drillK, party: g.name, party_label: label,
         category_label: opts.categoryLabel, period_from: from, period_to: to, period_label: opts.periodLabel,
         amount: g.amount, note: note.trim(),
       }),
@@ -399,6 +419,21 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       body: JSON.stringify({ id, status }),
     }).then((r) => { if (r.ok) refreshFlags(); }).catch(() => { /* ignore */ });
   }, [refreshFlags]);
+
+  // Whole-line flag straight from a cell (no drawer): flag THIS line for THIS
+  // column's period. Toggling an already-flagged cell resolves it (un-flags).
+  const lineDrillKey = (row: PnlRow) => row.drill ?? `line:${row.id}`;
+  const cellFlagged = (row: PnlRow, col: PnlColumn) => {
+    const { from, to } = colRange(col);
+    return flaggedSet.has(flagKey(lineDrillKey(row), LINE_PARTY, from, to));
+  };
+  const toggleCellFlag = (row: PnlRow, col: PnlColumn) => {
+    const dk = lineDrillKey(row);
+    const { from, to, label } = colRange(col);
+    const existing = flags.find((f) => f.drill_key === dk && f.party === LINE_PARTY && f.period_from === from && f.period_to === to);
+    if (existing) { resolveFlag(existing.id, "resolved"); return; }  // toggle off
+    raiseFlag({ name: LINE_PARTY, amount: aggVal(row, col), txn_count: 0 }, dk, from, to, { categoryLabel: row.label, periodLabel: label, partyLabel: row.label });
+  };
 
   // ── period controls ──
   const goMode = (mode: string) => {
@@ -458,7 +493,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       <React.Fragment key={row.id}>
         {row.section && !sticky && (
           <tr>
-            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
+            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-4 pt-3 pb-1 text-[length:var(--pc)] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
           </tr>
         )}
         <tr
@@ -476,12 +511,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             className={cn(
               // Sticky label column MUST be opaque or right-scrolled month
               // values bleed through the translucent tints.
-              "sticky left-0 z-[1] px-4 py-2 whitespace-nowrap border-r border-border text-[14px]",
+              "sticky left-0 z-[1] px-4 py-2 whitespace-nowrap border-r border-border text-[length:var(--pl)]",
               (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
               sticky && `${footerBg} z-[8]`,
               strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
               isTotalRow && "font-bold",
-              row.kind === "expense" && "pl-7 text-[13.5px] text-muted-foreground font-normal"
+              row.kind === "expense" && "pl-7 text-[length:var(--ps)] text-muted-foreground font-normal"
             )}
           >
             {canExpand ? (
@@ -503,7 +538,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                   key={col.key}
                   style={sticky ? { bottom: stickyBottom } : undefined}
                   className={cn(
-                    "text-right px-4 py-2 num align-top border-l border-border/60 text-[12.5px] text-muted-foreground",
+                    "text-right px-4 py-2 num align-top border-l border-border/60 text-[length:var(--ps)] text-muted-foreground",
                     sticky && `sticky ${footerBg} z-[7]`,
                     isTotalRow && "font-semibold text-foreground/80"
                   )}
@@ -533,7 +568,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 style={sticky ? { bottom: stickyBottom } : undefined}
                 className={cn(
                   "text-right px-4 py-2 num align-top border-l border-border/60",
-                  zebra && "bg-foreground/[0.025]",   // alternate-column banding
+                  !sticky && "relative group/cell",
+                  zebra && "bg-foreground/[0.06]",   // alternate-column banding (visible)
                   !sticky && col.key === "__total__" && "bg-muted/30",
                   // Footer rows (Net Profit / Net Margin): the number cells must
                   // ALSO be position:sticky — otherwise the inline `bottom` offset
@@ -546,6 +582,24 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                 onMouseLeave={() => setTipCb(null)}
               >
+                {/* Flag THIS line for review straight from the cell — no drawer. Amber
+                    when already flagged (persistent marker); otherwise appears on hover. */}
+                {!sticky && !data.preview && row.kind !== "margin" && v !== 0 && (() => {
+                  const flagged = cellFlagged(row, col);
+                  return (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); toggleCellFlag(row, col); }}
+                      title={flagged ? "Flagged for review — click to unflag" : "Flag this line for review"}
+                      className={cn(
+                        "absolute left-2 top-2 p-0.5 rounded transition-opacity z-[2]",
+                        flagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500"
+                      )}
+                    >
+                      <Flag className={cn("h-3 w-3", flagged && "fill-current")} />
+                    </button>
+                  );
+                })()}
                 {drillable ? (
                   <button type="button" onClick={() => openDrill(row, col)} className={valueCls}>{inner}</button>
                 ) : (
@@ -579,7 +633,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         )}
         {open && parties.map((p) => (
           <tr key={`${row.id}::${p.party}`} className="border-b border-border/30 bg-card/60">
-            <td className="sticky left-0 z-[1] bg-card px-4 py-1.5 pl-11 whitespace-nowrap border-r border-border text-[13px] text-foreground/75">
+            <td className="sticky left-0 z-[1] bg-card px-4 py-1.5 pl-11 whitespace-nowrap border-r border-border text-[length:var(--ps)] text-foreground/75">
               <span className="block max-w-[300px] truncate" title={groupDisplayName(row.drill as string, p.party)}>{groupDisplayName(row.drill as string, p.party)}</span>
             </td>
             {displayCols.map((col, cIdx) => {
@@ -589,7 +643,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                 const nr = aggVal(rowsById["net_revenue"], col);
                 const share = nr ? (v / nr) * 100 : null;
                 return (
-                  <td key={col.key} className="text-right px-4 py-1.5 num text-[12px] text-muted-foreground/70 border-l border-border/50">
+                  <td key={col.key} className="text-right px-4 py-1.5 num text-[length:var(--ps)] text-muted-foreground/70 border-l border-border/50">
                     {v !== 0 && share != null ? `${share.toFixed(1)}%` : ""}
                   </td>
                 );
@@ -602,7 +656,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               return (
                 <td
                   key={col.key}
-                  className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50", zebra && "bg-foreground/[0.025]", col.key === "__total__" && "bg-muted/30")}
+                  className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50 text-[length:var(--ps)]", zebra && "bg-foreground/[0.06]", col.key === "__total__" && "bg-muted/30")}
                   onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseLeave={() => setTipCb(null)}
@@ -705,6 +759,15 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           ))}
         </div>
 
+        {/* text-size control (compact / comfortable / large) — remembered per browser */}
+        <div className="inline-flex rounded-lg border border-border overflow-hidden" title="Text size">
+          {(["sm", "md", "lg"] as SizeKey[]).map((s, i) => (
+            <button key={s} onClick={() => changeSize(s)} title={`${["Compact", "Comfortable", "Large"][i]} text`}
+              className={cn("h-8 w-8 font-semibold leading-none transition-colors flex items-center justify-center", size === s ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}
+              style={{ fontSize: [11, 13, 15][i] }}>A</button>
+          ))}
+        </div>
+
         {!data.preview && (
           <>
             {/* Expand → show every line's vendors/gateways inline (Excel outline feel).
@@ -752,12 +815,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
       <div className="flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
         <div className="h-full overflow-auto">
-          <table className="w-full border-collapse text-[13px]">
+          <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[13px] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
                 {displayCols.map((c) => (
-                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-4 py-2.5 whitespace-nowrap min-w-[128px] border-l border-white/10", c.key === "__total__" && "font-bold text-white", c.key === "__pct__" && "text-white/60")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-4 py-2.5 whitespace-nowrap min-w-[128px] border-l border-white/10", c.key === "__total__" && "font-bold text-white", c.key === "__pct__" && "text-white/60")}>{c.label}</th>
                 ))}
               </tr>
             </thead>
