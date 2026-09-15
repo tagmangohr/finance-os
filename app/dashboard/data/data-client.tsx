@@ -563,9 +563,12 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
   };
 
   return (
-    <div className="space-y-4 max-w-[1400px]">
+    // Full-height flex column so the table's scroll box fills the viewport: the
+    // toolbar (filters + cards) and pagination stay put while ONLY the table body
+    // scrolls, which is what lets the column header stay frozen (mirrors P&L).
+    <div className="flex flex-col h-full max-w-[1400px] gap-4">
       {/* Header */}
-      <div className="animate-enter">
+      <div className="shrink-0 animate-enter">
         <h1 className="text-xl font-bold text-foreground">
           {searchOnly ? "Payment Lookup" : "Raw Transaction Data"}
         </h1>
@@ -576,11 +579,9 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
         </p>
       </div>
 
-      {/* Sticky toolbar — the filter row AND the summary cards stay pinned to the
-          top of the scroll area while the (long) transaction table scrolls beneath.
-          Full-bleed blurred backdrop (negative margins cancel <main>'s p-4/p-5
-          padding) masks rows sliding underneath. */}
-      <div className="sticky top-0 z-20 -mx-4 sm:-mx-5 px-4 sm:px-5 pt-2 pb-3 space-y-3 bg-background/95 backdrop-blur-sm border-b border-border/70 shadow-[0_6px_18px_-12px_rgba(0,0,0,0.35)]">
+      {/* Toolbar — filters + summary cards. Sits above the scroll box and never
+          scrolls (only the table body does), so both stay visible at all times. */}
+      <div className="shrink-0 space-y-3">
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center animate-enter-delay-1">
         {/* Search */}
@@ -650,8 +651,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
               to={to}
               max={new Date().toISOString().slice(0, 10)}
               onChange={(f, t) => { setFrom(f); setTo(t); }}
-              variant="dark"
-              className="bg-sidebar hover:bg-sidebar/90 text-white"
+              className="bg-card border-foreground text-foreground hover:border-foreground hover:text-foreground"
             />
 
             {/* Spacer + export */}
@@ -662,7 +662,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
               </span>
               <button
                 onClick={handleExport}
-                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-transparent bg-sidebar text-white hover:bg-sidebar/85 transition-all"
+                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-foreground bg-card text-foreground hover:bg-accent transition-all"
               >
                 <Download className="h-3.5 w-3.5" />
                 Export CSV
@@ -735,26 +735,29 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
       )}
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto rounded-xl border border-border bg-accent/40">
-        <table className="w-full text-xs">
+      {/* Table — fills the remaining height; the black column header stays frozen at
+          the top while only the body scrolls inside this box (P&L sticky pattern:
+          flex-1 min-h-0 box → inner h-full scroller → sticky th cells). */}
+      <div className="flex-1 min-h-0 rounded-xl border border-border bg-accent/40 overflow-hidden">
+        <div className="h-full overflow-auto">
+        <table className="w-full border-collapse text-xs">
           <thead>
-            <tr className="border-b border-border bg-sidebar">
+            <tr className="bg-sidebar">
               <Th col="transaction_date" label="Date" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="transaction_at" label="Time" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="source" label="Source" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="type" label="Type" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="amount" label="Amount" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
               <Th col="status" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Name</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Email</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest min-w-[200px]">Description</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">External ID</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest">Name</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest">Email</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest min-w-[200px]">Description</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest">External ID</th>
               <Th col="category" label="Category" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Metadata</th>
+              <th className="px-3 py-2.5 text-left sticky top-0 z-20 bg-sidebar text-[10px] font-semibold text-white/70 uppercase tracking-widest">Metadata</th>
             </tr>
           </thead>
           <tbody>
@@ -951,11 +954,12 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             )}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <div className="shrink-0 flex items-center justify-between text-xs text-muted-foreground">
           <span>
             Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of{" "}
             {total.toLocaleString("en-IN")}
@@ -1181,8 +1185,8 @@ function FilterSelect({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-9 rounded-lg border border-transparent bg-sidebar px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/40 appearance-none pr-7"
-      style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center" }}
+      className="h-9 rounded-lg border border-foreground bg-card px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary appearance-none pr-7"
+      style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center" }}
     >
       {options.map((o) => (
         <option key={o.value} value={o.value} className="bg-popover text-muted-foreground">
@@ -1209,7 +1213,7 @@ function Th({
   const active = sortCol === col;
   return (
     <th
-      className="px-3 py-2.5 text-left cursor-pointer select-none"
+      className="sticky top-0 z-20 bg-sidebar px-3 py-2.5 text-left cursor-pointer select-none"
       onClick={() => onSort(col)}
     >
       <div className="flex items-center gap-1 group">
