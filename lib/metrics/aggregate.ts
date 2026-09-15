@@ -3,6 +3,62 @@ import type { MetricData, MonthlyPoint } from "./types";
 
 const MONTHS_BACK = 13;
 
+/** Selected window for the range-scoped (activity + customer) metrics. */
+export type MetricRange = { from: string; to: string; label: string };
+
+const istToday = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** Default range = THIS financial year (India FY, 1 Apr → today) — matches the
+ *  Revenue tab and the Dashboard's default period. */
+function defaultRange(): MetricRange {
+  const t = istToday();
+  const [y, m] = t.split("-").map(Number);
+  const fyYear = m >= 4 ? y : y - 1;
+  return { from: `${fyYear}-04-01`, to: t, label: "This FY" };
+}
+
+/** Month-to-date vs the SAME number of days in the prior month (like-for-like MoM). */
+function mtdRanges() {
+  const t = istToday();
+  const [y, m, d] = t.split("-").map(Number);
+  const pm = m === 1 ? 12 : m - 1;
+  const py = m === 1 ? y - 1 : y;
+  const priorLen = new Date(py, pm, 0).getDate();  // days in the prior month
+  const pd = Math.min(d, priorLen);
+  return {
+    curFrom: `${y}-${pad2(m)}-01`, curTo: t,
+    priorFrom: `${py}-${pad2(pm)}-01`, priorTo: `${py}-${pad2(pm)}-${pad2(pd)}`,
+  };
+}
+
+const isMissingFn = (e: { code?: string; message?: string } | null) =>
+  !!e && (e.code === "42883" || /does not exist/i.test(e.message ?? ""));
+
+// Range-scoped health; falls back to the last-N-days variant if 122 isn't applied.
+async function healthRange(sb: SupabaseClient, org: string, from: string, to: string) {
+  const r = await sb.rpc("dash_metrics_health_range" as never, { p_org: org, p_from: from, p_to: to } as never);
+  if (isMissingFn(r.error)) {
+    const days = Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000));
+    return sb.rpc("dash_metrics_health" as never, { p_org: org, p_days: days } as never);
+  }
+  return r;
+}
+async function customersRange(sb: SupabaseClient, org: string, from: string, to: string) {
+  const r = await sb.rpc("dash_metrics_customers_range" as never, { p_org: org, p_from: from, p_to: to } as never);
+  if (isMissingFn(r.error)) {
+    const days = Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000));
+    return sb.rpc("dash_metrics_customers" as never, { p_org: org, p_days: days } as never);
+  }
+  return r;
+}
+// Net revenue (gross − refunds) over a day range, from the health rollup.
+async function netOverRange(sb: SupabaseClient, org: string, from: string, to: string): Promise<number> {
+  const r = await healthRange(sb, org, from, to);
+  const row = ((r.data as Record<string, unknown>[])?.[0] ?? {}) as Record<string, unknown>;
+  return Number(row.gross_volume ?? 0) - Number(row.refund_amount ?? 0);
+}
+
 /** Ordered "YYYY-MM" keys for the last N months, oldest first, ending this month. */
 function monthSkeleton(n: number): string[] {
   const now = new Date();
@@ -39,39 +95,43 @@ function fillMonths(byKey: Map<string, Partial<MonthlyPoint>>): MonthlyPoint[] {
  * aggregation so the numbers are still correct, just slower, until the migration
  * lands. Never throws — a data problem yields zeros, not a broken page.
  */
-export async function getMetricData(orgId: string, supabase: SupabaseClient): Promise<MetricData> {
+export async function getMetricData(orgId: string, supabase: SupabaseClient, range?: MetricRange): Promise<MetricData> {
+  const r = range ?? defaultRange();
   // Primary: trigger-maintained rollups (migration 068) — precomputed, instant,
   // scales to millions of rows. Never scans the raw table, so it can't time out
   // and silently zero the dashboard (the old failure mode with the plain views).
   try {
-    const viaRollups = await fromRollups(orgId, supabase);
+    const viaRollups = await fromRollups(orgId, supabase, r);
     if (viaRollups) return viaRollups;
   } catch {
     /* rollups unavailable → fall through to the (slower) views */
   }
   try {
     const viaViews = await fromViews(orgId, supabase);
-    if (viaViews) return viaViews;
+    if (viaViews) return { ...viaViews, rangeLabel: r.label };
   } catch {
     /* fall through to the paginated fallback */
   }
   try {
-    return await fromFallback(orgId, supabase);
+    return { ...(await fromFallback(orgId, supabase)), rangeLabel: r.label };
   } catch {
-    return { ...emptyData(), source: "fallback" };
+    return { ...emptyData(), rangeLabel: r.label, source: "fallback" };
   }
 }
 
 // ── Primary path: trigger-maintained rollups (migration 068) ─────────────────
-async function fromRollups(orgId: string, supabase: SupabaseClient): Promise<MetricData | null> {
+async function fromRollups(orgId: string, supabase: SupabaseClient, range: MetricRange): Promise<MetricData | null> {
   const keys = monthSkeleton(MONTHS_BACK);
-  const from = `${keys[0]}-01`;
-  const to = new Date().toISOString().slice(0, 10);
-  const [m, h, c, t] = await Promise.all([
+  const from = `${keys[0]}-01`;                       // monthly series: trailing ~13 months
+  const to = new Date().toISOString().slice(0, 10);   //   (run-rate / growth are "as of now")
+  const mtd = mtdRanges();
+  const [m, h, c, t, mtdCur, mtdPrior] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
-    supabase.rpc("dash_metrics_health" as never, { p_org: orgId } as never),
-    supabase.rpc("dash_metrics_customers" as never, { p_org: orgId } as never),
+    healthRange(supabase, orgId, range.from, range.to),        // health scoped to the SELECTED range
+    customersRange(supabase, orgId, range.from, range.to),     // customers scoped to the SELECTED range
     supabase.rpc("dash_metrics_totals" as never, { p_org: orgId } as never),
+    netOverRange(supabase, orgId, mtd.curFrom, mtd.curTo),     // like-for-like MoM inputs
+    netOverRange(supabase, orgId, mtd.priorFrom, mtd.priorTo),
   ]);
   const errs = [m.error, h.error, c.error, t.error].filter(Boolean) as { code?: string; message?: string }[];
   if (errs.length) {
@@ -105,6 +165,8 @@ async function fromRollups(orgId: string, supabase: SupabaseClient): Promise<Met
     customers: { paying: Number(cc.paying_customers ?? 0), netRevenue: Number(cc.net_revenue ?? 0), txns: Number(cc.txn_count ?? 0) },
     totals: { lifetimeInflow: Number(tt.lifetime_inflow ?? 0), lifetimeOutflow: Number(tt.lifetime_outflow ?? 0) },
     hasExpenses: expenseSeen > 0,
+    rangeLabel: range.label,
+    mtd: { current: mtdCur, prior: mtdPrior },
     source: "views",
   };
 }

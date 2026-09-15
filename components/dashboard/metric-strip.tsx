@@ -153,6 +153,7 @@ export function MetricStrip({ computed, initialPinned, initialVisibleCount, orgI
                 subtitle={c.note ?? undefined}
                 trend={c.available ? c.trend ?? undefined : undefined}
                 trendLabel={c.trendLabel}
+                period={c.available ? c.period ?? undefined : undefined}
                 icon={<def.icon className="w-4 h-4" />}
                 accentColor={def.accent}
                 className="h-full min-h-[100px]"

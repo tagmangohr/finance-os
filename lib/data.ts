@@ -5,7 +5,7 @@ import { getActiveOrg } from "@/lib/org/active-org";
 import { POSTED_TRANSACTION_STATUSES, isTransferSource } from "@/lib/finance/transaction-status";
 import { calculateRunway } from "@/lib/intelligence/runway";
 import { getMercuryCashPosition } from "@/lib/expenses/mercury-balances";
-import { getMetricData } from "@/lib/metrics/aggregate";
+import { getMetricData, type MetricRange } from "@/lib/metrics/aggregate";
 import { EMPTY_METRIC_DATA, type MetricData } from "@/lib/metrics/types";
 import { selectAll } from "@/lib/supabase/paginate";
 import type {
@@ -89,23 +89,25 @@ const EMPTY_SUMMARY: DashboardSummary = {
   hasData: false,
 };
 
-export async function getFinancialSummary(): Promise<DashboardSummary> {
+export async function getFinancialSummary(range?: MetricRange): Promise<DashboardSummary> {
   // orgId resolution reads cookies → must happen OUTSIDE the cache boundary.
   const orgId = await getOrgId();
   if (!orgId) return EMPTY_SUMMARY;
-  return financialSummaryCached(orgId);
+  return financialSummaryCached(orgId, range);
 }
 
 /** Org-scoped fast summary for server contexts that already hold an org id and
  *  have authorized access (e.g. the AI co-pilot). Same rollup + snapshot path as
  *  the dashboard — no live full-table scans, so it never hits statement timeouts. */
-export async function getFinancialSummaryForOrg(orgId: string): Promise<DashboardSummary> {
-  return financialSummaryCached(orgId);
+export async function getFinancialSummaryForOrg(orgId: string, range?: MetricRange): Promise<DashboardSummary> {
+  return financialSummaryCached(orgId, range);
 }
 
 // Cached, service-client body (org-scoped aggregate; identical for all members).
+// The range only re-scopes the activity/customer metrics inside getMetricData; the
+// rest (snapshot, alerts, category, cash) is point-in-time regardless.
 const financialSummaryCached = cachedOrgLoader(
-  async (orgId: string): Promise<DashboardSummary> => {
+  async (orgId: string, range?: MetricRange): Promise<DashboardSummary> => {
   const supabase = await createServiceClient();
 
   const [
@@ -144,7 +146,7 @@ const financialSummaryCached = cachedOrgLoader(
       .order("total_amount" as never, { ascending: false })
       .limit(8),
     // Server-side aggregation — uncapped, scales past the 1000-row PostgREST limit.
-    getMetricData(orgId, supabase),
+    getMetricData(orgId, supabase, range),
     // Real cash on hand from a linked bank (Mercury): checking + savings + treasury
     // − card owed. Lets the cash/runway metrics show the TRUE bank balance instead of
     // the lifetime-net proxy when a bank is connected.

@@ -11,6 +11,9 @@ interface MetricCardProps {
   subtitle?: string;
   trend?: number;
   trendLabel?: string;
+  /** Time-window tag (e.g. "This FY", "run-rate", "live") shown top-right so the
+   *  number is always anchored to a period. */
+  period?: string;
   /** Lucide icon element, shown in a colored chip when provided. */
   icon?: React.ReactNode;
   severity?: Severity;
@@ -27,6 +30,7 @@ export function MetricCard({
   subtitle,
   trend,
   trendLabel,
+  period,
   icon,
   sparklineData,
   accentColor = "hsl(var(--primary))",
@@ -66,11 +70,22 @@ export function MetricCard({
           )}
           <span className="text-[10px] font-bold tracking-[0.1em] uppercase text-muted-foreground truncate">{title}</span>
         </div>
+        {/* Period tag — anchors every number to a time window. */}
+        {period && (
+          <span className="shrink-0 whitespace-nowrap text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/80 bg-muted/70 rounded px-1.5 py-0.5">
+            {period}
+          </span>
+        )}
+      </div>
+
+      {/* Value + inline trend delta */}
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="num text-[22px] font-bold tracking-[-0.02em] leading-[1.1] text-foreground">{value}</span>
         {hasTrend && (
           <span
             className={cn(
-              "shrink-0 inline-flex items-center gap-0.5 whitespace-nowrap text-[10.5px] font-semibold px-1.5 py-0.5 rounded",
-              isUp ? "text-success bg-success/10" : "text-destructive bg-destructive/10"
+              "shrink-0 inline-flex items-center gap-0.5 whitespace-nowrap text-[10.5px] font-semibold",
+              isUp ? "text-success" : "text-destructive"
             )}
           >
             {isUp ? <ArrowUpRight className="h-2.5 w-2.5" /> : <ArrowDownRight className="h-2.5 w-2.5" />}
@@ -78,9 +93,6 @@ export function MetricCard({
           </span>
         )}
       </div>
-
-      {/* Value */}
-      <div className="num text-[22px] font-bold tracking-[-0.02em] leading-[1.1] text-foreground">{value}</div>
 
       {/* Subtitle */}
       {subtitle && <div className="text-[11px] text-muted-foreground leading-snug truncate">{subtitle}</div>}

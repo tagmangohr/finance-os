@@ -9,6 +9,7 @@ import type { DashboardSummary } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
 import { MetricStrip } from "@/components/dashboard/metric-strip";
 import { InflowOutflowChart } from "@/components/charts/lazy";
 import { MrrMovementPanel } from "@/components/dashboard/mrr-movement";
@@ -48,18 +49,33 @@ const SAMPLE_INFLOW: InflowRow[] = [
 ];
 
 // ─── Page ────────────────────────────────────────────────────────────
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const orgId = await getOrgId();
   if (!orgId) redirect("/auth/login");
   // A restricted member with no dashboard-tab access is redirected to their
   // first allowed page (e.g. Connectors or Raw Data).
   await requireRouteAccess("dashboard");
 
+  // Period filter → re-scopes the activity/customer metrics only (revenue, volume,
+  // rates, customers). Default = This FY (India FY, 1 Apr → today). Run-rate / live /
+  // comparison metrics ignore it and carry their own tag.
+  const sp = await searchParams;
+  const isDate = (v?: string): v is string => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const istToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const [ty, tm] = istToday.split("-").map(Number);
+  const fyStart = `${tm >= 4 ? ty : ty - 1}-04-01`;
+  const from = isDate(sp.from) ? sp.from : fyStart;
+  const to = isDate(sp.to) ? sp.to : istToday;
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const shortDate = (s: string) => { const [, m, d] = s.split("-").map(Number); return `${d} ${MON[m - 1]}`; };
+  const rangeLabel = from === fyStart && to === istToday ? "This FY" : `${shortDate(from)} – ${shortDate(to)}`;
+  const range = { from, to, label: rangeLabel };
+
   // Fetch the summary, connector check, and MRR movement in parallel. MRR movement is
   // cached on its own 6h TTL, so it's cheap here; for a not-yet-connected org it returns
   // empty quickly and we render the sample instead.
   const [summary, hasConnectors, mrrReal] = await Promise.all([
-    getFinancialSummary(),
+    getFinancialSummary(range),
     orgHasConnectors(orgId),
     getMrrMovementCached(orgId),
   ]);
@@ -81,7 +97,14 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-3 max-w-[1400px]">
 
-      <PageHeader title="Overview" subtitle="Your money across every gateway and account, at a glance" />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <PageHeader title="Overview" subtitle="Your money across every gateway and account, at a glance" />
+        {!preview && (
+          <div className="pt-0.5">
+            <RangeFilterBar basePath="/dashboard" from={range.from} to={range.to} />
+          </div>
+        )}
+      </div>
 
       {/* Preview banner (sample data) */}
       {preview && (

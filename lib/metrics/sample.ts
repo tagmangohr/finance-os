@@ -33,5 +33,7 @@ export const SAMPLE_METRIC_DATA: MetricData = {
   customers: { paying: 1284, netRevenue: 8_190_000, txns: 1284 },
   totals: { lifetimeInflow: 96_000_000, lifetimeOutflow: 59_000_000 },
   hasExpenses: true,
+  rangeLabel: "This FY",
+  mtd: { current: 2_100_000, prior: 1_850_000 }, // +13.5% like-for-like MoM in preview
   source: "views",
 };

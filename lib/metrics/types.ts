@@ -12,7 +12,9 @@ export type MonthlyPoint = {
 };
 
 /** Everything the metric registry needs, pre-aggregated in Postgres (or the
- *  paginated fallback). All money is base currency (INR). */
+ *  paginated fallback). All money is base currency (INR).
+ *  `health` + `customers` are scoped to the SELECTED range; `monthly` stays a
+ *  trailing ~13-month series (run-rate / growth are "as of now", not range-based). */
 export type MetricData = {
   monthly: MonthlyPoint[];
   health: {
@@ -27,6 +29,11 @@ export type MetricData = {
   /** Real cash on hand from a linked bank (Mercury), in INR. Present only when a bank
    *  is connected; when absent, cash metrics fall back to the lifetime-net proxy. */
   bankCash?: { cashBase: number; hasData: boolean } | null;
+  /** Short label of the selected range (e.g. "This FY") — shown on range-scoped cards. */
+  rangeLabel?: string;
+  /** Like-for-like MoM: net revenue month-to-date vs the SAME number of days in the
+   *  prior month, so the growth % is honest mid-month. */
+  mtd?: { current: number; prior: number };
 };
 
 export const EMPTY_METRIC_DATA: MetricData = {
@@ -61,6 +68,9 @@ export type ComputedMetric = {
   spark?: number[];
   available: boolean;         // false → show the "awaiting data" state
   note?: string;              // shown when unavailable (e.g. "Connect expenses")
+  /** Time-window tag shown on the card so every number is anchored, e.g. the
+   *  selected range for range-scoped metrics, or "run-rate" / "live" / "YTD". */
+  period?: string;
 };
 
 export type MetricDef = {

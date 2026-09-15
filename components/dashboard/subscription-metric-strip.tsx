@@ -18,6 +18,20 @@ type Props = {
 
 const LS_KEY = (orgId: string) => `sub_metric_prefs_${orgId}`;
 
+// Period tag per subscription metric — subscription KPIs have fixed windows (a
+// live run-rate, last complete month, all-time, or a derived figure), so each card
+// is anchored with a small tag rather than a date-range filter.
+const SUB_PERIOD: Record<string, string> = {
+  mrr: "Live", arr: "Live", arpu: "Live", annual_share: "Live",
+  active_subs: "Live", past_due: "Live", recoverable_mrr: "Live",
+  total_customers: "Live", concentration: "Live",
+  net_new_mrr: "Last month", mrr_growth: "Last month", quick_ratio: "Last month",
+  new_subs: "Last month", churned_subs_mo: "Last month", logo_churn: "Last month",
+  rev_churn: "Last month", nrr: "Last month", renewal_success: "Last month",
+  renewals_mtd: "This month",
+  churned_total: "All-time", avg_lifetime: "Derived", ltv: "Derived",
+};
+
 export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibleCount, orgId }: Props) {
   const [pinned, setPinned] = React.useState<string[]>(initialPinned);
   const [visibleCount, setVisibleCount] = React.useState<number>(initialVisibleCount);
@@ -122,6 +136,7 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
             >
               <MetricCard title={def.label} value={c.display} subtitle={c.note ?? undefined}
                 trend={c.available ? c.trend ?? undefined : undefined} trendLabel={c.trendLabel}
+                period={SUB_PERIOD[def.key]}
                 icon={<def.icon className="w-4 h-4" />} accentColor={def.accent} />
             </div>
           );

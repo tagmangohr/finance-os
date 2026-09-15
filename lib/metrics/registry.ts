@@ -14,6 +14,9 @@ const num = (v: number) => Math.round(v).toLocaleString("en-IN");
 
 const unavailable = (note: string): ComputedMetric => ({ value: null, display: "—", available: false, note });
 
+// Period tag for range-scoped cards (the selected window, e.g. "This FY").
+const rl = (d: MetricData) => d.rangeLabel ?? "This FY";
+
 // ── month helpers ──────────────────────────────────────────────────────────
 /** Complete months = everything except the current (partial) month. */
 const complete = (m: MonthlyPoint[]) => (m.length > 1 ? m.slice(0, -1) : m);
@@ -28,158 +31,158 @@ function runRate(m: MonthlyPoint[]): number {
 }
 
 // ── the catalog ──────────────────────────────────────────────────────────────
+// `period` on each result is the time-window tag shown on the card. Metrics that
+// read d.health / d.customers are RANGE-SCOPED (period = the selected range);
+// metrics that read d.monthly / d.totals / d.bankCash are fixed run-rate / live /
+// comparison windows (period = a static tag). Every card is therefore anchored.
 export const METRICS: MetricDef[] = [
   // ─── Revenue & growth ───────────────────────────────────────────────────
   {
-    key: "revenue_mtd", label: "Revenue (MTD)", group: "revenue", format: "currency",
+    key: "revenue_mtd", label: "Revenue", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: TrendingUp,
-    description: "Gross revenue collected in the current month to date.",
-    compute: (d) => {
-      const cM = current(d.monthly), pM = prev(d.monthly);
-      const trend = pM && pM.gross > 0 ? ((cM.gross - pM.gross) / pM.gross) * 100 : null;
-      return { value: cM?.gross ?? 0, display: cur(cM?.gross ?? 0), trend, trendLabel: "MoM", spark: d.monthly.slice(-8).map((x) => x.gross), available: true };
-    },
+    description: "Gross revenue collected over the selected period (before refunds).",
+    compute: (d) => ({ value: d.health.grossVolume, display: cur(d.health.grossVolume), spark: d.monthly.slice(-8).map((x) => x.gross), available: true, period: rl(d) }),
   },
   {
-    key: "mrr_runrate", label: "MRR (run-rate)", group: "revenue", format: "currencyPerMonth",
+    key: "net_revenue_mtd", label: "Net Revenue", group: "revenue", format: "currency",
+    requires: "payments", accent: "hsl(var(--metric-margin))", icon: CircleDollarSign,
+    description: "Revenue after refunds and chargebacks over the selected period.",
+    compute: (d) => { const v = d.health.grossVolume - d.health.refundAmount; return { value: v, display: cur(v), spark: d.monthly.slice(-8).map((x) => x.net), available: true, period: rl(d) }; },
+  },
+  {
+    key: "gross_volume_90d", label: "Gross Volume", group: "revenue", format: "currency",
+    requires: "payments", accent: "hsl(var(--metric-cash))", icon: Activity,
+    description: "Total processed payment volume over the selected period (before refunds).",
+    compute: (d) => ({ value: d.health.grossVolume, display: cur(d.health.grossVolume), available: true, period: rl(d) }),
+  },
+  {
+    key: "mrr_runrate", label: "MRR", group: "revenue", format: "currencyPerMonth",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: LineChart,
-    description: "Monthly revenue run-rate — average net revenue of the last 3 complete months. (True recurring MRR arrives with subscription modeling.)",
+    description: "Monthly revenue run-rate — average net revenue of the last 3 complete months. Not affected by the period filter (it's an 'as of now' run-rate).",
     compute: (d) => {
       const rr = runRate(d.monthly);
       const c = complete(d.monthly);
-      const a = c.slice(-3), b = c.slice(-6, -3);
+      const b = c.slice(-6, -3);
       const prevRR = b.length ? b.reduce((s, x) => s + x.net, 0) / b.length : 0;
       const trend = prevRR > 0 ? ((rr - prevRR) / prevRR) * 100 : null;
-      return { value: rr, display: cur(rr), trend, trendLabel: "vs prior 3mo", spark: c.slice(-8).map((x) => x.net), available: true };
+      return { value: rr, display: cur(rr), trend, trendLabel: "vs prior 3mo", spark: c.slice(-8).map((x) => x.net), available: true, period: "run-rate" };
     },
   },
   {
     key: "arr", label: "ARR", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-profit))", icon: Coins,
-    description: "Annual run-rate = MRR run-rate × 12.",
-    compute: (d) => { const v = runRate(d.monthly) * 12; return { value: v, display: cur(v), available: true, note: "Annual run rate" }; },
-  },
-  {
-    key: "net_revenue_mtd", label: "Net Revenue (MTD)", group: "revenue", format: "currency",
-    requires: "payments", accent: "hsl(var(--metric-margin))", icon: CircleDollarSign,
-    description: "Revenue after refunds and chargebacks, current month to date.",
-    compute: (d) => { const cM = current(d.monthly); return { value: cM?.net ?? 0, display: cur(cM?.net ?? 0), spark: d.monthly.slice(-8).map((x) => x.net), available: true }; },
+    description: "Annual run-rate = MRR run-rate × 12. Not affected by the period filter.",
+    compute: (d) => { const v = runRate(d.monthly) * 12; return { value: v, display: cur(v), available: true, period: "run-rate" }; },
   },
   {
     key: "mom_growth", label: "MoM Growth", group: "revenue", format: "percent",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: TrendingUp,
-    description: "Net revenue growth, current month vs previous month.",
+    description: "Net revenue month-to-date vs the SAME number of days in the prior month — a like-for-like comparison that's honest mid-month.",
     compute: (d) => {
-      const cM = current(d.monthly), pM = prev(d.monthly);
-      if (!pM || pM.net <= 0) return unavailable("Need 2 months of data");
-      const v = ((cM.net - pM.net) / pM.net) * 100;
-      return { value: v, display: pct(v), trend: v, available: true };
+      const c = d.mtd?.current ?? 0, p = d.mtd?.prior ?? 0;
+      if (!d.mtd || p <= 0) return unavailable("Need last month's data");
+      const v = ((c - p) / p) * 100;
+      return { value: v, display: pct(v), trend: v, available: true, period: "vs last mo" };
     },
   },
   {
     key: "yoy_growth", label: "YoY Growth", group: "revenue", format: "percent",
     requires: "payments", accent: "hsl(var(--metric-profit))", icon: TrendingUp,
-    description: "Net revenue this month vs the same month a year ago.",
+    description: "Net revenue this month vs the same month a year ago. Not affected by the period filter.",
     compute: (d) => {
       const cM = current(d.monthly), y = d.monthly[0];
       if (!y || y.net <= 0) return unavailable("Need 13 months of data");
       const v = ((cM.net - y.net) / y.net) * 100;
-      return { value: v, display: pct(v), trend: v, available: true };
+      return { value: v, display: pct(v), trend: v, available: true, period: "vs last year" };
     },
   },
   {
     key: "ytd_revenue", label: "YTD Revenue", group: "revenue", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: Receipt,
-    description: "Net revenue from Jan 1 of the current year to date.",
+    description: "Net revenue from Jan 1 of the current year to date. Fixed calendar window (ignores the period filter).",
     compute: (d) => {
       const jan = `${new Date().getUTCFullYear()}-01`;
       const v = d.monthly.filter((m) => m.month >= jan).reduce((s, m) => s + m.net, 0);
-      return { value: v, display: cur(v), available: true };
+      return { value: v, display: cur(v), available: true, period: "YTD" };
     },
   },
-  {
-    key: "gross_volume_90d", label: "Gross Volume (90d)", group: "revenue", format: "currency",
-    requires: "payments", accent: "hsl(var(--metric-cash))", icon: Activity,
-    description: "Total processed payment volume in the last 90 days (before refunds).",
-    compute: (d) => ({ value: d.health.grossVolume, display: cur(d.health.grossVolume), available: true }),
-  },
 
-  // ─── Payment health ─────────────────────────────────────────────────────
+  // ─── Payment health (all range-scoped) ──────────────────────────────────
   {
     key: "success_rate", label: "Success Rate", group: "payments", format: "percent",
     requires: "payments", accent: "hsl(var(--metric-profit))", icon: Percent,
-    description: "Completed payments as a share of all attempts (completed + failed), last 90 days.",
+    description: "Completed payments as a share of all attempts (completed + failed), over the selected period.",
     compute: (d) => {
       const attempts = d.health.completed + d.health.failed;
       if (attempts === 0) return unavailable("No payment attempts yet");
       const v = (d.health.completed / attempts) * 100;
-      return { value: v, display: pctAbs(v), available: true };
+      return { value: v, display: pctAbs(v), available: true, period: rl(d) };
     },
   },
   {
     key: "failed_count", label: "Failed Payments", group: "payments", format: "number",
     requires: "payments", accent: "hsl(var(--metric-opex))", icon: TrendingDown,
-    description: "Number of failed payment attempts in the last 90 days.",
-    compute: (d) => ({ value: d.health.failed, display: num(d.health.failed), available: true }),
+    description: "Number of failed payment attempts over the selected period.",
+    compute: (d) => ({ value: d.health.failed, display: num(d.health.failed), available: true, period: rl(d) }),
   },
   {
     key: "refund_rate", label: "Refund Rate", group: "payments", format: "percent",
     requires: "payments", accent: "hsl(var(--metric-opex))", icon: RefreshCw,
-    description: "Refunded amount as a share of gross volume, last 90 days.",
+    description: "Refunded amount as a share of gross volume, over the selected period.",
     compute: (d) => {
       if (d.health.grossVolume <= 0) return unavailable("No volume yet");
       const v = (d.health.refundAmount / d.health.grossVolume) * 100;
-      return { value: v, display: pctAbs(v), available: true };
+      return { value: v, display: pctAbs(v), available: true, period: rl(d) };
     },
   },
   {
-    key: "refund_amount", label: "Refunds (90d)", group: "payments", format: "currency",
+    key: "refund_amount", label: "Refunds", group: "payments", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-opex))", icon: RefreshCw,
-    description: "Total refunded to customers in the last 90 days.",
-    compute: (d) => ({ value: d.health.refundAmount, display: cur(d.health.refundAmount), available: true }),
+    description: "Total refunded to customers over the selected period.",
+    compute: (d) => ({ value: d.health.refundAmount, display: cur(d.health.refundAmount), available: true, period: rl(d) }),
   },
   {
     key: "dispute_rate", label: "Dispute Rate", group: "payments", format: "percent",
     requires: "payments", accent: "hsl(var(--destructive))", icon: ShieldAlert,
-    description: "Disputes/chargebacks as a share of completed payments, last 90 days.",
+    description: "Disputes/chargebacks as a share of completed payments, over the selected period.",
     compute: (d) => {
       if (d.health.completed === 0) return unavailable("No payments yet");
       const v = (d.health.disputeCount / d.health.completed) * 100;
-      return { value: v, display: pctAbs(v), available: true };
+      return { value: v, display: pctAbs(v), available: true, period: rl(d) };
     },
   },
   {
     key: "aov", label: "Avg Order Value", group: "payments", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-margin))", icon: ShoppingCart,
-    description: "Average value of a completed payment, last 90 days.",
+    description: "Average value of a completed payment over the selected period.",
     compute: (d) => {
       if (d.health.completed === 0) return unavailable("No payments yet");
       const v = d.health.netCompletedVolume / d.health.completed;
-      return { value: v, display: cur(v), available: true };
+      return { value: v, display: cur(v), available: true, period: rl(d) };
     },
   },
   {
-    key: "txn_count_90d", label: "Payments (90d)", group: "payments", format: "number",
+    key: "txn_count_90d", label: "Payments", group: "payments", format: "number",
     requires: "payments", accent: "hsl(var(--metric-cash))", icon: CreditCard,
-    description: "Count of successful payments in the last 90 days.",
-    compute: (d) => ({ value: d.health.completed, display: num(d.health.completed), available: true }),
+    description: "Count of successful payments over the selected period.",
+    compute: (d) => ({ value: d.health.completed, display: num(d.health.completed), available: true, period: rl(d) }),
   },
 
   // ─── Customers & retention ──────────────────────────────────────────────
   {
     key: "paying_customers", label: "Paying Customers", group: "customers", format: "number",
     requires: "payments", accent: "hsl(var(--metric-cash))", icon: Users,
-    description: "Distinct paying customers in the last 90 days.",
-    compute: (d) => ({ value: d.customers.paying, display: num(d.customers.paying), available: true }),
+    description: "Distinct paying customers over the selected period.",
+    compute: (d) => ({ value: d.customers.paying, display: num(d.customers.paying), available: true, period: rl(d) }),
   },
   {
     key: "arpu", label: "ARPU", group: "customers", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-revenue))", icon: CircleDollarSign,
-    description: "Average revenue per paying customer, last 90 days.",
+    description: "Average revenue per paying customer over the selected period.",
     compute: (d) => {
       if (d.customers.paying === 0) return unavailable("No customers yet");
       const v = d.customers.netRevenue / d.customers.paying;
-      return { value: v, display: cur(v), available: true };
+      return { value: v, display: cur(v), available: true, period: rl(d) };
     },
   },
   {
@@ -207,82 +210,76 @@ export const METRICS: MetricDef[] = [
     compute: () => unavailable("Coming with subscriptions"),
   },
 
-  // ─── Cash, burn & profit (expense-dependent) ─────────────────────────────
+  // ─── Cash, burn & profit ────────────────────────────────────────────────
   {
     key: "cash_balance", label: "Cash Balance", group: "cash", format: "currency",
     requires: "payments", accent: "hsl(var(--metric-cash))", icon: Wallet,
-    description: "Cash on hand. Uses the linked bank's real balance (checking + savings + treasury − card owed); falls back to an approximate collections − outflows proxy when no bank is connected.",
+    description: "Cash on hand right now. Uses the linked bank's real balance (checking + savings + treasury − card owed); falls back to an approximate collections − outflows proxy when no bank is connected. Point-in-time — not affected by the period filter.",
     compute: (d) => {
-      // Real bank balance when a bank (Mercury) is linked — the true cash position,
-      // matching the Bank/Analytics/AI pages. Otherwise the lifetime-net proxy.
       if (d.bankCash?.hasData) {
-        return { value: d.bankCash.cashBase, display: cur(d.bankCash.cashBase), available: true, note: "Bank balance" };
+        return { value: d.bankCash.cashBase, display: cur(d.bankCash.cashBase), available: true, period: "live", note: "Bank balance" };
       }
       const v = d.totals.lifetimeInflow - d.totals.lifetimeOutflow;
-      return { value: v, display: cur(v), available: true, note: "Approx · link a bank for exact" };
+      return { value: v, display: cur(v), available: true, period: "live", note: "Approx · link a bank for exact" };
     },
   },
   {
     key: "net_burn", label: "Net Burn", group: "cash", format: "currencyPerMonth",
     requires: "expenses", accent: "hsl(var(--metric-opex))", icon: Flame,
-    description: "Monthly cash outflow minus inflow. Lights up when expense data is connected.",
+    description: "Monthly cash outflow minus inflow, averaged over the last 3 complete months. Lights up when expense data is connected.",
     compute: (d) => {
       if (!d.hasExpenses) return unavailable("Connect expenses");
       const c = complete(d.monthly).slice(-3);
       if (!c.length) return unavailable("Need a month of data");
       const burn = c.reduce((s, m) => s + (m.expense - m.net), 0) / c.length;
-      return { value: burn, display: cur(Math.abs(burn)), available: true, note: burn > 0 ? "burning" : "profitable" };
+      return { value: burn, display: cur(Math.abs(burn)), available: true, period: "3-mo avg", note: burn > 0 ? "burning" : "profitable" };
     },
   },
   {
     key: "runway", label: "Runway", group: "cash", format: "duration",
     requires: "expenses", accent: "hsl(var(--metric-runway))", icon: Gauge,
-    description: "Months of cash left at the current net burn. Needs expense data.",
+    description: "Days of cash left at the current spend rate. Point-in-time — not affected by the period filter.",
     compute: (d) => {
       if (!d.hasExpenses) return unavailable("Connect expenses");
-      // Prefer the real bank balance for cash (same as the Cash Balance metric).
       const cash = d.bankCash?.hasData ? d.bankCash.cashBase : (d.totals.lifetimeInflow - d.totals.lifetimeOutflow);
       const c = complete(d.monthly).slice(-3);
-      // Days of cash at the current GROSS spend rate ("survival runway" if income stopped)
-      // — always a concrete figure, never ∞. Net burn would be ≤ 0 (infinite) for a
-      // profitable company, but the requirement is an exact days figure.
       const grossBurn = c.reduce((s, m) => s + m.expense, 0) / (c.length || 1);
-      if (grossBurn <= 0) return { value: Infinity, display: "∞", available: true, note: "no spend" };
+      if (grossBurn <= 0) return { value: Infinity, display: "∞", available: true, period: "live", note: "no spend" };
       const days = (cash / grossBurn) * 30;
-      return { value: days, display: formatRunway(days), available: true, note: "at current spend" };
+      return { value: days, display: formatRunway(days), available: true, period: "live", note: "at current spend" };
     },
   },
   {
     key: "gross_margin", label: "Gross Margin", group: "cash", format: "percent",
     requires: "expenses", accent: "hsl(var(--metric-profit))", icon: Percent,
-    description: "Net revenue minus cost of goods, as a %. Needs expense/COGS data.",
+    description: "Net revenue minus cost of goods, as a %, over the last 3 complete months. Needs expense/COGS data.",
     compute: (d) => d.hasExpenses ? (() => {
       const rev = complete(d.monthly).slice(-3).reduce((s, m) => s + m.net, 0);
       const exp = complete(d.monthly).slice(-3).reduce((s, m) => s + m.expense, 0);
       if (rev <= 0) return unavailable("No revenue yet");
       const v = ((rev - exp) / rev) * 100;
-      return { value: v, display: pctAbs(v), available: true };
+      return { value: v, display: pctAbs(v), available: true, period: "3-mo avg" };
     })() : unavailable("Connect expenses"),
   },
   {
-    key: "net_profit", label: "Net Profit (MTD)", group: "cash", format: "currency",
+    key: "net_profit", label: "Net Profit", group: "cash", format: "currency",
     requires: "expenses", accent: "hsl(var(--metric-profit))", icon: Landmark,
-    description: "Net revenue minus expenses for the current month. Needs expense data.",
+    description: "Net revenue minus expenses for the current month to date. Needs expense data.",
     compute: (d) => {
       if (!d.hasExpenses) return unavailable("Connect expenses");
       const cM = current(d.monthly);
       const v = (cM?.net ?? 0) - (cM?.expense ?? 0);
-      return { value: v, display: cur(v), available: true };
+      return { value: v, display: cur(v), available: true, period: "MTD" };
     },
   },
   {
-    key: "expense_mtd", label: "Expenses (MTD)", group: "cash", format: "currency",
+    key: "expense_mtd", label: "Expenses", group: "cash", format: "currency",
     requires: "expenses", accent: "hsl(var(--metric-opex))", icon: Receipt,
-    description: "Total operating expenses this month. Lights up when expenses are connected.",
+    description: "Total operating expenses for the current month to date. Lights up when expenses are connected.",
     compute: (d) => {
       if (!d.hasExpenses) return unavailable("Connect expenses");
       const cM = current(d.monthly);
-      return { value: cM?.expense ?? 0, display: cur(cM?.expense ?? 0), available: true };
+      return { value: cM?.expense ?? 0, display: cur(cM?.expense ?? 0), available: true, period: "MTD" };
     },
   },
 ];
