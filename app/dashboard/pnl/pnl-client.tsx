@@ -46,10 +46,11 @@ const LINE_PARTY = "*";
 
 // Text-size presets (px) driven by the header size control → CSS vars on the table.
 type SizeKey = "sm" | "md" | "lg";
-const SIZE_PRESETS: Record<SizeKey, { label: number; num: number; sub: number; sec: number }> = {
-  sm: { label: 13, num: 13, sub: 12, sec: 10 },
-  md: { label: 15, num: 15, sub: 13.5, sec: 11 },   // default — comfortable
-  lg: { label: 17, num: 16.5, sub: 15, sec: 12 },
+// `pf` = flag-icon size (px), kept in line with the numbers and scaling with them.
+const SIZE_PRESETS: Record<SizeKey, { label: number; num: number; sub: number; sec: number; pf: number }> = {
+  sm: { label: 13, num: 13, sub: 12, sec: 10, pf: 14 },
+  md: { label: 15, num: 15, sub: 13.5, sec: 11, pf: 17 },   // default — comfortable
+  lg: { label: 17, num: 16.5, sub: 15, sec: 12, pf: 20 },
 };
 
 // ─── exact-figure tooltip (single fixed element, avoids table clipping) ────────
@@ -249,7 +250,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   }, []);
   const changeSize = (s: SizeKey) => { setSize(s); try { localStorage.setItem("pnl-size", s); } catch { /* ignore */ } };
   const sz = SIZE_PRESETS[size];
-  const sizeVars = { "--pl": `${sz.label}px`, "--pn": `${sz.num}px`, "--ps": `${sz.sub}px`, "--pc": `${sz.sec}px` } as React.CSSProperties;
+  const sizeVars = { "--pl": `${sz.label}px`, "--pn": `${sz.num}px`, "--ps": `${sz.sub}px`, "--pc": `${sz.sec}px`, "--pf": `${sz.pf}px` } as React.CSSProperties;
 
   // ── Review flags ──
   const [flags, setFlags] = React.useState<ReviewFlag[]>([]);      // OPEN flags (for markers)
@@ -604,7 +605,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                         flagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500"
                       )}
                     >
-                      <Flag className={cn("h-3 w-3", flagged && "fill-current")} />
+                      <Flag className={cn(flagged && "fill-current")} style={{ width: "var(--pf)", height: "var(--pf)" }} />
                     </button>
                   );
                 })()}
@@ -678,7 +679,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       title={isFlagged ? "Flagged for review — click to unflag" : "Flag this line item for review"}
                       className={cn("absolute left-2 top-1.5 p-0.5 rounded z-[2] transition-opacity", isFlagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500")}
                     >
-                      <Flag className={cn("h-2.5 w-2.5", isFlagged && "fill-current")} />
+                      <Flag className={cn(isFlagged && "fill-current")} style={{ width: "var(--pf)", height: "var(--pf)" }} />
                     </button>
                   )}
                   {v === 0 ? (
