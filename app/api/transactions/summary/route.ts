@@ -5,7 +5,7 @@ import { sanitizeSearchTerm } from "@/lib/api/validation";
 
 // Zeroed summary — returned to search-only members so book-wide totals never leak.
 const EMPTY_SUMMARY = {
-  cards: { payments: { count: 0, amount: 0 }, settlements: { count: 0, amount: 0 }, refunds: { count: 0, amount: 0 }, disputes: { count: 0, amount: 0 } },
+  cards: { payments: { count: 0, amount: 0 }, pending: { count: 0, amount: 0 }, settlements: { count: 0, amount: 0 }, refunds: { count: 0, amount: 0 }, disputes: { count: 0, amount: 0 } },
   groups: {}, totalCredits: 0, totalDebits: 0, totalFees: 0, net: 0, total: 0,
 };
 import { POSTED_TRANSACTION_STATUSES, isTransferSource, categorizeSource } from "@/lib/finance/transaction-status";
@@ -23,6 +23,8 @@ export const maxDuration = 60;
  * is a dispute, which counts whenever it has been raised (see below).
  *
  *   Payments    — category=payment,    status ∈ {completed, refunded}
+ *   Pending     — ANY category,         status = pending: money in-flight, not
+ *                 yet terminal. Informational only — feeds no financial total.
  *   Settlements — category=settlement,  status = completed
  *   Refunds     — category=refund,      status = completed
  *   Disputes    — category=dispute,     ALL statuses (open/won/lost): a raised
@@ -60,6 +62,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const groups: Record<string, { count: number; amount: number }> = {};
   // Card totals — see the locked spec above.
   const payments    = { count: 0, amount: 0 };
+  const pending     = { count: 0, amount: 0 };
   const settlements = { count: 0, amount: 0 };
   const refunds     = { count: 0, amount: 0 };
   const disputes    = { count: 0, amount: 0 };
@@ -98,6 +101,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     // failed status are still counted.
     if (g.category === "dispute") { disputes.count += cnt; disputes.amount += sumBase; }
 
+    // Pending: every not-yet-terminal row, any category (payment attempts awaiting
+    // confirmation, in-flight payouts, etc.). Informational card only — kept out of
+    // every financial total below (net/credits/debits all require a posted status).
+    if (status === "pending") { pending.count += cnt; pending.amount += sumBase; }
+
     // Everything below excludes failed rows (no money moved) — main-pass parity.
     if (status === "failed") continue;
 
@@ -127,7 +135,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   return NextResponse.json({
     // The four bucket cards — computed server-side per the locked spec.
-    cards: { payments, settlements, refunds, disputes },
+    cards: { payments, pending, settlements, refunds, disputes },
     groups, // source-filter dropdown only
     totalCredits,
     totalDebits,

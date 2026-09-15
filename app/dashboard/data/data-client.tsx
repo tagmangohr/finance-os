@@ -171,9 +171,11 @@ interface ApiResponse {
 interface SummaryResponse {
   // Server-computed card totals (see the locked spec in summary/route.ts):
   // Payments = completed+refunded, Settlements/Refunds = completed only,
-  // Disputes = all disputes raised. Pending counts toward none of them.
+  // Disputes = all disputes raised, Pending = every not-yet-terminal row.
+  // Pending is informational — it feeds none of the financial totals below.
   cards: {
     payments:    { count: number; amount: number };
+    pending:     { count: number; amount: number };
     settlements: { count: number; amount: number };
     refunds:     { count: number; amount: number };
     disputes:    { count: number; amount: number };
@@ -563,12 +565,12 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
       <div className="flex flex-wrap gap-2 items-center animate-enter-delay-1">
         {/* Search */}
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/70" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/50" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search ID, description, counterparty…"
-            className="w-full h-9 rounded-lg border border-border bg-accent/40 pl-8 pr-9 text-xs text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25"
+            className="w-full h-9 rounded-lg border border-transparent bg-sidebar pl-8 pr-9 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/40"
           />
           {/* Search a payment by screenshot */}
           <input
@@ -582,7 +584,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             type="button"
             onClick={() => fileInputRef.current?.click()}
             title="Search a payment by screenshot"
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground/70 hover:text-primary hover:bg-primary/10 transition-colors"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md flex items-center justify-center text-white/60 hover:text-primary hover:bg-white/10 transition-colors"
           >
             <ScanSearch className="h-4 w-4" />
           </button>
@@ -628,6 +630,8 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
               to={to}
               max={new Date().toISOString().slice(0, 10)}
               onChange={(f, t) => { setFrom(f); setTo(t); }}
+              variant="dark"
+              className="bg-sidebar hover:bg-sidebar/90 text-white"
             />
 
             {/* Spacer + export */}
@@ -638,7 +642,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
               </span>
               <button
                 onClick={handleExport}
-                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-border bg-accent/40 text-muted-foreground hover:bg-accent hover:text-muted-foreground hover:border-border transition-all"
+                className="flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-medium border border-transparent bg-sidebar text-white hover:bg-sidebar/85 transition-all"
               >
                 <Download className="h-3.5 w-3.5" />
                 Export CSV
@@ -660,14 +664,24 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
         )}
       </div>
 
-      {/* Summary cards */}
+      {/* Summary cards — pinned to the top of the scroll area so the key totals
+          stay visible while the (long) transaction table scrolls beneath. The
+          full-bleed blurred backdrop (negative margins cancel <main>'s padding)
+          masks rows sliding underneath. */}
       {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        <div className="sticky top-0 z-20 -mx-4 sm:-mx-5 px-4 sm:px-5 py-3 bg-background/95 backdrop-blur-sm border-b border-border/70 shadow-[0_6px_18px_-12px_rgba(0,0,0,0.35)]">
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
           <SummaryCard
             label="Payments"
             count={summary.cards.payments.count}
             amount={summary.cards.payments.amount}
             colour="text-success"
+          />
+          <SummaryCard
+            label="Pending"
+            count={summary.cards.pending.count}
+            amount={summary.cards.pending.amount}
+            colour="text-warning"
           />
           <SummaryCard
             label="Settlements"
@@ -701,6 +715,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             colour={summary.net >= 0 ? "text-success" : "text-destructive"}
             showSign
           />
+          </div>
         </div>
       )}
 
@@ -708,22 +723,22 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
       <div className="overflow-x-auto rounded-xl border border-border bg-accent/40">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b border-border bg-accent/40">
+            <tr className="border-b border-border bg-sidebar">
               <Th col="transaction_date" label="Date" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="transaction_at" label="Time" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="source" label="Source" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="type" label="Type" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
               <Th col="amount" label="Amount" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">INR (₹)</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Rate</th>
               <Th col="status" label="Status" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Name</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Email</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest min-w-[200px]">Description</th>
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">External ID</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Name</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Email</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest whitespace-nowrap">Phone</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest min-w-[200px]">Description</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">External ID</th>
               <Th col="category" label="Category" sortCol={sortCol} sortAsc={sortAsc} onSort={toggleSort} />
-              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">Metadata</th>
+              <th className="px-3 py-2.5 text-left text-[10px] font-semibold text-white/70 uppercase tracking-widest">Metadata</th>
             </tr>
           </thead>
           <tbody>
@@ -1080,23 +1095,23 @@ function SummaryCard({
   const sign = showSign ? (amount >= 0 ? "+" : "−") : "";
 
   return (
-    <div className="rounded-xl border border-border bg-accent/40 px-4 py-3">
+    <div className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
       <div className="flex items-center gap-1.5 mb-1.5">
-        <p className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-widest">
+        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest">
           {label}
         </p>
         {note && (
-          <span className="text-[9px] font-medium text-muted-foreground/70 border border-border rounded px-1 py-px leading-none">
+          <span className="text-[9px] font-medium text-muted-foreground border border-border rounded px-1 py-px leading-none">
             {note}
           </span>
         )}
       </div>
       {count !== null && (
-        <p className="text-[11px] text-muted-foreground/70 mb-0.5">
+        <p className="text-[11px] font-medium text-muted-foreground mb-1">
           {count.toLocaleString("en-IN")} txns
         </p>
       )}
-      <p className={cn("text-base font-bold tabular-nums leading-none", colour)}>
+      <p className={cn("text-lg font-bold tabular-nums leading-none", colour)}>
         {sign}₹{fmt(amount)}
       </p>
     </div>
@@ -1116,8 +1131,8 @@ function FilterSelect({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="h-9 rounded-lg border border-border bg-accent/40 px-3 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/25 appearance-none pr-7"
-      style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center" }}
+      className="h-9 rounded-lg border border-transparent bg-sidebar px-3 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/40 appearance-none pr-7"
+      style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23cbd5e1' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 8px center" }}
     >
       {options.map((o) => (
         <option key={o.value} value={o.value} className="bg-popover text-muted-foreground">
@@ -1151,7 +1166,7 @@ function Th({
         <span
           className={cn(
             "text-[10px] font-semibold uppercase tracking-widest transition-colors",
-            active ? "text-primary" : "text-muted-foreground/70 group-hover:text-muted-foreground"
+            active ? "text-primary" : "text-white/70 group-hover:text-white"
           )}
         >
           {label}
@@ -1163,7 +1178,7 @@ function Th({
             <ChevronDown className="h-3 w-3 text-primary" />
           )
         ) : (
-          <ArrowUpDown className="h-3 w-3 text-muted-foreground/70 group-hover:text-muted-foreground/70" />
+          <ArrowUpDown className="h-3 w-3 text-white/40 group-hover:text-white/70" />
         )}
       </div>
     </th>
