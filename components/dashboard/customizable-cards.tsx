@@ -163,7 +163,10 @@ export function CustomizableCards({ tab, orgId, cards, initialOrder, initialHidd
             onDrop={() => onCardDrop(key)}
             onDragEnd={() => { dragKey.current = null; setOverKey(null); }}
             className={cn(
-              "cursor-grab active:cursor-grabbing rounded-xl transition-shadow",
+              // h-full + child h-full: the wrapper is the grid item and stretches to
+              // the row height, so force the card to fill it — otherwise cards with
+              // less content (e.g. no "txns" line / no subtitle) render shorter.
+              "h-full [&>*]:h-full cursor-grab active:cursor-grabbing rounded-xl transition-shadow",
               overKey === key && dragKey.current && dragKey.current !== key && "ring-2 ring-primary/50 ring-offset-1 ring-offset-background"
             )}
           >
