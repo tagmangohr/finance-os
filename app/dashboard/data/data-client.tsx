@@ -9,6 +9,8 @@ import {
   ChevronUp,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   RefreshCw,
   ArrowUpDown,
   Copy,
@@ -269,6 +271,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
 
   // Pagination + sort
   const [offset, setOffset] = React.useState(0);
+  const [pageInput, setPageInput] = React.useState("1"); // "jump to page" box (see footer)
   const [sortCol, setSortCol] = React.useState("transaction_date");
   const [sortAsc, setSortAsc] = React.useState(false);
 
@@ -524,6 +527,18 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
 
+  // Jump to an arbitrary page (clamped) — powers the footer "Page [n] of N" box
+  // and the first/last buttons, so users don't have to click Next dozens of times.
+  const goToPage = React.useCallback((p: number) => {
+    if (!Number.isFinite(p)) return;
+    const clamped = Math.min(Math.max(1, Math.floor(p)), Math.max(1, totalPages));
+    setOffset((clamped - 1) * PAGE_SIZE);
+  }, [totalPages]);
+
+  // Keep the jump box showing the live page whenever it changes elsewhere
+  // (next/prev, a filter reset to page 1, a first/last jump).
+  React.useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
+
   // Transaction time in IST, 24-hour (HH:mm). Null for rows without a captured
   // timestamp (e.g. CSV imports or historical rows not yet backfilled).
   const fmtTime = (iso: string | null) => {
@@ -561,16 +576,21 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
         </p>
       </div>
 
+      {/* Sticky toolbar — the filter row AND the summary cards stay pinned to the
+          top of the scroll area while the (long) transaction table scrolls beneath.
+          Full-bleed blurred backdrop (negative margins cancel <main>'s p-4/p-5
+          padding) masks rows sliding underneath. */}
+      <div className="sticky top-0 z-20 -mx-4 sm:-mx-5 px-4 sm:px-5 pt-2 pb-3 space-y-3 bg-background/95 backdrop-blur-sm border-b border-border/70 shadow-[0_6px_18px_-12px_rgba(0,0,0,0.35)]">
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center animate-enter-delay-1">
         {/* Search */}
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/50" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search ID, description, counterparty…"
-            className="w-full h-9 rounded-lg border border-transparent bg-sidebar pl-8 pr-9 text-xs text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/40"
+            className="w-full h-9 rounded-lg border border-foreground bg-card pl-8 pr-9 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
           />
           {/* Search a payment by screenshot */}
           <input
@@ -584,7 +604,7 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             type="button"
             onClick={() => fileInputRef.current?.click()}
             title="Search a payment by screenshot"
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md flex items-center justify-center text-white/60 hover:text-primary hover:bg-white/10 transition-colors"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 h-6 w-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-accent transition-colors"
           >
             <ScanSearch className="h-4 w-4" />
           </button>
@@ -664,13 +684,9 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
         )}
       </div>
 
-      {/* Summary cards — pinned to the top of the scroll area so the key totals
-          stay visible while the (long) transaction table scrolls beneath. The
-          full-bleed blurred backdrop (negative margins cancel <main>'s padding)
-          masks rows sliding underneath. */}
+      {/* Summary cards */}
       {summary && (
-        <div className="sticky top-0 z-20 -mx-4 sm:-mx-5 px-4 sm:px-5 py-3 bg-background/95 backdrop-blur-sm border-b border-border/70 shadow-[0_6px_18px_-12px_rgba(0,0,0,0.35)]">
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
           <SummaryCard
             label="Payments"
             count={summary.cards.payments.count}
@@ -715,9 +731,9 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
             colour={summary.net >= 0 ? "text-success" : "text-destructive"}
             showSign
           />
-          </div>
         </div>
       )}
+      </div>
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-border bg-accent/40">
@@ -939,28 +955,62 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground/70">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span>
             Showing {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of{" "}
             {total.toLocaleString("en-IN")}
           </span>
           <div className="flex items-center gap-1.5">
+            {/* First page */}
+            <button
+              disabled={currentPage === 1}
+              onClick={() => goToPage(1)}
+              title="First page"
+              className="h-7 w-7 rounded-lg border border-border bg-accent/40 flex items-center justify-center hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            >
+              <ChevronsLeft className="h-3.5 w-3.5" />
+            </button>
+            {/* Previous page */}
             <button
               disabled={currentPage === 1}
               onClick={() => setOffset((p) => Math.max(0, p - PAGE_SIZE))}
+              title="Previous page"
               className="h-7 w-7 rounded-lg border border-border bg-accent/40 flex items-center justify-center hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >
               <ChevronLeft className="h-3.5 w-3.5" />
             </button>
-            <span className="px-2 tabular-nums">
-              {currentPage} / {totalPages}
-            </span>
+            {/* Jump to page */}
+            <div className="flex items-center gap-1.5 px-1">
+              <span>Page</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={pageInput}
+                onChange={(e) => setPageInput(e.target.value.replace(/[^\d]/g, ""))}
+                onKeyDown={(e) => { if (e.key === "Enter") { goToPage(Number(pageInput)); e.currentTarget.blur(); } }}
+                onBlur={() => goToPage(Number(pageInput))}
+                aria-label="Jump to page"
+                className="h-7 w-12 rounded-lg border border-foreground bg-card text-center tabular-nums text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary"
+              />
+              <span>of {totalPages.toLocaleString("en-IN")}</span>
+            </div>
+            {/* Next page */}
             <button
               disabled={currentPage === totalPages}
               onClick={() => setOffset((p) => p + PAGE_SIZE)}
+              title="Next page"
               className="h-7 w-7 rounded-lg border border-border bg-accent/40 flex items-center justify-center hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >
               <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+            {/* Last page */}
+            <button
+              disabled={currentPage === totalPages}
+              onClick={() => goToPage(totalPages)}
+              title="Last page"
+              className="h-7 w-7 rounded-lg border border-border bg-accent/40 flex items-center justify-center hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            >
+              <ChevronsRight className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
