@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic';
 
 import { redirect } from "next/navigation";
-import { TrendingUp, Coins, ArrowUpRight, Percent, Wallet, Users, Gauge } from "lucide-react";
+import { TrendingUp, Coins, ArrowUpRight, Percent, Wallet } from "lucide-react";
 import { getOrgId, getRevenueDetails, orgHasConnectors } from "@/lib/data";
 import { requireRouteAccess } from "@/lib/org/page-access";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -9,6 +9,7 @@ import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
 import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
 import { RevenueChart } from "@/components/charts/lazy";
+import { RevenueCustomers } from "@/components/dashboard/revenue-customers";
 import { formatCurrency } from "@/lib/utils";
 
 type CustomerLite = { name: string; total_revenue: number; txns: number };
@@ -46,18 +47,8 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
   const preview = !(await orgHasConnectors(orgId));
   const v = preview ? SAMPLE : {
     mrr: real.mrr, arr: real.arr, momGrowth: real.momGrowth, yoyGrowth: real.yoyGrowth,
-    totalRevenue: real.totalRevenue, payingCustomers: real.payingCustomers,
-    revenueByMonth: real.revenueByMonth,
-    customers: (real.customers as unknown as CustomerLite[]).map((c) => ({
-      name: c.name, total_revenue: c.total_revenue ?? 0, txns: c.txns ?? 0,
-    })),
+    totalRevenue: real.totalRevenue, revenueByMonth: real.revenueByMonth,
   };
-
-  const maxRev = Math.max(...v.customers.map((c) => c.total_revenue), 1);
-  const avgPerCustomer = v.payingCustomers > 0 ? v.totalRevenue / v.payingCustomers : 0;
-  // Compact count: readable up to 99,999 then abbreviated (1.2L, 3.4Cr).
-  const compactCount = (n: number) =>
-    n >= 1e7 ? `${(n / 1e7).toFixed(1)}Cr` : n >= 1e5 ? `${(n / 1e5).toFixed(1)}L` : n.toLocaleString("en-IN");
 
   return (
     <div className="space-y-3 max-w-[1400px]">
@@ -69,17 +60,13 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 animate-enter">
         <MetricCard title="Total Revenue" value={formatCurrency(v.totalRevenue, "INR", true)} subtitle="collected in range"
           icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" />
         <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)} subtitle="avg last 3 months"
           icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
         <MetricCard title="ARR" value={formatCurrency(v.arr, "INR", true)} subtitle="annual run rate"
           icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
-        <MetricCard title="Paying Customers" value={v.payingCustomers > 0 ? compactCount(v.payingCustomers) : "—"} subtitle="unique in range"
-          icon={<Users className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
-        <MetricCard title="Avg / Customer" value={avgPerCustomer > 0 ? formatCurrency(avgPerCustomer, "INR", true) : "—"} subtitle="revenue per customer"
-          icon={<Gauge className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" />
         <MetricCard title="MoM Growth" value={`${v.momGrowth > 0 ? "+" : ""}${v.momGrowth.toFixed(1)}%`} subtitle="month over month"
           icon={<ArrowUpRight className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
         <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} subtitle="year over year"
@@ -90,33 +77,17 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
         <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
           <RevenueChart data={v.revenueByMonth} />
         </SectionCard>
-        <SectionCard title="Top Customers" subtitle="by revenue in range">
-          {v.customers.length === 0 ? (
-            <div className="flex items-center justify-center h-[220px] text-[12px] text-muted-foreground">No customers yet</div>
-          ) : (
-            <div className="space-y-3 mt-1">
-              {v.customers.slice(0, 5).map((c, i) => (
-                <div key={i} className="flex items-center gap-2.5">
-                  <span className="num text-[11px] font-semibold text-muted-foreground/70 w-3.5 flex-shrink-0 text-right">{i + 1}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <span className="text-[12px] text-foreground/80 truncate">{c.name}</span>
-                      <span className="num text-[11.5px] font-semibold text-foreground flex-shrink-0">{formatCurrency(c.total_revenue, "INR", true)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="block flex-1 h-1.5 rounded-full bg-accent overflow-hidden">
-                        <span className="block h-full rounded-full bg-metric-revenue" style={{ width: `${(c.total_revenue / maxRev) * 100}%` }} />
-                      </span>
-                      {c.txns > 0 && (
-                        <span className="num text-[10px] text-muted-foreground/70 flex-shrink-0 tabular-nums">{c.txns.toLocaleString("en-IN")} txns</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </SectionCard>
+        {/* Top customers loads async (live aggregation can be slow on wide ranges)
+            so it never blocks the cards + chart above. */}
+        <RevenueCustomers
+          orgId={orgId}
+          from={real.period.from}
+          to={real.period.to}
+          totalRevenue={v.totalRevenue}
+          preview={preview}
+          sampleTop={SAMPLE.customers}
+          samplePaying={SAMPLE.payingCustomers}
+        />
       </div>
     </div>
   );
