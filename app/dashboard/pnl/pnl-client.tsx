@@ -276,9 +276,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     el.style.display = "block";
   }, []);
 
-  // Hide the exact-figure tooltip while scrolling (it would otherwise hang mid-air).
-  const onGridScroll = React.useCallback(() => { setTipCb(null); }, [setTipCb]);
-
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
   // Full window (all month keys) — the span the flag markers + reset key cover.
@@ -580,8 +577,10 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     const isMargin = row.kind === "margin";
     const isNetProfit = row.id === "net_profit";
     const sticky = stickyBottom !== undefined;
-    // Opaque band colour for the pinned rows (translucent tints would bleed).
-    const footerBg = isTotalRow ? "bg-muted" : "bg-card";
+    // Emphasis band — OPAQUE tokens (escalating) so main rows read as clearly
+    // distinguished and the sticky left cell matches without any bleed-through.
+    const emphasisBg = isTotalRow ? "bg-[hsl(var(--pl-total))]" : isCm ? "bg-[hsl(var(--pl-cm))]" : strong ? "bg-[hsl(var(--pl-strong))]" : null;
+    const footerBg = isTotalRow ? "bg-[hsl(var(--pl-total))]" : "bg-card";
     // Expandable = a drillable line that actually has vendor/gateway line items.
     const canExpand = Boolean(row.drill) && !sticky && !data.preview && expandableKeys.has(row.drill as string);
     const open = canExpand && isRowOpen(row.id);
@@ -592,9 +591,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
           data-index={m?.dataIndex}
           className={cn(
             "border-b border-border/50",
-            !sticky && strong && "bg-muted/40",
-            !sticky && isCm && "bg-primary/[0.055]",
-            !sticky && isTotalRow && "bg-primary/[0.09]",
+            !sticky && emphasisBg,
             isNetProfit && "border-t-2 border-border"
           )}
         >
@@ -604,7 +601,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               // Sticky label column MUST be opaque or right-scrolled month
               // values bleed through the translucent tints.
               "sticky left-0 z-[1] px-4 py-2 whitespace-nowrap border-r border-border text-[length:var(--pl)]",
-              (strong || isCm || isTotalRow) ? "bg-muted" : "bg-card",
+              emphasisBg ?? "bg-card",
               sticky && `${footerBg} z-[8]`,
               strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
               isTotalRow && "font-bold",
@@ -687,7 +684,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             const pct = pctVal(row, col);
             const delta = deltaVal(row, col);
             const drillable = Boolean(row.drill) && v !== 0;
-            const zebra = !sticky && col.key !== "__total__" && cIdx % 2 === 1;
+            const zebra = !sticky && !emphasisBg && col.key !== "__total__" && cIdx % 2 === 1;
             const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
             const valueCls = cn(
               "inline-block leading-tight",
@@ -908,6 +905,50 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // so the virtualizer re-measures against the new sizes (avoids scroll drift).
   React.useEffect(() => { rowVirtualizer.measure(); }, [size, change, rowVirtualizer]);
 
+  // ── Sticky "current category" indicator ──────────────────────────────────────
+  // When you scroll into an expanded category's vendors and the category's OWN row
+  // scrolls above the top, a floating bar shows which head the numbers belong to.
+  // Computed from the virtualizer's visible range (works with virtualization; zero
+  // table-layout impact). Header units = a "row" unit immediately followed by its
+  // line items (party/loading/empty).
+  const headerIndexes = React.useMemo(() => {
+    const idx: number[] = [];
+    for (let i = 0; i < bodyUnits.length; i++) {
+      if (bodyUnits[i].t === "row") {
+        const n = bodyUnits[i + 1];
+        if (n && (n.t === "party" || n.t === "loading" || n.t === "empty")) idx.push(i);
+      }
+    }
+    return idx;
+  }, [bodyUnits]);
+
+  const [stickyHeader, setStickyHeader] = React.useState<number | null>(null);
+  const stickyRef = React.useRef<number | null>(null);
+  const recomputeSticky = React.useCallback(() => {
+    let next: number | null = null;
+    if (virtualize && headerIndexes.length) {
+      // Topmost visible unit — from measurements (synchronous), not the scroll-listener
+      // state, so it's correct even mid-scroll / when rAF is throttled.
+      const off = scrollRef.current?.scrollTop ?? 0;
+      const startIdx = rowVirtualizer.getVirtualItemForOffset(off)?.index ?? 0;
+      let active: number | null = null;
+      for (let k = headerIndexes.length - 1; k >= 0; k--) { if (headerIndexes[k] <= startIdx) { active = headerIndexes[k]; break; } }
+      // Show only once the header itself has scrolled above the topmost visible row.
+      if (active !== null && active < startIdx) next = active;
+    }
+    if (next !== stickyRef.current) { stickyRef.current = next; setStickyHeader(next); }
+  }, [virtualize, headerIndexes, rowVirtualizer]);
+
+  // Hide the tooltip + recompute the pinned category while scrolling.
+  const onGridScroll = React.useCallback(() => { setTipCb(null); recomputeSticky(); }, [setTipCb, recomputeSticky]);
+  // Re-evaluate when the list changes (expand/collapse/size shift the offsets).
+  React.useEffect(() => { recomputeSticky(); }, [recomputeSticky, bodyUnits]);
+
+  // Measured header height → where the floating category bar sits (just below it).
+  const theadRef = React.useRef<HTMLTableSectionElement>(null);
+  const [headH, setHeadH] = React.useState(44);
+  React.useLayoutEffect(() => { if (theadRef.current) setHeadH(theadRef.current.offsetHeight); }, [size, displayCols]);
+
   const renderUnit = (u: BodyUnit, m: MeasureProps) => {
     if (u.t === "section") return renderSectionTr(u.row, m);
     if (u.t === "row") return renderMainTr(u.row, undefined, m);
@@ -1050,10 +1091,21 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
 
       {/* grid — fills remaining height; header row (top) + line-item column (left)
           + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
-      <div className="flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
+      <div className="relative flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
+        {/* Floating "current category" bar — which head the scrolled vendors belong to. */}
+        {stickyHeader !== null && bodyUnits[stickyHeader] && (
+          <div
+            className="pointer-events-none absolute left-0 right-0 z-[9] flex items-center gap-1.5 px-4 py-2 border-b border-border bg-[hsl(var(--pl-strong))] shadow-[0_2px_6px_-2px_rgba(0,0,0,0.25)]"
+            style={{ top: headH }}
+          >
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+            <span className="font-bold text-foreground text-[length:var(--pl)] truncate">{bodyUnits[stickyHeader].row.label}</span>
+            <span className="text-[length:var(--pc)] text-muted-foreground/70 flex-shrink-0">· line items</span>
+          </div>
+        )}
         <div ref={scrollRef} className="h-full overflow-auto" onScroll={onGridScroll}>
           <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
-            <thead>
+            <thead ref={theadRef}>
               <tr className="border-b-2 border-border">
                 <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
                 {displayCols.map((c) => (

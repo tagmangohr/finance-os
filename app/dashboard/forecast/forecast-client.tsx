@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Sparkles, Zap, RotateCcw } from "lucide-react";
 import { cn, formatCurrency } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { useTableSize, SizeControl, emphasisBgClass, useImperativeTooltip } from "@/components/dashboard/table-ui";
 import { CM_CONFIG } from "@/lib/pnl-config";
 import type { ForecastData, ForecastComponent } from "@/lib/forecast";
 
@@ -22,8 +23,8 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
     Object.fromEntries(data.components.map((c) => [c.slug, c.growthPct]))
   );
   const [saving, setSaving] = React.useState<string | null>(null);
-  const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
-  const setTipAt = (text: string | null, x = 0, y = 0) => setTip(text ? { text, x, y } : null);
+  const { tipRef, show: setTipAt } = useImperativeTooltip();
+  const { size, changeSize, sizeVars } = useTableSize("forecast-size");
 
   // Persist a line's growth override (fires on blur). Preview data isn't saved.
   const saveGrowth = React.useCallback(async (slug: string, pct: number) => {
@@ -120,6 +121,7 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
     <div className="space-y-3 max-w-[1400px]">
       <PageHeader title="Forecast" subtitle={`Projected P&L · from ${data.lastActualLabel} actuals · auto-seeded, editable`}>
         {saving && <span className="text-[11px] text-muted-foreground">Saving…</span>}
+        <SizeControl size={size} onChange={changeSize} />
         <button onClick={reset} className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-[12px] font-medium hover:bg-muted">
           <RotateCcw className="h-3.5 w-3.5" /> Reset growth
         </button>
@@ -134,14 +136,14 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
       )}
 
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="overflow-auto max-h-[calc(100vh-215px)]">
-          <table className="w-full border-collapse text-[12.5px]">
+        <div className="overflow-auto max-h-[calc(100vh-215px)]" onScroll={() => setTipAt(null)}>
+          <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
-                <th className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">Growth /mo</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
+                <th className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">Growth /mo</th>
                 {months.map((m) => (
-                  <th key={m.key} className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">{m.label}</th>
+                  <th key={m.key} className="sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-3 py-2.5 whitespace-nowrap min-w-[92px] border-l border-white/10">{m.label}</th>
                 ))}
               </tr>
             </thead>
@@ -155,32 +157,33 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
                 const isNetMargin = row.id === "net_margin";
                 const isFooter = isNetProfit || isNetMargin;
                 const footerBottom = isNetMargin ? 0 : marginH;
+                const emphasisBg = emphasisBgClass({ strong, isCm, isTotal });
+                // Opaque band for pinned footer rows (Net Profit gets the total tint).
+                const footerBg = isNetProfit ? "bg-[hsl(var(--pl-total))]" : "bg-card";
                 return (
                   <React.Fragment key={row.id}>
                     {row.section && (
-                      <tr><td colSpan={months.length + 2} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td></tr>
+                      <tr><td colSpan={months.length + 2} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[length:var(--pc)] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td></tr>
                     )}
                     <tr
                       ref={isNetMargin ? marginRowRef : undefined}
                       className={cn("border-b border-border/50",
-                        !isFooter && strong && "bg-muted/40",
-                        !isFooter && isCm && "bg-primary/[0.055]",
-                        !isFooter && isTotal && "bg-primary/[0.09]",
+                        !isFooter && emphasisBg,
                         isNetProfit && "border-t-2 border-border")}
                     >
                       <td
                         style={isFooter ? { bottom: footerBottom } : undefined}
                         className={cn(
                           // opaque so right-scrolled month values don't bleed through
-                          "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
+                          "sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border text-[length:var(--pl)]",
                           isFooter
-                            ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
+                            ? cn(`z-[4] ${footerBg} text-foreground`, isNetProfit && "font-bold")
                             : cn(
                                 "z-[1]",
-                                (strong || isCm || isTotal) ? "bg-muted" : "bg-card",
+                                emphasisBg ?? "bg-card",
                                 strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
                                 isTotal && "font-bold",
-                                row.kind === "expense" && "pl-6 text-muted-foreground font-normal"
+                                row.kind === "expense" && "pl-6 text-[length:var(--ps)] text-muted-foreground font-normal"
                               )
                         )}
                       >{row.label}</td>
@@ -188,7 +191,7 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
                       {/* editable growth */}
                       <td
                         style={isFooter ? { bottom: footerBottom } : undefined}
-                        className={cn("text-right px-2 py-1.5 num border-l border-border/60", isFooter ? "sticky z-[3] bg-muted" : "bg-muted/10")}
+                        className={cn("text-right px-2 py-1.5 num border-l border-border/60", isFooter ? `sticky z-[3] ${footerBg}` : (emphasisBg ?? "bg-muted/10"))}
                       >
                         {row.comp ? (
                           <div className="inline-flex items-center gap-0.5">
@@ -212,19 +215,19 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
                         const pct = isMargin ? (nr ? (valueAt("net_profit", undefined, i) / nr) * 100 : null)
                           : isCm ? (nr ? (v / nr) * 100 : null) : null;
                         const full = isMargin ? (pct == null ? "—" : `${pct.toFixed(1)}%`) : moneyFull(v);
+                        const zebra = !isFooter && !emphasisBg && i % 2 === 1;
                         return (
                           <td key={m.key}
                             style={isFooter ? { bottom: footerBottom } : undefined}
-                            className={cn("text-right px-3 py-2 num align-top border-l border-border/60", isFooter && "sticky z-[3] bg-muted")}
+                            className={cn("text-right px-3 py-2 num align-top border-l border-border/60", zebra && "bg-foreground/[0.06]", isFooter && `sticky z-[3] ${footerBg}`)}
                             onMouseEnter={(e) => v !== 0 && setTipAt(full, e.clientX, e.clientY)}
-                            onMouseMove={(e) => v !== 0 && setTipAt(full, e.clientX, e.clientY)}
                             onMouseLeave={() => setTipAt(null)}>
                             <span className={cn("inline-block leading-tight",
                               isTotal && (v < 0 ? "text-destructive font-bold" : "text-success font-bold"),
                               (strong || isCm) && !isTotal && "font-semibold")}>
                               {isMargin ? (pct == null ? "–" : <span className={pct < 0 ? "text-destructive" : "text-foreground"}>{pct.toFixed(1)}%</span>) : cellText(row.kind, v)}
                             </span>
-                            {isCm && pct != null && <div className="text-[10px] text-primary/80 mt-0.5">{pct.toFixed(0)}% margin</div>}
+                            {isCm && pct != null && <div className="text-[length:var(--pc)] text-primary/80 mt-0.5">{pct.toFixed(0)}% margin</div>}
                           </td>
                         );
                       })}
@@ -241,7 +244,7 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
         Each line is seeded from its trailing 3-month average and recent monthly growth, then compounded forward. Edit any <span className="font-medium text-foreground/70">Growth /mo</span> to model your own plan — subtotals, CM tiers and Net Profit recompute live. Projection is an estimate, not actuals.
       </p>
 
-      {tip && <div className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ left: tip.x + 12, top: tip.y + 12 }}>{tip.text}</div>}
+      <div ref={tipRef} className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ display: "none", left: 0, top: 0 }} />
     </div>
   );
 }

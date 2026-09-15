@@ -30,6 +30,13 @@
     --ring: 178 80% 30%;
     --radius: 0.75rem;
 
+    /* Emphasis-row bands for the P&L / Forecast / Variance grids — OPAQUE (so the
+       sticky left column matches without bleed) and escalating so main rows read as
+       clearly distinguished: subtotals → CM tiers → Net Profit. */
+    --pl-strong: 220 16% 90%;
+    --pl-cm: 174 34% 87%;
+    --pl-total: 174 46% 79%;
+
     /* Chart + per-metric identity colors (vivid in both themes) */
     --chart-1: 178 74% 34%;
     --chart-2: 172 66% 42%;
@@ -85,6 +92,11 @@
     --border: 220 25% 13%;
     --input: 220 30% 12%;
     --ring: 174 68% 46%;
+
+    /* Emphasis-row bands (dark) — see light theme note. */
+    --pl-strong: 220 24% 15%;
+    --pl-cm: 174 26% 18%;
+    --pl-total: 174 38% 24%;
 
     --chart-1: 174 68% 50%;
     --chart-2: 158 64% 48%;

@@ -6,6 +6,7 @@ import { Sparkles, Zap, ChevronDown, ArrowUpRight, ArrowDownRight } from "lucide
 import { cn, formatCurrency } from "@/lib/utils";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { PageHeader } from "@/components/dashboard/page-header";
+import { useTableSize, SizeControl, emphasisBgClass, useImperativeTooltip } from "@/components/dashboard/table-ui";
 import type { VarianceData, VarianceRow } from "@/lib/variance";
 
 type View = "actual" | "forecast" | "var_abs" | "var_pct";
@@ -18,8 +19,8 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
   const { navigate } = useNavProgress();
   const [view, setView] = React.useState<View>("actual");
   const [fyOpen, setFyOpen] = React.useState(false);
-  const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
-  const setTipAt = (text: string | null, x = 0, y = 0) => setTip(text ? { text, x, y } : null);
+  const { tipRef, show: setTipAt } = useImperativeTooltip();
+  const { size, changeSize, sizeVars } = useTableSize("variance-size");
 
   const marginRowRef = React.useRef<HTMLTableRowElement>(null);
   const [marginH, setMarginH] = React.useState(0);
@@ -81,6 +82,7 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
             <button key={m} onClick={() => setView(m)} className={cn("h-8 px-2.5 text-[12px] font-medium transition-colors", view === m ? "bg-sidebar text-white" : "text-muted-foreground hover:bg-muted")}>{label}</button>
           ))}
         </div>
+        <SizeControl size={size} onChange={changeSize} />
         {!data.preview && (
           <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-[12px] h-8 px-2.5 rounded-lg border border-border hover:bg-muted">Actuals ↓</a>
         )}
@@ -95,13 +97,13 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
       )}
 
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        <div className="overflow-auto max-h-[calc(100vh-215px)]">
-          <table className="w-full border-collapse text-[12.5px]">
+        <div className="overflow-auto max-h-[calc(100vh-215px)]" onScroll={() => setTipAt(null)}>
+          <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
             <thead>
               <tr className="border-b-2 border-border">
-                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
+                <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-3 py-2.5 min-w-[240px] border-r border-white/10">Particulars</th>
                 {cols.map((c) => (
-                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-white/10", c.key === "__ytd__" && "font-bold text-white")}>{c.label}</th>
+                  <th key={c.key} className={cn("sticky top-0 z-[4] bg-sidebar text-right font-semibold text-white/80 text-[length:var(--pn)] px-3 py-2.5 whitespace-nowrap min-w-[96px] border-l border-white/10", c.key === "__ytd__" && "font-bold text-white")}>{c.label}</th>
                 ))}
               </tr>
             </thead>
@@ -115,24 +117,26 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
                 const isNetMargin = row.id === "net_margin";
                 const isFooter = isNetProfit || isNetMargin;
                 const footerBottom = isNetMargin ? 0 : marginH;
+                const emphasisBg = emphasisBgClass({ strong, isCm, isTotal });
+                const footerBg = isNetProfit ? "bg-[hsl(var(--pl-total))]" : "bg-card";
                 return (
                   <React.Fragment key={row.id}>
                     {row.section && (
-                      <tr><td colSpan={cols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td></tr>
+                      <tr><td colSpan={cols.length + 1} className="sticky left-0 bg-card px-3 pt-3 pb-1 text-[length:var(--pc)] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td></tr>
                     )}
                     <tr ref={isNetMargin ? marginRowRef : undefined}
                       className={cn("border-b border-border/50",
-                        !isFooter && strong && "bg-muted/40", !isFooter && isCm && "bg-primary/[0.055]", !isFooter && isTotal && "bg-primary/[0.09]",
+                        !isFooter && emphasisBg,
                         isNetProfit && "border-t-2 border-border")}>
                       <td style={isFooter ? { bottom: footerBottom } : undefined}
-                        className={cn("sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border",
-                          isFooter ? cn("z-[4] bg-muted text-foreground", isNetProfit && "font-bold")
-                            : cn("z-[1]", (strong || isCm || isTotal) ? "bg-muted" : "bg-card",
+                        className={cn("sticky left-0 px-3 py-2 whitespace-nowrap border-r border-border text-[length:var(--pl)]",
+                          isFooter ? cn(`z-[4] ${footerBg} text-foreground`, isNetProfit && "font-bold")
+                            : cn("z-[1]", emphasisBg ?? "bg-card",
                                 strong ? "font-bold text-foreground" : isCm ? "font-semibold text-foreground" : "text-foreground/90",
-                                isTotal && "font-bold", row.kind === "expense" && "pl-6 text-muted-foreground font-normal"))}>
+                                isTotal && "font-bold", row.kind === "expense" && "pl-6 text-[length:var(--ps)] text-muted-foreground font-normal"))}>
                         {row.label}
                       </td>
-                      {cols.map((c) => {
+                      {cols.map((c, ci) => {
                         // margin rows compare percentage points; everything else compares ₹
                         const aA = isMargin || isCm ? null : aggA(row, c);
                         const aP = isMargin || isCm ? null : aggP(row, c);
@@ -174,13 +178,14 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
                           }
                         }
 
+                        const zebra = !isFooter && !emphasisBg && c.key !== "__ytd__" && ci % 2 === 1;
                         return (
                           <td key={c.key}
                             style={isFooter ? { bottom: footerBottom } : undefined}
                             className={cn("text-right px-3 py-2 num align-top border-l border-border/60",
-                              isFooter ? "sticky z-[3] bg-muted" : c.key === "__ytd__" && "bg-muted/30")}
+                              zebra && "bg-foreground/[0.06]",
+                              isFooter ? `sticky z-[3] ${footerBg}` : c.key === "__ytd__" && "bg-muted/30")}
                             onMouseEnter={(e) => full && full !== "—" && setTipAt(full, e.clientX, e.clientY)}
-                            onMouseMove={(e) => full && full !== "—" && setTipAt(full, e.clientX, e.clientY)}
                             onMouseLeave={() => setTipAt(null)}>
                             <span className={cn("inline-block leading-tight",
                               isTotal && "font-bold",
@@ -207,7 +212,7 @@ export function VarianceClient({ data, years }: { data: VarianceData; years: num
         Green = favourable vs plan (more revenue / less cost), red = unfavourable. YTD covers elapsed months only.
       </p>
 
-      {tip && <div className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ left: tip.x + 12, top: tip.y + 12 }}>{tip.text}</div>}
+      <div ref={tipRef} className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ display: "none", left: 0, top: 0 }} />
     </div>
   );
 }
