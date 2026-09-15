@@ -434,6 +434,14 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     if (existing) { resolveFlag(existing.id, "resolved"); return; }  // toggle off
     raiseFlag({ name: LINE_PARTY, amount: aggVal(row, col), txn_count: 0 }, dk, from, to, { categoryLabel: row.label, periodLabel: label, partyLabel: row.label });
   };
+  // Same, but for ONE expanded vendor/gateway line item (party = the vendor).
+  const toggleVendorFlag = (row: PnlRow, col: PnlColumn, party: string, amount: number) => {
+    const dk = row.drill; if (!dk) return;
+    const { from, to, label } = colRange(col);
+    const existing = flags.find((f) => f.drill_key === dk && f.party === party && f.period_from === from && f.period_to === to);
+    if (existing) { resolveFlag(existing.id, "resolved"); return; }  // toggle off
+    raiseFlag({ name: party, amount, txn_count: 0 }, dk, from, to, { categoryLabel: row.label, periodLabel: label });
+  };
 
   // ── period controls ──
   const goMode = (mode: string) => {
@@ -656,11 +664,23 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               return (
                 <td
                   key={col.key}
-                  className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50 text-[length:var(--ps)]", zebra && "bg-foreground/[0.06]", col.key === "__total__" && "bg-muted/30")}
+                  className={cn("text-right px-4 py-1.5 num align-top border-l border-border/50 text-[length:var(--ps)] relative group/cell", zebra && "bg-foreground/[0.06]", col.key === "__total__" && "bg-muted/30")}
                   onMouseEnter={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseMove={(e) => v !== 0 && setTipCb(full, e.clientX, e.clientY)}
                   onMouseLeave={() => setTipCb(null)}
                 >
+                  {/* Flag THIS vendor line item for review (no drawer). Amber + persistent
+                      when flagged; appears on hover otherwise. */}
+                  {!data.preview && v !== 0 && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); toggleVendorFlag(row, col, p.party, v); }}
+                      title={isFlagged ? "Flagged for review — click to unflag" : "Flag this line item for review"}
+                      className={cn("absolute left-2 top-1.5 p-0.5 rounded z-[2] transition-opacity", isFlagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500")}
+                    >
+                      <Flag className={cn("h-2.5 w-2.5", isFlagged && "fill-current")} />
+                    </button>
+                  )}
                   {v === 0 ? (
                     <span className="text-muted-foreground/40">–</span>
                   ) : (
@@ -668,7 +688,6 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       {cellText(row, v)}
                     </button>
                   )}
-                  {isFlagged && <Flag className="inline-block h-2.5 w-2.5 ml-1 text-amber-500 fill-current align-baseline" />}
                 </td>
               );
             })}
