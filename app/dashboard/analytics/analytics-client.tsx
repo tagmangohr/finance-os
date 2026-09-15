@@ -11,6 +11,7 @@ import { format, parseISO } from "date-fns";
 import { formatCurrency } from "@/lib/utils";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { CustomizableCards, type CardItem } from "@/components/dashboard/customizable-cards";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
@@ -78,7 +79,7 @@ function Empty({ h = 260 }: { h?: number }) {
 }
 
 // ─── main ──────────────────────────────────────────────────────────────────
-export function AnalyticsClient({ data }: { data: AnalyticsData }) {
+export function AnalyticsClient({ data, orgId }: { data: AnalyticsData; orgId: string }) {
   const { navigate } = useNavProgress();
   const { points, headline, runway, gatewayRevenue, expenseCategories, paymentHealth } = data;
   const today = new Date().toISOString().slice(0, 10);
@@ -129,12 +130,19 @@ export function AnalyticsClient({ data }: { data: AnalyticsData }) {
       )}
 
       {/* Headline */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 animate-enter">
-        <MetricCard title="Net Revenue" value={money(headline.netRevenue)} icon={<TrendingUp className="size-4" />} accentColor="#10b981" subtitle="Gross − refunds − chargebacks" />
-        <MetricCard title="Net Profit" value={money(headline.netProfit)} icon={headline.netProfit >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={headline.netProfit >= 0 ? "#10b981" : "#f43f5e"} subtitle="After all operating expenses" />
-        <MetricCard title="Net Margin" value={pct(headline.netMargin)} icon={<Percent className="size-4" />} accentColor="#6366f1" subtitle="Net profit ÷ net revenue" />
-        <MetricCard title="Avg MoM Growth" value={pct(headline.avgMonthlyGrowth)} icon={headline.avgMonthlyGrowth && headline.avgMonthlyGrowth < 0 ? <TrendingDown className="size-4" /> : <TrendingUp className="size-4" />} accentColor={headline.avgMonthlyGrowth && headline.avgMonthlyGrowth < 0 ? "#f43f5e" : "#10b981"} subtitle="Net revenue, month over month" />
-        <MetricCard title="Runway" value={runwayLabel} icon={<Wallet className="size-4" />} severity={runway.runwayDays <= 120 ? "warning" : undefined} subtitle="Cash ÷ monthly burn" />
+      <div className="animate-enter">
+        <CustomizableCards
+          tab="analytics"
+          orgId={orgId}
+          className="grid grid-cols-2 lg:grid-cols-5 gap-3"
+          cards={[
+            { key: "net_revenue", label: "Net Revenue", node: <MetricCard title="Net Revenue" value={money(headline.netRevenue)} icon={<TrendingUp className="size-4" />} accentColor="#10b981" subtitle="Gross − refunds − chargebacks" /> },
+            { key: "net_profit", label: "Net Profit", node: <MetricCard title="Net Profit" value={money(headline.netProfit)} icon={headline.netProfit >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={headline.netProfit >= 0 ? "#10b981" : "#f43f5e"} subtitle="After all operating expenses" /> },
+            { key: "net_margin", label: "Net Margin", node: <MetricCard title="Net Margin" value={pct(headline.netMargin)} icon={<Percent className="size-4" />} accentColor="#6366f1" subtitle="Net profit ÷ net revenue" /> },
+            { key: "avg_mom", label: "Avg MoM Growth", node: <MetricCard title="Avg MoM Growth" value={pct(headline.avgMonthlyGrowth)} icon={headline.avgMonthlyGrowth && headline.avgMonthlyGrowth < 0 ? <TrendingDown className="size-4" /> : <TrendingUp className="size-4" />} accentColor={headline.avgMonthlyGrowth && headline.avgMonthlyGrowth < 0 ? "#f43f5e" : "#10b981"} subtitle="Net revenue, month over month" /> },
+            { key: "runway", label: "Runway", node: <MetricCard title="Runway" value={runwayLabel} icon={<Wallet className="size-4" />} severity={runway.runwayDays <= 120 ? "warning" : undefined} subtitle="Cash ÷ monthly burn" /> },
+          ] as CardItem[]}
+        />
       </div>
 
       {!hasData && !data.preview ? (

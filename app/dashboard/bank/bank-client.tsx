@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { CustomizableCards, type CardItem } from "@/components/dashboard/customizable-cards";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { FloatingPanel } from "@/components/ui/floating-panel";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
@@ -166,7 +167,7 @@ function CategoryDrillDrawer({
   );
 }
 
-export function BankClient({ data, hasBankConnector }: { data: BankOverview; hasBankConnector: boolean }) {
+export function BankClient({ data, hasBankConnector, orgId }: { data: BankOverview; hasBankConnector: boolean; orgId: string }) {
   const router = useRouter();
   const { navigate } = useNavProgress();
   const { totals, categories, byCategory, runway, accountTypes, cards, reviewCount } = data;
@@ -536,19 +537,23 @@ export function BankClient({ data, hasBankConnector }: { data: BankOverview; has
         </div>
       )}
 
-      {/* Reconciled P&L */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
-        <MetricCard title="Net P&L" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses (ties to P&L)" />
-        <MetricCard title="Collections" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="Revenue (PG + sales), net of refunds & gateway fees" />
-        <MetricCard title="Expenses" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" />
-        <MetricCard title="Other income" value={inr(totals.otherIncome, true)} icon={<ArrowUpRight className="size-4" />} accentColor="#10b981" subtitle="Non-PG receipts (invoices, interest)" />
-      </div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter-1">
-        <MetricCard title="Cash balance" value={inr(runway.cashBalance, true)} icon={<Wallet className="size-4" />} subtitle="Approx. (Mercury + PG net)" />
-        <MetricCard title="Monthly burn" value={inr(runway.burnRate, true)} icon={<TrendingDown className="size-4" />} subtitle="Avg last 90 days" />
-        <MetricCard title="Runway" value={runwayLabel(runway.runwayDays)} icon={<Wallet className="size-4" />} severity={runway.runwayDays <= 120 ? "warning" : undefined} subtitle="Cash ÷ burn" />
-        <MetricCard title="Needs review" value={reviewCount.toLocaleString("en-IN")} icon={<AlertTriangle className="size-4" />} severity={reviewCount > 0 ? "warning" : undefined} subtitle="Uncategorized or low-confidence (all statuses)" />
+      {/* Reconciled P&L + runway — one customizable strip */}
+      <div className="animate-enter">
+        <CustomizableCards
+          tab="bank"
+          orgId={orgId}
+          className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+          cards={[
+            { key: "net_pl", label: "Net P&L", node: <MetricCard title="Net P&L" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses (ties to P&L)" /> },
+            { key: "collections", label: "Collections", node: <MetricCard title="Collections" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="Revenue (PG + sales), net of refunds & gateway fees" /> },
+            { key: "expenses", label: "Expenses", node: <MetricCard title="Expenses" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" /> },
+            { key: "other_income", label: "Other income", node: <MetricCard title="Other income" value={inr(totals.otherIncome, true)} icon={<ArrowUpRight className="size-4" />} accentColor="#10b981" subtitle="Non-PG receipts (invoices, interest)" /> },
+            { key: "cash_balance", label: "Cash balance", node: <MetricCard title="Cash balance" value={inr(runway.cashBalance, true)} icon={<Wallet className="size-4" />} subtitle="Approx. (Mercury + PG net)" /> },
+            { key: "monthly_burn", label: "Monthly burn", node: <MetricCard title="Monthly burn" value={inr(runway.burnRate, true)} icon={<TrendingDown className="size-4" />} subtitle="Avg last 90 days" /> },
+            { key: "runway", label: "Runway", node: <MetricCard title="Runway" value={runwayLabel(runway.runwayDays)} icon={<Wallet className="size-4" />} severity={runway.runwayDays <= 120 ? "warning" : undefined} subtitle="Cash ÷ burn" /> },
+            { key: "needs_review", label: "Needs review", node: <MetricCard title="Needs review" value={reviewCount.toLocaleString("en-IN")} icon={<AlertTriangle className="size-4" />} severity={reviewCount > 0 ? "warning" : undefined} subtitle="Uncategorized or low-confidence (all statuses)" /> },
+          ] as CardItem[]}
+        />
       </div>
 
       {/* Expenses by category — clean ranked list, click a row to drill into its transactions */}

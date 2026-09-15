@@ -23,6 +23,7 @@ import {
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { parsePaymentText, type ParsedPayment } from "@/lib/ocr/parse";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CustomizableCards } from "@/components/dashboard/customizable-cards";
 
 // ─── Client-side OCR (no AI) ─────────────────────────────────────────────────
 // Reads a payment screenshot entirely in the browser with Tesseract.js (lazy-
@@ -684,54 +685,22 @@ export function DataExplorerClient({ orgId, connectors, searchOnly = false }: Da
         )}
       </div>
 
-      {/* Summary cards */}
+      {/* Summary cards — reorderable / hideable per user */}
       {summary && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
-          <SummaryCard
-            label="Payments"
-            count={summary.cards.payments.count}
-            amount={summary.cards.payments.amount}
-            colour="text-success"
-          />
-          <SummaryCard
-            label="Pending"
-            count={summary.cards.pending.count}
-            amount={summary.cards.pending.amount}
-            colour="text-warning"
-          />
-          <SummaryCard
-            label="Settlements"
-            count={summary.cards.settlements.count}
-            amount={summary.cards.settlements.amount}
-            colour="text-primary"
-          />
-          <SummaryCard
-            label="Refunds"
-            count={summary.cards.refunds.count}
-            amount={summary.cards.refunds.amount}
-            colour="text-orange-600 dark:text-orange-400"
-          />
-          <SummaryCard
-            label="Disputes"
-            count={summary.cards.disputes.count}
-            amount={summary.cards.disputes.amount}
-            colour="text-destructive"
-          />
-          <SummaryCard
-            label="Fees Charged"
-            count={null}
-            amount={summary.totalFees}
-            colour="text-warning"
-            note="incl. GST"
-          />
-          <SummaryCard
-            label="Net Flow"
-            count={null}
-            amount={summary.net}
-            colour={summary.net >= 0 ? "text-success" : "text-destructive"}
-            showSign
-          />
-        </div>
+        <CustomizableCards
+          tab="payments"
+          orgId={orgId}
+          className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5"
+          cards={[
+            { key: "payments", label: "Payments", node: <SummaryCard label="Payments" count={summary.cards.payments.count} amount={summary.cards.payments.amount} colour="text-success" /> },
+            { key: "pending", label: "Pending", node: <SummaryCard label="Pending" count={summary.cards.pending.count} amount={summary.cards.pending.amount} colour="text-warning" /> },
+            { key: "settlements", label: "Settlements", node: <SummaryCard label="Settlements" count={summary.cards.settlements.count} amount={summary.cards.settlements.amount} colour="text-primary" /> },
+            { key: "refunds", label: "Refunds", node: <SummaryCard label="Refunds" count={summary.cards.refunds.count} amount={summary.cards.refunds.amount} colour="text-orange-600 dark:text-orange-400" /> },
+            { key: "disputes", label: "Disputes", node: <SummaryCard label="Disputes" count={summary.cards.disputes.count} amount={summary.cards.disputes.amount} colour="text-destructive" /> },
+            { key: "fees", label: "Fees Charged", node: <SummaryCard label="Fees Charged" count={null} amount={summary.totalFees} colour="text-warning" note="incl. GST" /> },
+            { key: "net_flow", label: "Net Flow", node: <SummaryCard label="Net Flow" count={null} amount={summary.net} colour={summary.net >= 0 ? "text-success" : "text-destructive"} showSign /> },
+          ]}
+        />
       )}
       </div>
 

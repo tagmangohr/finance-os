@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { Wallet, Flame, ArrowLeftRight, TrendingUp } from "lucide-react";
 import { getOrgId, getCashFlowDetails, orgHasConnectors } from "@/lib/data";
 import { requireRouteAccess } from "@/lib/org/page-access";
+import { createClient } from "@/lib/supabase/server";
+import { getCardPrefs, EMPTY_CARD_PREFS } from "@/lib/cards/prefs";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { CustomizableCards, type CardItem } from "@/components/dashboard/customizable-cards";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
 import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
@@ -61,6 +64,29 @@ export default async function CashFlowPage({ searchParams }: { searchParams: Pro
     expenses: real.categoryBreakdown,
   };
 
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const cardPrefs = user ? await getCardPrefs(user.id, orgId, "cashflow", supabase) : EMPTY_CARD_PREFS;
+
+  const cards: CardItem[] = [
+    { key: "cash", label: "Cash Balance", node: (
+      <MetricCard title="Cash Balance" value={formatCurrency(v.cashBalance, "INR", true)}
+        icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
+    ) },
+    { key: "burn", label: "Burn Rate", node: (
+      <MetricCard title="Burn Rate" value={`${formatCurrency(v.burnRate, "INR", true)}/mo`} subtitle="operating burn"
+        icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))" />
+    ) },
+    { key: "net", label: "Net Monthly", node: (
+      <MetricCard title="Net Monthly" value={`${v.avgNet >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.avgNet), "INR", true)}`} subtitle="avg inflow − outflow"
+        icon={<ArrowLeftRight className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
+    ) },
+    { key: "forecast90", label: "90-day Forecast", node: (
+      <MetricCard title="90-day Forecast" value={`${v.forecast90 >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.forecast90), "INR", true)}`} subtitle="projected net"
+        icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
+    ) },
+  ];
+
   return (
     <div className="space-y-3 max-w-[1400px]">
       {preview && <PreviewBanner />}
@@ -71,15 +97,15 @@ export default async function CashFlowPage({ searchParams }: { searchParams: Pro
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
-        <MetricCard title="Cash Balance" value={formatCurrency(v.cashBalance, "INR", true)}
-          icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
-        <MetricCard title="Burn Rate" value={`${formatCurrency(v.burnRate, "INR", true)}/mo`} subtitle="operating burn"
-          icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))" />
-        <MetricCard title="Net Monthly" value={`${v.avgNet >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.avgNet), "INR", true)}`} subtitle="avg inflow − outflow"
-          icon={<ArrowLeftRight className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
-        <MetricCard title="90-day Forecast" value={`${v.forecast90 >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.forecast90), "INR", true)}`} subtitle="projected net"
-          icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
+      <div className="animate-enter">
+        <CustomizableCards
+          tab="cashflow"
+          orgId={orgId}
+          cards={cards}
+          initialOrder={cardPrefs.order}
+          initialHidden={cardPrefs.hidden}
+          className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">

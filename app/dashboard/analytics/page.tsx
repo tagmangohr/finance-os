@@ -26,5 +26,5 @@ export default async function AnalyticsPage({
   const preview = !(await orgHasConnectors(orgId));
   const data = preview ? sampleAnalytics(from, to) : await getAnalyticsCached(orgId, from, to);
 
-  return <AnalyticsClient data={data} />;
+  return <AnalyticsClient data={data} orgId={orgId} />;
 }

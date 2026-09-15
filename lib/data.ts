@@ -224,12 +224,13 @@ const financialSummaryCached = cachedOrgLoader(
 export const getRevenueDetails = cachedOrgLoader(async (orgId: string, opts?: { from?: string; to?: string }) => {
   const supabase = await createServiceClient();
 
-  // Range: default = last ~13 months (the historic revenue window); overridable
-  // via the date-range filter. Both aggregations run in Postgres (RPC), so ANY
-  // window stays fast — no raw-row drain.
+  // Range: default = THIS financial year (India FY starts 1 April), overridable via
+  // the date-range filter. Both aggregations run in Postgres (RPC), so ANY window
+  // stays fast — no raw-row drain.
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date();
-  const defFrom = new Date(now.getFullYear(), now.getMonth() - 12, 1).toISOString().slice(0, 10);
+  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const defFrom = new Date(fyYear, 3, 1).toISOString().slice(0, 10);
   const from = opts?.from || defFrom;
   const to = opts?.to || today;
 

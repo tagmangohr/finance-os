@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { TrendingUp, Coins, ArrowUpRight, Percent, Wallet } from "lucide-react";
 import { getOrgId, getRevenueDetails, orgHasConnectors } from "@/lib/data";
 import { requireRouteAccess } from "@/lib/org/page-access";
+import { createClient } from "@/lib/supabase/server";
+import { getCardPrefs, EMPTY_CARD_PREFS } from "@/lib/cards/prefs";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { CustomizableCards, type CardItem } from "@/components/dashboard/customizable-cards";
 import { SectionCard } from "@/components/dashboard/section-card";
 import { PreviewBanner } from "@/components/dashboard/preview-banner";
 import { RangeFilterBar } from "@/components/dashboard/range-filter-bar";
@@ -50,6 +53,34 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
     totalRevenue: real.totalRevenue, revenueByMonth: real.revenueByMonth,
   };
 
+  // Per-user card layout (order + hidden) for this tab; empty until migration 121.
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const cardPrefs = user ? await getCardPrefs(user.id, orgId, "revenue", supabase) : EMPTY_CARD_PREFS;
+
+  const cards: CardItem[] = [
+    { key: "total", label: "Total Revenue", node: (
+      <MetricCard title="Total Revenue" value={formatCurrency(v.totalRevenue, "INR", true)} subtitle="collected in range"
+        icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" />
+    ) },
+    { key: "mrr", label: "MRR", node: (
+      <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)} subtitle="avg last 3 months"
+        icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
+    ) },
+    { key: "arr", label: "ARR", node: (
+      <MetricCard title="ARR" value={formatCurrency(v.arr, "INR", true)} subtitle="annual run rate"
+        icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
+    ) },
+    { key: "mom", label: "MoM Growth", node: (
+      <MetricCard title="MoM Growth" value={`${v.momGrowth > 0 ? "+" : ""}${v.momGrowth.toFixed(1)}%`} subtitle="month over month"
+        icon={<ArrowUpRight className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
+    ) },
+    { key: "yoy", label: "YoY Growth", node: (
+      <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} subtitle="year over year"
+        icon={<Percent className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
+    ) },
+  ];
+
   return (
     <div className="space-y-3 max-w-[1400px]">
       {preview && <PreviewBanner />}
@@ -60,21 +91,19 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 animate-enter">
-        <MetricCard title="Total Revenue" value={formatCurrency(v.totalRevenue, "INR", true)} subtitle="collected in range"
-          icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" />
-        <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)} subtitle="avg last 3 months"
-          icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
-        <MetricCard title="ARR" value={formatCurrency(v.arr, "INR", true)} subtitle="annual run rate"
-          icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
-        <MetricCard title="MoM Growth" value={`${v.momGrowth > 0 ? "+" : ""}${v.momGrowth.toFixed(1)}%`} subtitle="month over month"
-          icon={<ArrowUpRight className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
-        <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} subtitle="year over year"
-          icon={<Percent className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
+      <div className="animate-enter">
+        <CustomizableCards
+          tab="revenue"
+          orgId={orgId}
+          cards={cards}
+          initialOrder={cardPrefs.order}
+          initialHidden={cardPrefs.hidden}
+          className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 animate-enter-1">
-        <SectionCard title="Revenue" subtitle="last 12 months" className="lg:col-span-2">
+        <SectionCard title="Revenue" subtitle="monthly, selected range" className="lg:col-span-2">
           <RevenueChart data={v.revenueByMonth} />
         </SectionCard>
         {/* Top customers loads async (live aggregation can be slow on wide ranges)

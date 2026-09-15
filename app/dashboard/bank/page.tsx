@@ -34,5 +34,5 @@ export default async function BankPage({ searchParams }: { searchParams: Promise
     sb.from("connectors").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("type", "mercury"),
   ]);
 
-  return <BankClient data={data} hasBankConnector={(connectorCount.count ?? 0) > 0} />;
+  return <BankClient data={data} hasBankConnector={(connectorCount.count ?? 0) > 0} orgId={org.id} />;
 }
