@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import Link from "next/link";
 import { Download, Sparkles, Zap, ChevronDown, ChevronRight, ArrowUpRight, ArrowDownRight, Flag, ListTree, Check, X, Loader2, ClipboardList } from "lucide-react";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
@@ -232,14 +233,10 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   // content slides under a still cursor) can't re-render the whole table. That
   // re-render storm was the Expand-all scroll lag / mid-scroll tearing.
   const tipRef = React.useRef<HTMLDivElement>(null);
-  // Scroll box + table refs: during active scroll we set pointer-events:none on the
-  // TABLE so NO per-cell mouse handler (enter/leave/tooltip/flag-hover) fires — those
-  // dispatch 60×/s as rows slide under a still cursor with Expand all (≈7k cells) and
-  // starve the compositor → blank tiles ("data disappears") + jank. Handlers resume a
-  // beat after scrolling stops. Wheel/scrollbar keep working (the scroll box itself
-  // stays interactive; only the inner table is inert).
-  const tableRef = React.useRef<HTMLTableElement>(null);
-  const scrollIdle = React.useRef<number | undefined>(undefined);
+  // Scroll box ref → the virtualizer's scroll element (see bodyUnits / rowVirtualizer).
+  // Virtualization keeps only ~viewport rows in the DOM, so the expensive part of
+  // Expand-all (≈7k cells) never exists at once and scroll stays smooth at any size.
+  const scrollRef = React.useRef<HTMLDivElement>(null);
   const [drill, setDrill] = React.useState<{ title: string; subtitle: string; catLabel: string; key: string; from: string; to: string; total: number; party?: Group | null } | null>(null);
   const [monthOpen, setMonthOpen] = React.useState(false); // single-month picker dropdown
 
@@ -279,18 +276,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     el.style.display = "block";
   }, []);
 
-  // While scrolling: make the table inert (no cell handlers fire) + hide the tooltip.
-  // Restore interactivity ~150ms after the last scroll event (covers momentum/inertia).
-  const onGridScroll = React.useCallback(() => {
-    const t = tableRef.current;
-    if (t && t.style.pointerEvents !== "none") t.style.pointerEvents = "none";
-    setTipCb(null);
-    if (scrollIdle.current) window.clearTimeout(scrollIdle.current);
-    scrollIdle.current = window.setTimeout(() => {
-      if (tableRef.current) tableRef.current.style.pointerEvents = "";
-    }, 150);
-  }, [setTipCb]);
-  React.useEffect(() => () => { if (scrollIdle.current) window.clearTimeout(scrollIdle.current); }, []);
+  // Hide the exact-figure tooltip while scrolling (it would otherwise hang mid-air).
+  const onGridScroll = React.useCallback(() => { setTipCb(null); }, [setTipCb]);
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
 
@@ -512,11 +499,39 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   }, []);
   const currentMonthKey = data.mode === "month" ? (data.columns[0]?.monthKeys[0] ?? "") : "";
 
-  // Renders one P&L row. `stickyBottom` (px, or 0) pins it as a sticky footer row
-  // — the cells (not the <tr>, which doesn't stick reliably) get position:sticky +
-  // an OPAQUE background so scrolling body rows never bleed through, and a z-index
-  // above the body's sticky left column.
-  const renderRow = (row: PnlRow, stickyBottom?: number) => {
+  // ── single-<tr> renderers ────────────────────────────────────────────────────
+  // The body is VIRTUALIZED (see bodyUnits / rowVirtualizer): each render unit is
+  // exactly one <tr>, so the virtualizer can measure + window them. `m` carries the
+  // virtualizer's measure ref + data-index (+ React key) for the rows it renders;
+  // it's absent when a <tr> is rendered directly (footers, non-virtualized fallback).
+  type MeasureProps = { trRef?: React.Ref<HTMLTableRowElement>; dataIndex?: number; key?: string };
+
+  // Faint group heading above a section's first row.
+  const renderSectionTr = (row: PnlRow, m?: MeasureProps) => (
+    <tr key={m?.key} ref={m?.trRef} data-index={m?.dataIndex}>
+      <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-4 pt-3 pb-1 text-[length:var(--pc)] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
+    </tr>
+  );
+
+  // Loading / empty placeholder under an expanded row.
+  const renderNoticeTr = (row: PnlRow, kind: "loading" | "empty", m?: MeasureProps) =>
+    kind === "loading" ? (
+      <tr key={m?.key} ref={m?.trRef} data-index={m?.dataIndex} className="border-b border-border/40">
+        <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-2 pl-10 text-[11.5px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" /> Loading line items…</span>
+        </td>
+      </tr>
+    ) : (
+      <tr key={m?.key} ref={m?.trRef} data-index={m?.dataIndex} className="border-b border-border/40">
+        <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-1.5 pl-10 text-[11px] text-muted-foreground/70">No line items.</td>
+      </tr>
+    );
+
+  // Main P&L row. `stickyBottom` (px, or 0) pins it as a sticky footer row — the cells
+  // (not the <tr>, which doesn't stick reliably) get position:sticky + an OPAQUE
+  // background so scrolling body rows never bleed through, and a z-index above the
+  // body's sticky left column.
+  const renderMainTr = (row: PnlRow, stickyBottom?: number, m?: MeasureProps) => {
     const strong = row.emphasis === "strong";
     const isCm = row.emphasis === "cm";
     const isTotalRow = row.kind === "total";
@@ -528,16 +543,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
     // Expandable = a drillable line that actually has vendor/gateway line items.
     const canExpand = Boolean(row.drill) && !sticky && !data.preview && expandableKeys.has(row.drill as string);
     const open = canExpand && isRowOpen(row.id);
-    const parties = open ? partiesFor(row.drill as string) : [];
     return (
-      <React.Fragment key={row.id}>
-        {row.section && !sticky && (
-          <tr>
-            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-4 pt-3 pb-1 text-[length:var(--pc)] font-semibold uppercase tracking-wide text-muted-foreground/70">{row.section}</td>
-          </tr>
-        )}
         <tr
-          ref={row.id === "net_margin" ? marginRowRef : undefined}
+          key={m?.key}
+          ref={m?.trRef ?? (row.id === "net_margin" ? marginRowRef : undefined)}
+          data-index={m?.dataIndex}
           className={cn(
             "border-b border-border/50",
             !sticky && strong && "bg-muted/40",
@@ -656,22 +666,12 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
             );
           })}
         </tr>
+    );
+  };
 
-        {/* Vendor / gateway line items under an expanded row. */}
-        {open && liLoading && parties.length === 0 && (
-          <tr className="border-b border-border/40">
-            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-2 pl-10 text-[11.5px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1.5"><Loader2 className="h-3 w-3 animate-spin" /> Loading line items…</span>
-            </td>
-          </tr>
-        )}
-        {open && !liLoading && parties.length === 0 && (
-          <tr className="border-b border-border/40">
-            <td colSpan={displayCols.length + 1} className="sticky left-0 bg-card px-3 py-1.5 pl-10 text-[11px] text-muted-foreground/70">No line items.</td>
-          </tr>
-        )}
-        {open && parties.map((p) => (
-          <tr key={`${row.id}::${p.party}`} className="border-b border-border/30 bg-card/60">
+  // One vendor / gateway line item under an expanded row.
+  const renderPartyTr = (row: PnlRow, p: PartyRow, m?: MeasureProps) => (
+          <tr key={m?.key} ref={m?.trRef} data-index={m?.dataIndex} className="border-b border-border/30 bg-card/60">
             <td className="sticky left-0 z-[1] bg-card px-4 py-1.5 pl-11 whitespace-nowrap border-r border-border text-[length:var(--ps)] text-foreground/75">
               <span className="block max-w-[300px] truncate" title={groupDisplayName(row.drill as string, p.party)}>{groupDisplayName(row.drill as string, p.party)}</span>
             </td>
@@ -722,9 +722,88 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               );
             })}
           </tr>
-        ))}
+  );
+
+  // Compose a full row group (section + main + its line items) as ONE fragment.
+  // Used for the sticky footers and the non-virtualized fallback (small views). The
+  // virtualized body calls the single-<tr> renderers above directly, per unit.
+  const renderRow = (row: PnlRow, stickyBottom?: number) => {
+    const sticky = stickyBottom !== undefined;
+    const canExpand = Boolean(row.drill) && !sticky && !data.preview && expandableKeys.has(row.drill as string);
+    const open = canExpand && isRowOpen(row.id);
+    const parties = open ? partiesFor(row.drill as string) : [];
+    return (
+      <React.Fragment key={row.id}>
+        {row.section && !sticky && renderSectionTr(row)}
+        {renderMainTr(row, stickyBottom)}
+        {open && liLoading && parties.length === 0 && renderNoticeTr(row, "loading")}
+        {open && !liLoading && parties.length === 0 && renderNoticeTr(row, "empty")}
+        {open && parties.map((p) => renderPartyTr(row, p, { key: `${row.id}::${p.party}` }))}
       </React.Fragment>
     );
+  };
+
+  // ── flat body units (one per <tr>) + row virtualizer ─────────────────────────
+  // Each unit renders to exactly one <tr>; the virtualizer windows them so only the
+  // ~viewport rows (plus overscan) are ever in the DOM. Footer rows (Net Profit /
+  // Net Margin) are NOT units — they render separately, pinned sticky-bottom.
+  type BodyUnit =
+    | { t: "section"; key: string; row: PnlRow }
+    | { t: "row"; key: string; row: PnlRow }
+    | { t: "loading"; key: string; row: PnlRow }
+    | { t: "empty"; key: string; row: PnlRow }
+    | { t: "party"; key: string; row: PnlRow; p: PartyRow };
+
+  const bodyUnits = React.useMemo<BodyUnit[]>(() => {
+    const units: BodyUnit[] = [];
+    for (const row of data.rows) {
+      if (FOOTER_IDS.has(row.id)) continue;               // footers render separately
+      if (row.section) units.push({ t: "section", key: `sec:${row.id}`, row });
+      units.push({ t: "row", key: row.id, row });
+      const canExpand = Boolean(row.drill) && !data.preview && expandableKeys.has(row.drill as string);
+      if (!(canExpand && (rowOverride[row.id] ?? expandAll))) continue;
+      const parties = partiesFor(row.drill as string);
+      if (parties.length === 0) {
+        units.push({ t: liLoading ? "loading" : "empty", key: `li:${row.id}`, row });
+      } else {
+        for (const p of parties) units.push({ t: "party", key: `${row.id}::${p.party}`, row, p });
+      }
+    }
+    return units;
+  }, [data.rows, data.preview, FOOTER_IDS, expandableKeys, rowOverride, expandAll, liLoading, partiesFor]);
+
+  // Below this many rows the native table is already smooth — keep the proven,
+  // SSR-friendly path and skip virtualization entirely (collapsed view, small FYs).
+  const virtualize = bodyUnits.length > 80;
+
+  const estimateSize = React.useCallback((i: number) => {
+    const u = bodyUnits[i];
+    if (!u) return 40;
+    if (u.t === "section") return sz.sec + 14;
+    if (u.t !== "row") return sz.sub + 14;                // party / loading / empty
+    let h = sz.label + 18;                                // main row (py-2 + line)
+    if (change !== "abs" && u.row.kind !== "margin") h += 14; // MoM/YoY delta subline
+    if (u.row.emphasis === "cm") h += 14;                 // "% margin" subline
+    return h;
+  }, [bodyUnits, sz, change]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: bodyUnits.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize,
+    overscan: 16,
+    getItemKey: React.useCallback((i: number) => bodyUnits[i]?.key ?? String(i), [bodyUnits]),
+  });
+
+  // Text-size / delta-mode changes alter every row's height → drop cached measurements
+  // so the virtualizer re-measures against the new sizes (avoids scroll drift).
+  React.useEffect(() => { rowVirtualizer.measure(); }, [size, change, rowVirtualizer]);
+
+  const renderUnit = (u: BodyUnit, m: MeasureProps) => {
+    if (u.t === "section") return renderSectionTr(u.row, m);
+    if (u.t === "row") return renderMainTr(u.row, undefined, m);
+    if (u.t === "party") return renderPartyTr(u.row, u.p, m);
+    return renderNoticeTr(u.row, u.t === "loading" ? "loading" : "empty", m);
   };
 
   return (
@@ -863,8 +942,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
       {/* grid — fills remaining height; header row (top) + line-item column (left)
           + Net Profit/Margin rows (bottom) all stay frozen within this scroll box. */}
       <div className="flex-1 min-h-0 w-full rounded-xl border border-border bg-card overflow-hidden" style={{ maxWidth: gridMaxWidth }}>
-        <div className="h-full overflow-auto" onScroll={onGridScroll}>
-          <table ref={tableRef} className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
+        <div ref={scrollRef} className="h-full overflow-auto" onScroll={onGridScroll}>
+          <table className="w-full border-collapse text-[length:var(--pn)]" style={sizeVars}>
             <thead>
               <tr className="border-b-2 border-border">
                 <th className="sticky left-0 top-0 z-[6] bg-sidebar text-left font-semibold text-white text-[length:var(--pn)] px-4 py-2.5 min-w-[300px] border-r border-white/10">Particulars</th>
@@ -874,7 +953,30 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((row) => renderRow(row, FOOTER_IDS.has(row.id) ? (row.id === "net_margin" ? 0 : marginH) : undefined))}
+              {/* Body: virtualized (only ~viewport rows in the DOM) once past 80 rows;
+                  the native path below stays for small views (SSR-friendly). Footer
+                  rows render after either path, pinned sticky-bottom. */}
+              {virtualize ? (() => {
+                const vItems = rowVirtualizer.getVirtualItems();
+                const total = rowVirtualizer.getTotalSize();
+                const colSpan = displayCols.length + 1;
+                const padTop = vItems.length ? vItems[0].start : 0;
+                const padBottom = vItems.length ? total - vItems[vItems.length - 1].end : 0;
+                return (
+                  <>
+                    {padTop > 0 && <tr aria-hidden="true"><td colSpan={colSpan} style={{ height: padTop, padding: 0, border: 0 }} /></tr>}
+                    {vItems.map((vi) => {
+                      const u = bodyUnits[vi.index];
+                      return u ? renderUnit(u, { key: u.key, trRef: rowVirtualizer.measureElement, dataIndex: vi.index }) : null;
+                    })}
+                    {padBottom > 0 && <tr aria-hidden="true"><td colSpan={colSpan} style={{ height: padBottom, padding: 0, border: 0 }} /></tr>}
+                  </>
+                );
+              })() : (
+                data.rows.filter((row) => !FOOTER_IDS.has(row.id)).map((row) => renderRow(row))
+              )}
+              {/* Sticky footers — always in the DOM, never virtualized. */}
+              {data.rows.filter((row) => FOOTER_IDS.has(row.id)).map((row) => renderRow(row, row.id === "net_margin" ? 0 : marginH))}
             </tbody>
           </table>
         </div>
