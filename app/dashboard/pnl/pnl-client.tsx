@@ -227,7 +227,11 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const { navigate } = useNavProgress();
   const [change, setChange] = React.useState<Mode>("abs");
   const [fyOpen, setFyOpen] = React.useState(false);
-  const [tip, setTip] = React.useState<{ text: string; x: number; y: number } | null>(null);
+  // Tooltip is driven IMPERATIVELY via this ref — never React state — so moving the
+  // cursor over the grid (incl. while scrolling, when the browser fires mousemove as
+  // content slides under a still cursor) can't re-render the whole table. That
+  // re-render storm was the Expand-all scroll lag / mid-scroll tearing.
+  const tipRef = React.useRef<HTMLDivElement>(null);
   const [drill, setDrill] = React.useState<{ title: string; subtitle: string; catLabel: string; key: string; from: string; to: string; total: number; party?: Group | null } | null>(null);
   const [monthOpen, setMonthOpen] = React.useState(false); // single-month picker dropdown
 
@@ -258,7 +262,13 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
   const flaggedSet = React.useMemo(() => new Set(flags.map((f) => flagKey(f.drill_key, f.party, f.period_from, f.period_to))), [flags]);
 
   const setTipCb = React.useCallback((text: string | null, x?: number, y?: number) => {
-    setTip(text ? { text, x: x ?? 0, y: y ?? 0 } : null);
+    const el = tipRef.current;
+    if (!el) return;
+    if (!text) { el.style.display = "none"; return; }
+    el.textContent = text;
+    el.style.left = `${(x ?? 0) + 12}px`;
+    el.style.top = `${(y ?? 0) + 12}px`;
+    el.style.display = "block";
   }, []);
 
   const rowsById = React.useMemo(() => Object.fromEntries(data.rows.map((r) => [r.id, r])), [data.rows]);
@@ -601,8 +611,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       onClick={(e) => { e.stopPropagation(); toggleCellFlag(row, col); }}
                       title={flagged ? "Flagged for review — click to unflag" : "Flag this line for review"}
                       className={cn(
-                        "absolute left-2 top-2 p-0.5 rounded transition-opacity z-[2]",
-                        flagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500"
+                        "absolute left-2 top-2 p-0.5 rounded z-[2]",
+                        flagged ? "text-amber-500" : "hidden group-hover/cell:block text-muted-foreground/40 hover:text-amber-500"
                       )}
                     >
                       <Flag className={cn(flagged && "fill-current")} style={{ width: "var(--pf)", height: "var(--pf)" }} />
@@ -677,7 +687,7 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
                       type="button"
                       onClick={(e) => { e.stopPropagation(); toggleVendorFlag(row, col, p.party, v); }}
                       title={isFlagged ? "Flagged for review — click to unflag" : "Flag this line item for review"}
-                      className={cn("absolute left-2 top-1.5 p-0.5 rounded z-[2] transition-opacity", isFlagged ? "opacity-100 text-amber-500" : "opacity-0 group-hover/cell:opacity-100 text-muted-foreground/40 hover:text-amber-500")}
+                      className={cn("absolute left-2 top-1.5 p-0.5 rounded z-[2]", isFlagged ? "text-amber-500" : "hidden group-hover/cell:block text-muted-foreground/40 hover:text-amber-500")}
                     >
                       <Flag className={cn(isFlagged && "fill-current")} style={{ width: "var(--pf)", height: "var(--pf)" }} />
                     </button>
@@ -856,10 +866,8 @@ export function PnlClient({ data, orgId, years }: { data: PnlData; orgId: string
         CM tiers are % of Net Revenue. Click any cell to drill in by vendor/customer.
       </p>
 
-      {/* exact-figure tooltip */}
-      {tip && (
-        <div className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ left: tip.x + 12, top: tip.y + 12 }}>{tip.text}</div>
-      )}
+      {/* exact-figure tooltip — positioned + toggled imperatively via tipRef (no state). */}
+      <div ref={tipRef} className="fixed z-[200] pointer-events-none px-2 py-1 rounded-md bg-foreground text-background text-[11px] font-medium num shadow-lg" style={{ display: "none", left: 0, top: 0 }} />
 
       <DrillDrawer orgId={orgId} open={drill != null} onClose={() => setDrill(null)}
         title={drill?.title ?? ""} subtitle={drill?.subtitle ?? ""} drillKey={drill?.key ?? null}
