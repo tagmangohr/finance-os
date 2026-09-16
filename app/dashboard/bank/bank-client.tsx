@@ -199,6 +199,9 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
     return () => clearTimeout(t);
   }, [qInput]);
 
+  // Inline status/error message (declared before fetchRows, which sets it on failure).
+  const [msg, setMsg] = useState<string | null>(null);
+
   // Abort the prior in-flight request so a slow earlier response can't land after a
   // newer one and overwrite the current rows/total ("latest-wins" — same guard the
   // Data tab uses). Without it, fast filter/page switching can show stale rows.
@@ -230,7 +233,6 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
 
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
-  const [msg, setMsg] = useState<string | null>(null);
   // Category drill drawer (click an "Expenses by category" row → its transactions).
   const [catDrill, setCatDrill] = useState<{ slug: string; label: string; amount: number; count: number } | null>(null);
 
@@ -512,6 +514,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
           from={data.period.from}
           to={data.period.to}
           max={new Date().toISOString().slice(0, 10)}
+          variant="dark"
           onChange={(f, t) => navigate(`/dashboard/bank?from=${f}&to=${t}`)}
         />
         <div className="flex items-center gap-2">
@@ -523,8 +526,8 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
             <Wand2 className={cn("size-3.5", categorizing && "animate-pulse")} />
             {categorizing ? "Categorizing…" : "Auto-categorize"}
           </button>
-          <a href={`/api/bank/export?treatment=all&format=csv&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />CSV</a>
-          <a href={`/api/bank/export?treatment=all&format=xlsx&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium hover:border-border/60"><Download className="size-3.5" />Excel</a>
+          <a href={`/api/bank/export?treatment=all&format=csv&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90"><Download className="size-3.5" />CSV</a>
+          <a href={`/api/bank/export?treatment=all&format=xlsx&from=${data.period.from}&to=${data.period.to}`} className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-foreground text-background px-3 py-1.5 text-xs font-medium hover:bg-foreground/90"><Download className="size-3.5" />Excel</a>
         </div>
       </div>
       <p className="text-[11px] text-muted-foreground px-1">
