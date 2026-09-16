@@ -151,48 +151,66 @@ function CronCard({
   const runState: CronHealth["state"] = !isOn ? "off" : c.state === "off" ? "scheduled" : c.state;
   const level: Level = !isOn ? "green" : c.state === "off" ? "green" : c.health;
   const [cls, label] = STATE_BADGE[runState];
+  const lastRunText = !isOn
+    ? "Turned off"
+    : c.lastRunAt ? `Ran ${rel(c.lastRunAt)}${secs(c.lastDurationMs)}` : "No runs yet";
   return (
     <div
       className={cn(
-        "rounded-xl border bg-card transition-opacity",
-        level === "red" ? "border-rose-500/30" : level === "amber" ? "border-amber-500/25" : "border-border",
-        !isOn && "opacity-70"
+        "rounded-xl border bg-card transition-colors",
+        level === "red" ? "border-rose-500/30" : level === "amber" ? "border-amber-500/25" : "border-border"
       )}
     >
-      <div className="w-full px-4 py-3 flex items-center gap-3">
+      <div className="flex items-start gap-3 p-4">
+        {/* Identity + description + meta. The whole block expands the run history. */}
         <button
           type="button"
           onClick={() => hasRuns && setOpen((v) => !v)}
-          className={cn("flex items-center gap-3 text-left min-w-0 flex-1 -my-1 py-1 rounded-lg", hasRuns && "hover:bg-accent/40")}
+          disabled={!hasRuns}
+          className={cn("min-w-0 flex-1 text-left", !isOn && "opacity-55", hasRuns && "cursor-pointer")}
         >
-          {hasRuns ? <ChevronRight className={cn("w-3.5 h-3.5 text-muted-foreground transition-transform flex-shrink-0", open && "rotate-90")} /> : <span className="w-3.5 flex-shrink-0" />}
-          <HealthDot level={level} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-medium text-foreground truncate">
-              {c.label}
-              {c.critical && <span className="ml-1.5 text-[9.5px] font-semibold uppercase tracking-wide text-amber-600/90 align-middle">core</span>}
-            </p>
-            <p className="text-[12px] text-muted-foreground leading-snug mt-0.5">{c.description}</p>
-            <p className="text-[10.5px] text-muted-foreground/60 font-mono mt-0.5">{c.jobName} · {c.schedule}</p>
+          {/* Header line — everything vertically centred on one row. */}
+          <div className="flex items-center gap-2.5">
+            <HealthDot level={level} />
+            <span className="text-[13.5px] font-semibold text-foreground">{c.label}</span>
+            {c.critical && (
+              <span className="text-[9px] font-bold uppercase tracking-wider text-amber-600 bg-amber-500/10 border border-amber-500/25 rounded px-1 py-px leading-none">
+                core
+              </span>
+            )}
+            <span className={cn("ml-auto text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 leading-none", cls)}>{label}</span>
+          </div>
+
+          {/* Description — own full-width line, aligned under the title. */}
+          <p className="mt-2 pl-5 text-[12.5px] text-muted-foreground leading-relaxed">{c.description}</p>
+
+          {/* Meta footer — technical name + schedule (left), last run + expand (right). */}
+          <div className="mt-2 pl-5 flex items-center gap-2 text-[11px] text-muted-foreground/70">
+            <span className="font-mono truncate">{c.jobName} · {c.schedule}</span>
+            <span className="ml-auto whitespace-nowrap tabular-nums">{lastRunText}</span>
+            {hasRuns && <ChevronRight className={cn("w-3.5 h-3.5 flex-shrink-0 transition-transform", open && "rotate-90")} />}
           </div>
         </button>
-        <div className="text-right flex-shrink-0">
-          <span className={cn("text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5", cls)}>{label}</span>
-          <p className="text-[10.5px] text-muted-foreground/70 mt-1">
-            {!isOn ? "turned off" : c.lastRunAt ? `ran ${rel(c.lastRunAt)}` : "no runs yet"}{isOn ? secs(c.lastDurationMs) : ""}
-          </p>
-        </div>
+
+        {/* Toggle — sibling of the button (never nested), aligned with the header line. */}
         {canToggle && (
-          <Switch checked={isOn} disabled={busy} onChange={(next) => onToggle(c, next)} />
+          <div className="flex-shrink-0 pt-px">
+            <Switch checked={isOn} disabled={busy} onChange={(next) => onToggle(c, next)} />
+          </div>
         )}
       </div>
-      {isOn && c.lastError && <p className="px-4 pb-2.5 -mt-1 text-[11px] text-rose-600/90 break-words">{c.lastError}</p>}
+
+      {isOn && c.lastError && (
+        <p className="pl-9 pr-4 pb-3.5 -mt-1 text-[11px] text-rose-600/90 break-words">{c.lastError}</p>
+      )}
+
       {open && hasRuns && (
-        <div className="bg-muted/20 rounded-b-xl border-t border-border/30">
+        <div className="bg-muted/20 rounded-b-xl border-t border-border/40">
+          <p className="px-4 pt-2.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50">Recent runs</p>
           {c.runs.map((r, i) => (
-            <div key={i} className="px-4 py-1.5 flex items-center gap-3 text-[11px] border-b border-border/20 last:border-0">
-              <span className={cn("w-14 flex-shrink-0 font-medium", r.status === "failed" ? "text-rose-600" : r.status === "ok" ? "text-emerald-600" : "text-amber-600")}>{r.status}</span>
-              <span className="text-muted-foreground flex-1 truncate">{rel(r.at)}{secs(r.durationMs)}</span>
+            <div key={i} className="px-4 py-1.5 flex items-center gap-3 text-[11px] border-t border-border/20">
+              <span className={cn("w-14 flex-shrink-0 font-semibold uppercase text-[10px] tracking-wide", r.status === "failed" ? "text-rose-600" : r.status === "ok" ? "text-emerald-600" : "text-amber-600")}>{r.status}</span>
+              <span className="text-muted-foreground flex-1 truncate tabular-nums">{rel(r.at)}{secs(r.durationMs)}</span>
               {r.error && <span className="text-rose-600/80 flex-shrink-0 max-w-[50%] truncate" title={r.error}>{r.error}</span>}
             </div>
           ))}
