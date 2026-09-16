@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { refreshMercuryBalances } from "@/lib/expenses/mercury-balances";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -28,6 +29,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   after(async () => {
     const startedAt = Date.now();
     const supabase = await createServiceClient();
+    // Paused via the Sync Health toggle → no-op (no run logged; the page shows it "off").
+    if (!(await isCronEnabled(supabase, "mercury-balances"))) return;
     try {
       const { data: conns } = await supabase
         .from("connectors")

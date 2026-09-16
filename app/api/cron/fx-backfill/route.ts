@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { backfillMissingBaseAmounts } from "@/lib/fx/rates";
 import { recordCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 
 export const maxDuration = 60;
 
@@ -23,6 +24,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   after(async () => {
     const supabase = await createServiceClient();
+    // Paused via the Sync Health toggle → no-op (no run logged; the page shows it "off").
+    if (!(await isCronEnabled(supabase, "fx-backfill"))) return;
     try {
       await recordCronRun(supabase, "fx-backfill", async () => {
         const result = await backfillMissingBaseAmounts(supabase, 3000);

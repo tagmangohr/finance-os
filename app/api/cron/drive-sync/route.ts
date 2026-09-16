@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { syncDriveFile } from "@/lib/drive/sync";
 import type { DriveConnection, DriveFile } from "@/lib/drive/types";
 
@@ -30,6 +31,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const supabase = await createServiceClient();
   const startedAt = Date.now();
+
+  // Paused via the Sync Health toggle → no-op (don't log a run; the page shows it "off").
+  if (!(await isCronEnabled(supabase, "drive-sync"))) {
+    return NextResponse.json({ ok: true, skipped: "disabled" });
+  }
 
   // ── Find files due for a check ─────────────────────────────────────────────
   const cutoff = new Date(Date.now() - 55 * 60 * 1000).toISOString();

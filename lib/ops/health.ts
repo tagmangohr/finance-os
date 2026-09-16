@@ -1,4 +1,6 @@
 import type { createServiceClient } from "@/lib/supabase/server";
+import { CRON_BY_NAME, CRON_ORDER } from "@/lib/ops/cron-registry";
+import { getCronEnabledMap } from "@/lib/ops/cron-settings";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 
@@ -36,14 +38,17 @@ export type CronRunLite = {
 export type CronHealth = {
   jobName: string;
   label: string;
+  description: string;
   schedule: string;
+  critical: boolean;       // load-bearing → UI confirms before disabling
+  enabled: boolean;        // false when paused via the Sync Health toggle (cron_settings)
   lastStatus: "ok" | "failed" | "running" | "none";
   lastRunAt: string | null;
   lastDurationMs: number | null;
   lastError: string | null;
   health: "green" | "amber" | "red";
-  /** "ok" | "failed" | "overdue" | "scheduled" — drives the human label. */
-  state: "ok" | "failed" | "overdue" | "scheduled";
+  /** "ok" | "failed" | "overdue" | "scheduled" | "off" — drives the human label. */
+  state: "ok" | "failed" | "overdue" | "scheduled" | "off";
   runs: CronRunLite[]; // recent history, newest first (the audit log)
 };
 
@@ -56,6 +61,7 @@ export type HealthSummary = {
   cronsGreen: number;
   cronsAmber: number;
   cronsRed: number;
+  cronsOff: number;
 };
 
 export type SyncHealthData = {
@@ -72,19 +78,9 @@ const STALE_HOURS = 48; // an active POLLED connector that hasn't synced in this
 // meaningless — flag them only on actual failed/erroring jobs.
 const POLLED_TYPES = new Set(["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "mercury", "google_sheets", "excel"]);
 
-// Every Vercel cron (vercel.json) + the sub-dupe watchdog it runs. `staleHours` is how
-// long after its last run a cron is "overdue"; `dailyish` crons that have simply never
-// run yet read as "scheduled" (neutral) rather than a problem.
-const CRON_META: Record<string, { label: string; schedule: string; staleHours: number; dailyish: boolean }> = {
-  "nightly-sync":      { label: "Nightly reconcile",  schedule: "Daily · 00:30 IST", staleHours: 30, dailyish: true },
-  "mercury-balances":  { label: "Mercury balances",   schedule: "Daily · 00:30 IST", staleHours: 30, dailyish: true },
-  "snapshot":          { label: "Snapshot & rollups", schedule: "Daily · 07:30 IST", staleHours: 30, dailyish: true },
-  "process-sync-jobs": { label: "Sync queue worker",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
-  "deliver-webhooks":  { label: "Outbound webhooks",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
-  "fx-backfill":       { label: "FX backfill",        schedule: "Every 5 minutes",   staleHours: 1, dailyish: false },
-  "drive-sync":        { label: "Drive sync",         schedule: "Hourly",            staleHours: 3, dailyish: false },
-};
-const CRON_ORDER = ["nightly-sync", "mercury-balances", "snapshot", "process-sync-jobs", "deliver-webhooks", "fx-backfill", "drive-sync"];
+// Cron metadata (labels/descriptions/schedule/staleness/critical) + display order now
+// live in lib/ops/cron-registry.ts (CRON_BY_NAME / CRON_ORDER) — one source of truth
+// shared with the toggle API and the client.
 
 const hoursSince = (iso: string | null): number =>
   iso == null ? Infinity : (Date.now() - new Date(iso).getTime()) / 3_600_000;
@@ -162,21 +158,26 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     };
   });
 
-  // System crons — recent run history per job (one small indexed query each).
-  const cronHistories = await Promise.all(
-    CRON_ORDER.map(async (jobName) => {
-      const { data } = await supabase
-        .from("cron_runs")
-        .select("status, started_at, duration_ms, error")
-        .eq("job_name", jobName)
-        .order("started_at", { ascending: false })
-        .limit(8);
-      return [jobName, (data ?? [])] as const;
-    })
-  );
+  // System crons — recent run history per job (one small indexed query each) + the
+  // On/Off state (cron_settings). Default-on: a job with no cron_settings row is enabled.
+  const [cronHistories, enabledMap] = await Promise.all([
+    Promise.all(
+      CRON_ORDER.map(async (jobName) => {
+        const { data } = await supabase
+          .from("cron_runs")
+          .select("status, started_at, duration_ms, error")
+          .eq("job_name", jobName)
+          .order("started_at", { ascending: false })
+          .limit(8);
+        return [jobName, (data ?? [])] as const;
+      })
+    ),
+    getCronEnabledMap(supabase),
+  ]);
 
   const crons: CronHealth[] = cronHistories.map(([jobName, rows]) => {
-    const meta = CRON_META[jobName];
+    const meta = CRON_BY_NAME[jobName];
+    const enabled = enabledMap[jobName] !== false; // default-on
     const runs: CronRunLite[] = rows.map((r) => ({
       status: r.status as string,
       at: r.started_at as string,
@@ -187,7 +188,12 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
 
     let health: CronHealth["health"];
     let state: CronHealth["state"];
-    if (!latest) {
+    if (!enabled) {
+      // Turned OFF via the toggle. Intentional — a neutral "off", never overdue/red, so
+      // a paused job doesn't false-alarm the page or count as a red flag. Its stored
+      // last run (if any) is still shown in the expanded history.
+      state = "off"; health = "green";
+    } else if (!latest) {
       // Never recorded a run. A daily job simply hasn't fired since instrumentation
       // (neutral); a high-frequency job that has NO runs is overdue (should have fired).
       state = meta.dailyish ? "scheduled" : "overdue";
@@ -203,7 +209,10 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     return {
       jobName,
       label: meta.label,
+      description: meta.description,
       schedule: meta.schedule,
+      critical: meta.critical,
+      enabled,
       lastStatus: latest ? (latest.status as CronHealth["lastStatus"]) : "none",
       lastRunAt: latest?.at ?? null,
       lastDurationMs: latest?.durationMs ?? null,
@@ -243,7 +252,7 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     // deploys, before its first tick) is a "watch", not an alarm; a daily cron never
     // alarms on staleness here.
     ...crons
-      .filter((c) => c.state === "failed" || (c.state === "overdue" && c.lastRunAt != null && !CRON_META[c.jobName].dailyish))
+      .filter((c) => c.state === "failed" || (c.state === "overdue" && c.lastRunAt != null && !CRON_BY_NAME[c.jobName].dailyish))
       .map((c) => c.state === "failed"
         ? `Cron "${c.label}" last run failed${c.lastError ? `: ${c.lastError}` : ""}`
         : `Cron "${c.label}" is overdue — last ran ${c.lastRunAt ? new Date(c.lastRunAt).toISOString() : "never"}`),
@@ -256,9 +265,12 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     connectorsAmber: connectorHealth.filter((c) => c.health === "amber").length,
     connectorsRed: connectorHealth.filter((c) => c.health === "red").length,
     cronsTotal: crons.length,
-    cronsGreen: crons.filter((c) => c.health === "green").length,
+    // Off crons are neutral (health "green") — keep them out of the "ok/running" count
+    // and report them separately so the strip stays honest.
+    cronsGreen: crons.filter((c) => c.health === "green" && c.state !== "off").length,
     cronsAmber: crons.filter((c) => c.health === "amber").length,
     cronsRed: crons.filter((c) => c.health === "red").length,
+    cronsOff: crons.filter((c) => c.state === "off").length,
   };
 
   return { connectors: connectorHealth, crons, redFlags, summary, generatedAt: new Date().toISOString() };

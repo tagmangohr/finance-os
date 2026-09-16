@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { recordCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { calculateRevenue } from "@/lib/intelligence/revenue";
 import { calculateRunway } from "@/lib/intelligence/runway";
@@ -46,6 +47,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   const supabase = await createServiceClient();
+
+  // Paused via the Sync Health toggle → no-op (don't log a run; the page shows it "off").
+  if (!(await isCronEnabled(supabase, "snapshot"))) {
+    return NextResponse.json({ ok: true, skipped: "disabled" });
+  }
+
   try {
    const out = await recordCronRun(supabase, "snapshot", async () => {
   // ── Daily self-healing reconciliation (migration 098) ───────────────────────

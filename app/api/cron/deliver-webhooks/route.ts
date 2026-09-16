@@ -5,6 +5,7 @@ import { decryptValue } from "@/lib/crypto/secrets";
 import { buildWebhookPayload, signWebhookBody, type WebhookEventType } from "@/lib/webhooks/contract";
 import { nextBackoffMs } from "@/lib/webhooks/endpoints";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -35,6 +36,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   after(async () => {
     const startedAt = Date.now();
     const supabase = await createServiceClient();
+    // Paused via the Sync Health toggle → no-op (no run logged; the page shows it "off").
+    if (!(await isCronEnabled(supabase, "deliver-webhooks"))) return;
     try {
       const { data: claimed, error } = await supabase.rpc("claim_webhook_deliveries" as never, { p_limit: BATCH } as never);
       if (error) throw new Error(error.message ?? "claim_webhook_deliveries failed");

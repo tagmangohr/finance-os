@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { drainSyncJobs } from "@/lib/connectors/jobs";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 
 export const maxDuration = 60;
 
@@ -33,6 +34,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   after(async () => {
     const startedAt = Date.now();
     const supabase = await createServiceClient();
+    // Paused via the Sync Health toggle → don't drain and don't self-chain (the chain
+    // call, being another invocation of this route, no-ops too). No run logged → "off".
+    if (!(await isCronEnabled(supabase, "process-sync-jobs"))) return;
     try {
       const summary = await drainSyncJobs(supabase, worker);
 

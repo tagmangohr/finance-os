@@ -3,6 +3,7 @@ import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { logCronRun } from "@/lib/ops/cron-runs";
+import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { detectCashfreeSubDoubleCounts } from "@/lib/ops/sub-integrity";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
@@ -46,6 +47,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const supabase = await createServiceClient();
   const startedAt = Date.now();
+
+  // Paused via the Sync Health toggle → no-op (don't log a run; the page shows it "off").
+  if (!(await isCronEnabled(supabase, "nightly-sync"))) {
+    return NextResponse.json({ ok: true, skipped: "disabled" });
+  }
+
   const { data: connectors, error } = await supabase
     .from("connectors")
     .select("*")
