@@ -5,17 +5,16 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Landmark, Search, Download, Sparkles, Wand2, TrendingUp, TrendingDown,
-  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X, ChevronRight,
+  Landmark, Search, Download, Sparkles, Wand2, TrendingDown, Clock,
+  Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X,
   Scissors, Undo2, Plus, Trash2,
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
 import { CustomizableCards, type CardItem } from "@/components/dashboard/customizable-cards";
 import { SectionCard } from "@/components/dashboard/section-card";
-import { FloatingPanel } from "@/components/ui/floating-panel";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
-import type { BankOverview, BankTxn, BankVendorGroup } from "@/lib/expenses/reports";
+import type { BankOverview, BankTxn } from "@/lib/expenses/reports";
 import type { LedgerCategory } from "@/lib/expenses/types";
 import { DateRangePicker } from "@/components/ui/date-range-picker";
 
@@ -52,125 +51,10 @@ const IST_TIME = { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit",
 type Filter = "all" | "expense" | "income" | "excluded" | "review";
 const PAGE = 50;
 
-// ─── Category drill drawer (click an "Expenses by category" row) ───────────────
-// Grouped by VENDOR: each counterparty appears ONCE (total + count) and expands to
-// its transactions, newest first. Vendors ordered by largest spend. No row cap.
-function CategoryDrillDrawer({
-  drill, onClose, from, to,
-}: {
-  drill: { slug: string; label: string; amount: number; count: number } | null;
-  onClose: () => void;
-  from: string;
-  to: string;
-}) {
-  const [groups, setGroups] = useState<BankVendorGroup[]>([]);
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState("");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const open = drill != null;
-
-  useEffect(() => { if (open) { setQuery(""); setExpanded(new Set()); } }, [open, drill?.slug]);
-
-  useEffect(() => {
-    if (!open || !drill) return;
-    let cancelled = false;
-    setLoading(true);
-    setGroups([]);
-    const params = new URLSearchParams({ from, to, category: drill.slug, view: "expense", status: "all" });
-    fetch(`/api/bank/drill-groups?${params.toString()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return;
-        setGroups((d.groups ?? []) as BankVendorGroup[]);
-        setTruncated(Boolean(d.truncated));
-      })
-      .catch(() => { if (!cancelled) setGroups([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [open, drill, from, to]);
-
-  const ql = query.trim().toLowerCase();
-  const shown = ql
-    ? groups.filter((g) => g.name.toLowerCase().includes(ql) || g.txns.some((t) => (t.description ?? "").toLowerCase().includes(ql)))
-    : groups;
-  const txnCount = shown.reduce((s, g) => s + g.count, 0);
-
-  const toggle = (key: string) =>
-    setExpanded((prev) => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; });
-
-  const amt = (n: number, credit: boolean) => `${credit ? "+" : "−"}${inr(Math.abs(n))}`;
-
-  return (
-    <FloatingPanel
-      open={open}
-      onClose={onClose}
-      title={drill?.label ?? ""}
-      subtitle="Expense transactions in range"
-      headerRight={<span className="num text-[13px] font-semibold text-foreground pr-1">{inr(drill?.amount ?? 0)}</span>}
-      search={{ value: query, onChange: setQuery, placeholder: "Search vendor, memo…" }}
-    >
-      <div className="px-4 py-2 border-b border-border sticky top-0 bg-card/95 backdrop-blur z-[1]">
-        <span className="text-[12px] text-muted-foreground">
-          {loading ? "Loading…" : `${shown.length.toLocaleString("en-IN")} vendor${shown.length === 1 ? "" : "s"} · ${txnCount.toLocaleString("en-IN")} transaction${txnCount === 1 ? "" : "s"}`}
-        </span>
-      </div>
-      {loading && <div className="p-4 space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-10 rounded-lg bg-muted/50 animate-pulse" />)}</div>}
-      {!loading && shown.length === 0 && <p className="p-6 text-center text-[12px] text-muted-foreground">{query ? "No matches." : "No transactions."}</p>}
-      {!loading && shown.map((g) => {
-        // A single-transaction entry (a one-off vendor, or a counterparty-less memo)
-        // is shown as a plain row — nothing to expand.
-        if (g.count === 1) {
-          const t = g.txns[0];
-          return (
-            <div key={g.key} className="px-4 py-2 flex items-center gap-3 border-b border-border/40">
-              <div className="min-w-0 flex-1">
-                <p className="text-[12.5px] text-foreground truncate">{g.name}</p>
-                <p className="text-[11px] text-muted-foreground">{t.transaction_date ? formatDate(t.transaction_date) : "—"}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
-              </div>
-              <p className={cn("num text-[12.5px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>{amt(Number(t.amount_base ?? t.amount), t.type === "credit")}</p>
-            </div>
-          );
-        }
-        const isOpen = expanded.has(g.key);
-        return (
-          <div key={g.key} className="border-b border-border/40">
-            <button
-              type="button"
-              onClick={() => toggle(g.key)}
-              className="w-full px-4 py-2 flex items-center gap-2.5 text-left hover:bg-muted/40 transition-colors"
-            >
-              <ChevronRight className={cn("h-3.5 w-3.5 flex-shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
-              <div className="min-w-0 flex-1">
-                <p className="text-[12.5px] text-foreground truncate">{g.name}</p>
-                <p className="text-[11px] text-muted-foreground">{g.count} transactions</p>
-              </div>
-              <p className={cn("num text-[12.5px] font-medium flex-shrink-0", g.amount > 0 ? "text-emerald-600" : "text-foreground")}>{amt(g.amount, g.amount > 0)}</p>
-            </button>
-            {isOpen && (
-              <div className="bg-muted/20">
-                {g.txns.map((t) => (
-                  <div key={t.id} className="pl-11 pr-4 py-1.5 flex items-center gap-3 border-t border-border/30">
-                    <p className="text-[11.5px] text-muted-foreground flex-1">{t.transaction_date ? formatDate(t.transaction_date) : "—"}{t.status && t.status !== "completed" ? ` · ${t.status}` : ""}</p>
-                    <p className={cn("num text-[12px] flex-shrink-0", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>{amt(Number(t.amount_base ?? t.amount), t.type === "credit")}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {!loading && truncated && (
-        <p className="p-4 text-center text-[11px] text-muted-foreground">Showing the first 20,000 transactions.</p>
-      )}
-    </FloatingPanel>
-  );
-}
-
 export function BankClient({ data, hasBankConnector, orgId }: { data: BankOverview; hasBankConnector: boolean; orgId: string }) {
   const router = useRouter();
   const { navigate } = useNavProgress();
-  const { totals, categories, byCategory, runway, accountTypes, cards, reviewCount } = data;
+  const { totals, categories, runway, accountTypes, cards, reviewCount } = data;
   const [qInput, setQInput] = useState(""); // immediate input value
   const [q, setQ] = useState("");           // debounced term used for fetching
   const [filter, setFilter] = useState<Filter>("all");
@@ -233,8 +117,6 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
 
   const [savingId, setSavingId] = useState<string | null>(null);
   const [categorizing, startCategorize] = useTransition();
-  // Category drill drawer (click an "Expenses by category" row → its transactions).
-  const [catDrill, setCatDrill] = useState<{ slug: string; label: string; amount: number; count: number } | null>(null);
 
   // Inline field editor (date / counterparty / description / amount / type).
   const [editRow, setEditRow] = useState<BankTxn | null>(null);
@@ -501,8 +383,6 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
     );
   }
 
-  const maxCat = Math.max(1, ...byCategory.map((c) => c.amount));
-  const catTotal = byCategory.reduce((a, c) => a + c.amount, 0);
   // reviewCount comes from the server aggregate (computed over ALL rows in range),
   // matching the row badge + "Needs review" filter.
 
@@ -547,7 +427,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
           orgId={orgId}
           className="grid grid-cols-2 lg:grid-cols-4 gap-3"
           cards={[
-            { key: "net_pl", label: "Net P&L", node: <MetricCard title="Net P&L" value={inr(totals.net, true)} icon={totals.net >= 0 ? <TrendingUp className="size-4" /> : <TrendingDown className="size-4" />} accentColor={totals.net >= 0 ? "#10b981" : "#f43f5e"} subtitle="Collections + other income − expenses (ties to P&L)" /> },
+            { key: "pending", label: "Pending", node: <MetricCard title="Pending" value={inr(totals.pendingAmount, true)} icon={<Clock className="size-4" />} accentColor="#f59e0b" subtitle={`${totals.pendingCount.toLocaleString("en-IN")} transaction${totals.pendingCount === 1 ? "" : "s"} awaiting settlement`} /> },
             { key: "collections", label: "Collections", node: <MetricCard title="Collections" value={inr(totals.collections, true)} icon={<ArrowUpRight className="size-4" />} subtitle="Revenue (PG + sales), net of refunds & gateway fees" /> },
             { key: "expenses", label: "Expenses", node: <MetricCard title="Expenses" value={inr(totals.expenses, true)} icon={<ArrowDownRight className="size-4" />} accentColor="#f59e0b" subtitle="Categorized bank outflows" /> },
             { key: "other_income", label: "Other income", node: <MetricCard title="Other income" value={inr(totals.otherIncome, true)} icon={<ArrowUpRight className="size-4" />} accentColor="#10b981" subtitle="Non-PG receipts (invoices, interest)" /> },
@@ -559,54 +439,33 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
         />
       </div>
 
-      {/* Expenses by category — clean ranked list, click a row to drill into its transactions */}
-      <SectionCard title="Expenses by category" subtitle={`${byCategory.length} categories · ${inr(catTotal, true)} in range · click any row for its transactions`} className="animate-enter-1">
-        {byCategory.length === 0 ? (
-          <p className="text-xs text-muted-foreground py-6 text-center">No categorized expenses yet — run auto-categorize or classify transactions below.</p>
-        ) : (
-          <div className="-mx-1.5 max-h-[420px] overflow-auto">
-            {byCategory.map((c, i) => {
-              const share = catTotal ? (c.amount / catTotal) * 100 : 0;
-              return (
-                <button
-                  key={c.category}
-                  onClick={() => setCatDrill({ slug: c.category, label: c.label, amount: c.amount, count: c.count })}
-                  className="group w-full flex items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-muted/60 transition-colors"
-                >
-                  <span className="w-4 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground/40">{i + 1}</span>
-                  <span className="w-48 shrink-0 truncate text-[13px] font-medium text-foreground">{c.label}</span>
-                  <div className="flex-1 min-w-[40px] h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full rounded-full bg-amber-500/70" style={{ width: `${(c.amount / maxCat) * 100}%` }} />
-                  </div>
-                  <span className="w-28 shrink-0 text-right tabular-nums text-[13px] font-semibold text-foreground">{inr(c.amount, true)}</span>
-                  <span className="w-11 shrink-0 text-right tabular-nums text-[11.5px] text-muted-foreground">{share.toFixed(0)}%</span>
-                  <span className="w-16 shrink-0 text-right tabular-nums text-[11px] text-muted-foreground/60">{c.count} txns</span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground/25 group-hover:text-muted-foreground transition-colors" />
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </SectionCard>
-
       {/* Transactions */}
       <SectionCard
         title="Transactions"
         subtitle={`${total.toLocaleString("en-IN")} match${loadingRows ? " · loading…" : ""}`}
         action={
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 rounded-lg border border-border bg-background px-2 py-1">
+            <div className="flex items-center gap-1.5 rounded-lg border border-foreground bg-background px-2.5 py-1.5">
               <Search className="size-3.5 text-muted-foreground" />
-              <input value={qInput} onChange={(e) => setQInput(e.target.value)} placeholder="Search counterparty, memo…" className="bg-transparent text-xs outline-none w-40" />
+              <input
+                value={qInput}
+                onChange={(e) => setQInput(e.target.value)}
+                placeholder="Search counterparty, memo…"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                autoComplete="off"
+                className="bg-transparent text-[13px] outline-none w-44"
+              />
             </div>
-            <select value={filter} onChange={(e) => { setFilter(e.target.value as Filter); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+            <select value={filter} onChange={(e) => { setFilter(e.target.value as Filter); setPage(0); }} className="rounded-lg border border-foreground bg-background px-2.5 py-1.5 text-[12.5px] outline-none">
               <option value="all">All</option>
               <option value="expense">Expenses</option>
               <option value="income">Income</option>
               <option value="excluded">Excluded</option>
               <option value="review">Needs review</option>
             </select>
-            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+            <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(0); }} className="rounded-lg border border-foreground bg-background px-2.5 py-1.5 text-[12.5px] outline-none">
               <option value="all">Any status</option>
               <option value="completed">Completed</option>
               <option value="pending">Pending</option>
@@ -614,13 +473,13 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
               <option value="refunded">Refunded</option>
             </select>
             {accountTypes.length > 1 && (
-              <select value={accountFilter} onChange={(e) => { setAccountFilter(e.target.value); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+              <select value={accountFilter} onChange={(e) => { setAccountFilter(e.target.value); setPage(0); }} className="rounded-lg border border-foreground bg-background px-2.5 py-1.5 text-[12.5px] outline-none">
                 <option value="all">All accounts</option>
                 {accountTypes.map((a) => <option key={a} value={a}>{acctLabel(a)}</option>)}
               </select>
             )}
             {cards.length > 0 && (
-              <select value={cardFilter} onChange={(e) => { setCardFilter(e.target.value); setPage(0); }} className="rounded-lg border border-border bg-background px-2 py-1 text-xs outline-none">
+              <select value={cardFilter} onChange={(e) => { setCardFilter(e.target.value); setPage(0); }} className="rounded-lg border border-foreground bg-background px-2.5 py-1.5 text-[12.5px] outline-none">
                 <option value="all">All cards</option>
                 {cards.map((c) => <option key={c} value={c}>{`•• ${c}`}</option>)}
               </select>
@@ -666,9 +525,9 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
           </div>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead><tr className="text-left text-muted-foreground border-b border-border/50">
-              <th className="py-1.5 font-medium w-8">
+          <table className="w-full text-[13px]">
+            <thead><tr className="text-left text-background bg-foreground">
+              <th className="px-2.5 py-2.5 w-8 rounded-l-lg">
                 <input
                   type="checkbox"
                   aria-label="Select all on this page"
@@ -678,26 +537,26 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                   onChange={() => toggleVisible(visibleIds, allVisibleSelected)}
                 />
               </th>
-              <th className="py-1.5 font-medium">Date</th>
-              <th className="font-medium">Time (IST)</th>
-              <th className="font-medium">Counterparty</th>
-              <th className="font-medium">Account</th>
-              <th className="font-medium">Card</th>
-              <th className="font-medium">Description</th>
-              <th className="font-medium text-right">Amount</th>
-              <th className="font-medium text-right">USD</th>
-              <th className="font-medium">Status</th>
-              <th className="font-medium">Category</th>
-              <th className="font-medium">P&L</th>
-              <th className="font-medium">By</th>
-              <th className="font-medium"></th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Date</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Time (IST)</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Counterparty</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Account</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Card</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Description</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap text-right">Amount</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap text-right">USD</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Status</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">Category</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">P&L</th>
+              <th className="px-2.5 py-2.5 font-semibold text-[11px] uppercase tracking-wider whitespace-nowrap">By</th>
+              <th className="px-2.5 py-2.5 rounded-r-lg"></th>
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
                 <tr><td colSpan={14} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
               ) : pageRows.map((t) => (
-                <tr key={t.id} className={cn("border-b border-border/30", selected.has(t.id) ? "bg-primary/[0.06]" : needsReview(t) && "bg-rose-500/[0.03]")}>
-                  <td className="py-1.5">
+                <tr key={t.id} className={cn("border-b border-border/30 transition-colors hover:bg-muted/30", selected.has(t.id) ? "bg-primary/[0.06]" : needsReview(t) && "bg-rose-500/[0.03]")}>
+                  <td className="px-2.5 py-2 align-middle">
                     <input
                       type="checkbox"
                       aria-label="Select transaction"
@@ -706,17 +565,17 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                       onChange={() => toggleOne(t.id)}
                     />
                   </td>
-                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
-                  <td className="py-1.5 whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME) : "—"}</td>
-                  <td className="max-w-[180px] truncate">{t.counterparty_name ?? "—"}</td>
-                  <td className="whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
-                  <td className="whitespace-nowrap text-muted-foreground">
+                  <td className="px-2.5 py-2 align-middle whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleDateString("en-GB", IST_DATE) : formatDate(t.transaction_date)}</td>
+                  <td className="px-2.5 py-2 align-middle whitespace-nowrap text-muted-foreground">{t.transaction_at ? new Date(t.transaction_at).toLocaleTimeString("en-IN", IST_TIME) : "—"}</td>
+                  <td className="px-2.5 py-2 align-middle max-w-[200px] truncate font-medium text-foreground">{t.counterparty_name ?? "—"}</td>
+                  <td className="px-2.5 py-2 align-middle whitespace-nowrap text-muted-foreground">{acctLabel(t.account_type)}</td>
+                  <td className="px-2.5 py-2 align-middle whitespace-nowrap text-muted-foreground">
                     {t.card_last4 ? (
                       <span title={t.card_holder ?? undefined}>•• {t.card_last4}{t.card_holder ? ` · ${t.card_holder.split("@")[0]}` : ""}</span>
                     ) : "—"}
                   </td>
-                  <td className="max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
-                  <td className={cn("text-right tabular-nums whitespace-nowrap", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
+                  <td className="px-2.5 py-2 align-middle max-w-[220px] truncate text-muted-foreground">{t.description ?? "—"}</td>
+                  <td className={cn("px-2.5 py-2 align-middle text-right tabular-nums whitespace-nowrap font-semibold", t.type === "credit" ? "text-emerald-600" : "text-foreground")}>
                     {/* INR column. If a non-INR row hasn't been FX-converted yet
                         (amount_base null), don't stamp ₹ on the raw foreign amount —
                         show "—"; the native-currency column beside it has the real value. */}
@@ -724,15 +583,15 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                       ? "—"
                       : `${t.type === "credit" ? "+" : "−"}${inr(Number(t.amount_base ?? t.amount))}`}
                   </td>
-                  <td className="text-right tabular-nums whitespace-nowrap text-muted-foreground">
+                  <td className="px-2.5 py-2 align-middle text-right tabular-nums whitespace-nowrap text-muted-foreground">
                     {t.currency !== "INR" ? `${t.type === "credit" ? "+" : "−"}${formatCurrency(Number(t.amount), t.currency)}` : "—"}
                   </td>
-                  <td>
-                    <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium capitalize", STATUS_STYLE[t.status] ?? "bg-neutral-500/10 text-neutral-500")}>
+                  <td className="px-2.5 py-2 align-middle">
+                    <span className={cn("inline-block rounded px-2 py-0.5 text-[11px] font-medium capitalize", STATUS_STYLE[t.status] ?? "bg-neutral-500/10 text-neutral-500")}>
                       {t.status}
                     </span>
                   </td>
-                  <td>
+                  <td className="px-2.5 py-2 align-middle">
                     <select
                       value={t.category ?? ""}
                       disabled={savingId === t.id || bulkSaving}
@@ -744,7 +603,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                         if (selected.size > 1 && selected.has(t.id)) applyBulk(e.target.value);
                         else assign(t.id, e.target.value);
                       }}
-                      className={cn("rounded-md border bg-background px-1.5 py-0.5 text-xs outline-none max-w-[160px] disabled:opacity-50", selected.size > 1 && selected.has(t.id) ? "border-primary/50" : "border-border")}
+                      className={cn("rounded-md border bg-background px-2 py-1 text-[12.5px] outline-none max-w-[160px] disabled:opacity-50", selected.size > 1 && selected.has(t.id) ? "border-primary/50" : "border-border")}
                     >
                       <option value="" disabled>{savingId === t.id ? "Saving…" : bulkSaving && selected.has(t.id) ? "Applying…" : selected.size > 1 && selected.has(t.id) ? `Set for ${selected.size} selected…` : "Uncategorized"}</option>
                       {(["expense", "income", "excluded"] as const).map((grp) => (
@@ -754,24 +613,24 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                       ))}
                     </select>
                   </td>
-                  <td>
-                    <span className={cn("inline-block rounded px-1.5 py-0.5 text-[10px] font-medium", TREATMENT_STYLE[t.pnl_treatment ?? "uncategorized"])}>
+                  <td className="px-2.5 py-2 align-middle">
+                    <span className={cn("inline-block rounded px-2 py-0.5 text-[11px] font-medium capitalize", TREATMENT_STYLE[t.pnl_treatment ?? "uncategorized"])}>
                       {t.pnl_treatment ?? "review"}
                     </span>
                   </td>
-                  <td>
+                  <td className="px-2.5 py-2 align-middle">
                     {t.category_source && (
-                      <span className={cn("inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium", SOURCE_STYLE[t.category_source] ?? "bg-neutral-500/10 text-neutral-500")}>
+                      <span className={cn("inline-flex items-center gap-0.5 rounded px-2 py-0.5 text-[11px] font-medium capitalize", SOURCE_STYLE[t.category_source] ?? "bg-neutral-500/10 text-neutral-500")}>
                         {t.category_source === "ai" && <Sparkles className="size-2.5" />}
                         {t.category_source}
                         {t.category_source === "ai" && t.category_confidence != null && ` ${Math.round(t.category_confidence * 100)}%`}
                       </span>
                     )}
                   </td>
-                  <td className="text-right whitespace-nowrap">
+                  <td className="px-2.5 py-2 align-middle text-right whitespace-nowrap">
                     {t.split_parent_id ? (
                       <span className="inline-flex items-center gap-1">
-                        <span className="rounded bg-violet-500/10 text-violet-600 px-1.5 py-0.5 text-[10px] font-medium">part</span>
+                        <span className="rounded bg-violet-500/10 text-violet-600 px-2 py-0.5 text-[11px] font-medium">part</span>
                         <button
                           onClick={() => unsplit(t)}
                           disabled={unsplittingId === t.id}
@@ -959,9 +818,6 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
           </Dialog.Content>
         </Dialog.Portal>
       </Dialog.Root>
-
-      {/* Category drill drawer */}
-      <CategoryDrillDrawer drill={catDrill} onClose={() => setCatDrill(null)} from={data.period.from} to={data.period.to} />
     </div>
   );
 }

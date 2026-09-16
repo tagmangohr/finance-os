@@ -1,5 +1,5 @@
 import { Skeleton } from "@/components/ui/skeleton";
-import { MetricCardsGridSkeleton, ListCardSkeleton, TableCardSkeleton } from "@/components/dashboard/skeletons";
+import { MetricCardsGridSkeleton, TableCardSkeleton } from "@/components/dashboard/skeletons";
 
 /**
  * Mirrors app/dashboard/bank/bank-client.tsx: a header row (date-range picker on
@@ -24,9 +24,7 @@ export default function BankLoading() {
 
       <MetricCardsGridSkeleton count={8} className="grid grid-cols-2 lg:grid-cols-4 gap-3" />
 
-      <ListCardSkeleton rows={8} />
-
-      <TableCardSkeleton rows={8} cols={8} />
+      <TableCardSkeleton rows={10} cols={8} />
     </div>
   );
 }

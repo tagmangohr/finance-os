@@ -50,6 +50,8 @@ export type BankOverview = {
     collections: number;
     net: number;
     txnCount: number;
+    pendingAmount: number; // gross sum of amount_base over status='pending' rows in range
+    pendingCount: number;  // how many pending rows
   };
   byCategory: { category: string; label: string; treatment: string; amount: number; count: number }[];
   accountTypes: string[]; // distinct account_type values (for the Account filter)
@@ -123,12 +125,13 @@ export async function getBankOverview(
   // the RPC returns nothing (e.g. migration 089 not applied yet → empty ledger view).
   type Agg = {
     expenses: number; otherIncome: number; excluded: number; uncategorizedCount: number;
-    txnCount: number; reviewCount: number;
+    txnCount: number; reviewCount: number; pendingAmount: number; pendingCount: number;
     byCategory: { category: string | null; amount: number; count: number }[];
     accountTypes: string[]; cards: string[];
   };
   const agg = ((aggRes as { data: Agg | null }).data ?? {
     expenses: 0, otherIncome: 0, excluded: 0, uncategorizedCount: 0, txnCount: 0, reviewCount: 0,
+    pendingAmount: 0, pendingCount: 0,
     byCategory: [], accountTypes: [], cards: [],
   }) as Agg;
 
@@ -142,6 +145,8 @@ export async function getBankOverview(
     collections,
     net: collections + (Number(agg.otherIncome) || 0) - (Number(agg.expenses) || 0),
     txnCount: Number(agg.txnCount) || 0,
+    pendingAmount: Number(agg.pendingAmount) || 0,
+    pendingCount: Number(agg.pendingCount) || 0,
   };
 
   const byCategory = (agg.byCategory ?? [])
@@ -377,5 +382,7 @@ export const getBankOverviewCached = cachedOrgLoader(
   // FY-start snapshot would keep being served (Next Data Cache persists across
   // deploys up to the TTL). Bump the version to orphan the old entries and force a
   // recompute with the new current-month default.
-  ["bank-overview", "v2-month-default"]
+  // v3: the cached BankOverview now carries totals.pending{Amount,Count}; orphan
+  // pre-pending entries so a stale object can't yield `undefined` on the new card.
+  ["bank-overview", "v3-pending"]
 );
