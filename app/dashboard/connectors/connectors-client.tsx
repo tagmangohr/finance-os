@@ -1187,7 +1187,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const connectedDefs    = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length > 0);
   const notConnectedDefs = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length === 0);
   const hasAnySplit      = connectedDefs.length > 0;
-  const liveCount        = activeConnectors.filter((c) => c.status === "active").length;
   // Origin for the per-account inbound webhook endpoint URLs shown inside each card.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
@@ -1200,10 +1199,8 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
       <div
         key={def.type}
         className={cn(
-          "relative rounded-2xl border bg-card p-5 flex flex-col gap-4 transition-all duration-200 hover:border-border shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
-          hasActive
-            ? "border-emerald-500/20 shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
-            : "border-border/60"
+          "relative rounded-2xl border border-foreground bg-card p-5 flex flex-col gap-4 transition-all duration-200 shadow-[0_1px_3px_rgba(0,0,0,0.4)]",
+          hasActive && "shadow-[0_0_20px_hsl(158_64%_48%/0.08)]"
         )}
         style={{ animationDelay: `${i * 0.04}s` }}
       >
@@ -1410,31 +1407,11 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
   return (
     <div className="space-y-6 max-w-[1400px]">
-      <div className="animate-enter rounded-2xl bg-foreground text-background px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold">Connectors</h1>
-            <p className="text-[13px] text-background/70 mt-0.5">
-              Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
-            </p>
-          </div>
-          <div className="flex items-center gap-6 flex-shrink-0">
-            <div>
-              <p className="text-2xl font-bold tabular-nums leading-none">{connectedDefs.length}</p>
-              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Sources</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold tabular-nums leading-none">{activeConnectors.length}</p>
-              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Accounts</p>
-            </div>
-            <div>
-              <p className="text-2xl font-bold tabular-nums leading-none flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />{liveCount}
-              </p>
-              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Live</p>
-            </div>
-          </div>
-        </div>
+      <div className="animate-enter">
+        <h1 className="text-xl font-bold text-foreground">Connectors</h1>
+        <p className="text-sm text-muted-foreground/70 mt-0.5">
+          Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
+        </p>
       </div>
 
       {/* ── Connected ──────────────────────────────────────────────────────── */}
