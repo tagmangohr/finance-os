@@ -1,48 +1,19 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { RangeBarSkeleton, MetricCardsGridSkeleton, ChartCardSkeleton } from "@/components/dashboard/skeletons";
 
-export default function CashFlowLoading() {
+/**
+ * Mirrors app/dashboard/cashflow/page.tsx: right-aligned range filter, a 4-card
+ * row, then a 2:1 row of the Inflow/Outflow chart + Expense Breakdown chart.
+ */
+export default function CashflowLoading() {
   return (
-    <div className="space-y-6 max-w-[1400px]">
-      <div className="space-y-1">
-        <Skeleton className="h-7 w-32" />
-        <Skeleton className="h-4 w-56" />
-      </div>
+    <div className="space-y-3 max-w-[1400px]">
+      <RangeBarSkeleton />
 
-      <div className="bg-card border rounded-xl p-6 space-y-3">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-72 w-full rounded-lg" />
-      </div>
+      <MetricCardsGridSkeleton count={4} className="grid grid-cols-2 lg:grid-cols-4 gap-3" />
 
-      <div className="space-y-2">
-        <Skeleton className="h-4 w-36" />
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="bg-card border rounded-xl p-6 space-y-3">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-8 w-28" />
-              <Skeleton className="h-3 w-32" />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-card border rounded-xl p-6 space-y-3">
-        <Skeleton className="h-5 w-48" />
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex justify-between items-center">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-4 w-20" />
-              <Skeleton className="h-5 w-16" />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-card border rounded-xl p-6 space-y-3">
-        <Skeleton className="h-5 w-36" />
-        <Skeleton className="h-56 w-full rounded-lg" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <ChartCardSkeleton className="lg:col-span-2" bodyClassName="h-[260px]" />
+        <ChartCardSkeleton bodyClassName="h-[260px]" />
       </div>
     </div>
   );

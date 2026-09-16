@@ -1,20 +1,25 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { PageHeaderSkeleton, MetricCardsGridSkeleton, ChartCardSkeleton } from "@/components/dashboard/skeletons";
 
-export default function Loading() {
+/**
+ * Mirrors app/dashboard/analytics/analytics-client.tsx: "Analytics" title +
+ * subtitle with a right-aligned date-range picker, a 5-card headline row
+ * (CustomizableCards, grid-cols-2 lg:grid-cols-5 — no Customize button now),
+ * then the 2-up grid of chart tiles (lg:grid-cols-2, ~260px each).
+ */
+export default function AnalyticsLoading() {
   return (
     <div className="space-y-3 max-w-[1400px]">
-      <div className="flex items-end justify-between gap-3 flex-wrap">
-        <div className="space-y-2">
-          <Skeleton className="h-6 w-40 rounded" />
-          <Skeleton className="h-4 w-64 rounded" />
-        </div>
-        <Skeleton className="h-8 w-56 rounded-lg" />
-      </div>
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+      <PageHeaderSkeleton withRange subtitle />
+
+      <MetricCardsGridSkeleton count={5} className="grid grid-cols-2 lg:grid-cols-5 gap-3" />
+
+      <div className="grid lg:grid-cols-2 gap-3">
+        <ChartCardSkeleton bodyClassName="h-[260px]" />
+        <ChartCardSkeleton bodyClassName="h-[260px]" />
       </div>
       <div className="grid lg:grid-cols-2 gap-3">
-        {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[300px] rounded-xl" />)}
+        <ChartCardSkeleton bodyClassName="h-[260px]" />
+        <ChartCardSkeleton bodyClassName="h-[260px]" />
       </div>
     </div>
   );

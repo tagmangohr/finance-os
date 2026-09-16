@@ -1,42 +1,19 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { RangeBarSkeleton, MetricCardsGridSkeleton, ChartCardSkeleton, ListCardSkeleton } from "@/components/dashboard/skeletons";
 
+/**
+ * Mirrors app/dashboard/revenue/page.tsx: right-aligned range filter, a 5-card
+ * row, then a 2:1 row of the revenue chart + the Top-Customers panel.
+ */
 export default function RevenueLoading() {
   return (
-    <div className="space-y-6 max-w-[1400px]">
-      <div className="space-y-1">
-        <Skeleton className="h-7 w-32" />
-        <Skeleton className="h-4 w-64" />
-      </div>
+    <div className="space-y-3 max-w-[1400px]">
+      <RangeBarSkeleton />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="bg-card border rounded-xl p-6 space-y-3">
-            <Skeleton className="h-4 w-20" />
-            <Skeleton className="h-8 w-28" />
-            <Skeleton className="h-3 w-32" />
-          </div>
-        ))}
-      </div>
+      <MetricCardsGridSkeleton count={5} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3" />
 
-      <div className="bg-card border rounded-xl p-6 space-y-3">
-        <Skeleton className="h-5 w-40" />
-        <Skeleton className="h-72 w-full rounded-lg" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {Array.from({ length: 2 }).map((_, i) => (
-          <div key={i} className="bg-card border rounded-xl p-6 space-y-3">
-            <Skeleton className="h-5 w-36" />
-            <div className="space-y-2">
-              {Array.from({ length: 6 }).map((_, j) => (
-                <div key={j} className="flex justify-between">
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-20" />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        <ChartCardSkeleton className="lg:col-span-2" bodyClassName="h-64" />
+        <ListCardSkeleton rows={6} />
       </div>
     </div>
   );

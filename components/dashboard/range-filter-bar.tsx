@@ -11,7 +11,18 @@ import { useNavProgress } from "@/components/dashboard/nav-progress";
  * Routes the navigation through NavProgress so the top loading bar shows while the
  * server refetches — a search-param change never triggers loading.tsx on its own.
  */
-export function RangeFilterBar({ basePath, from, to }: { basePath: string; from: string; to: string }) {
+export function RangeFilterBar({
+  basePath,
+  from,
+  to,
+  variant = "dark",
+}: {
+  basePath: string;
+  from: string;
+  to: string;
+  /** Trigger styling — defaults to the solid black treatment (Dashboard/Revenue/Cash Flow). */
+  variant?: "default" | "dark";
+}) {
   const { navigate } = useNavProgress();
   const today = new Date().toISOString().slice(0, 10);
   return (
@@ -20,6 +31,7 @@ export function RangeFilterBar({ basePath, from, to }: { basePath: string; from:
       to={to}
       max={today}
       align="end"
+      variant={variant}
       onChange={(f, t) => navigate(`${basePath}?from=${f}&to=${t}`)}
     />
   );

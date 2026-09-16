@@ -286,11 +286,21 @@ export const METRICS: MetricDef[] = [
 
 export const METRICS_BY_KEY: Record<string, MetricDef> = Object.fromEntries(METRICS.map((m) => [m.key, m]));
 
-/** Default pinned metrics for a new user (ordered by importance). */
+/**
+ * Default pinned metrics for a new user (ordered by importance).
+ * A non-customized user sees the first DEFAULT_VISIBLE_COUNT of these; the rest
+ * stay pinned-but-available and everything else lives in the Customize catalog.
+ */
 export const DEFAULT_PINNED = [
-  "revenue_mtd", "mrr_runrate", "arr", "net_revenue_mtd",
-  "success_rate", "paying_customers", "aov", "cash_balance",
-  "refund_rate", "gross_volume_90d",
+  // Revenue & growth
+  "revenue_mtd", "net_revenue_mtd", "mrr_runrate", "arr", "ytd_revenue",
+  "mom_growth", "yoy_growth", "gross_volume_90d",
+  // Payment health
+  "success_rate", "aov", "refund_rate", "refund_amount",
+  // Customers
+  "paying_customers", "new_customers", "churn_rate",
+  // Cash, burn & profit
+  "cash_balance", "net_burn", "runway", "net_profit", "gross_margin",
 ];
-export const DEFAULT_VISIBLE_COUNT = 6;
+export const DEFAULT_VISIBLE_COUNT = 20;
 export const VISIBLE_COUNT_OPTIONS = [4, 6, 8, 10, 15, 20];
