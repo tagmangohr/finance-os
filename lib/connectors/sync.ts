@@ -473,7 +473,39 @@ export async function persistTransactions(
   const out = { inserted: 0, updated: 0, skipped: 0 };
   if (transactions.length === 0) return out;
 
-  const rows = toInsertRows(orgId, connectorId, transactions);
+  const allRows = toInsertRows(orgId, connectorId, transactions);
+
+  // ── BULLETPROOF REVENUE GUARD ───────────────────────────────────────────────
+  // Never persist a NON-TERMINAL payment CHARGE. A "pending" payment carries no
+  // revenue (every rollup counts status IN ('completed','refunded') only) AND reliably
+  // strands as a phantom: the settled charge always arrives later as its own TERMINAL
+  // event (completed/failed), frequently under a different gateway id, so the pending
+  // row is never resolved and just accumulates. This is exactly how Cashfree
+  // subscription lifecycle events (SUBSCRIPTION_AUTH_STATUS / *_NOTIFICATION_* /
+  // *_EXECUTION_STATUS while still INITIALIZED/PENDING) and Razorpay "created" attempts
+  // flooded the ledger with thousands of stuck "pending" rows.
+  //
+  // This is THE single chokepoint every ingest path funnels through (webhooks, the
+  // resumable queue, backfills, pollers, settlement recon), so guarding here covers
+  // every gateway and every path at once. Scoped tightly to the PAYMENTS ledger AND
+  // the payment CHARGE bucket:
+  //   • ledger === 'payments' — a BANK-ledger row (Mercury/Brex) may sit legitimately
+  //     "pending" for days (ACH/wire/card auth) and MUST be shown in the Bank feed, so
+  //     it is never dropped. (categorizeSource("mercury") is "payment", so the ledger
+  //     scope is what protects bank rows.)
+  //   • categorizeSource(source) === 'payment' — disputes ("open"/"under_review") and
+  //     payouts/settlements ("in transit") legitimately use pending and are preserved.
+  // A charge that is only ever momentarily pending is not lost: its terminal event books it.
+  const isDropPending = (r: (typeof allRows)[number]) =>
+    r.status === "pending" && (r.ledger ?? "payments") === "payments" && categorizeSource(r.source) === "payment";
+  const rows = allRows.filter((r) => !isDropPending(r));
+  const droppedPending = allRows.length - rows.length;
+  if (droppedPending > 0) {
+    out.skipped += droppedPending;
+    console.warn(`[sync] dropped ${droppedPending} non-terminal ${allRows.find(isDropPending)?.source ?? "?"} payment charge(s) — pending charges are never persisted (revenue guard)`);
+  }
+  if (rows.length === 0) return out;
+
   // Canary: a payment-ledger credit with NO customer identity at all (no label AND no
   // email in metadata) is unsearchable by customer — the gap this file's backstop exists
   // to prevent. If a normalizer still produces one, surface it in logs so a new/changed

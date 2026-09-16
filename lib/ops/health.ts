@@ -244,6 +244,27 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     }
   } catch { /* watchdog is best-effort; never fail the health page on it */ }
 
+  // Payment-pending watchdog. The persist-layer revenue guard means a non-terminal
+  // payment CHARGE should never be stored — this reads last night's count and flags if
+  // any stranded "pending" charges reappear for this org (a regression the guard should
+  // have blocked). Small dispute/settlement pending is excluded at the watchdog itself.
+  let pendingFlag: string | null = null;
+  try {
+    const { data: watch } = await supabase
+      .from("cron_runs")
+      .select("meta")
+      .eq("job_name", "payment-pending-watch")
+      .eq("status", "ok")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const byOrg = ((watch?.meta as { byOrg?: Record<string, number> } | null)?.byOrg) ?? {};
+    const n = byOrg[orgId] ?? 0;
+    if (n > 0) {
+      pendingFlag = `${n} stranded "pending" payment charge${n === 1 ? "" : "s"} detected — these carry no revenue but shouldn't exist (the ingest guard drops non-terminal charges). A path may be bypassing it; check the Cashfree/Razorpay sync.`;
+    }
+  } catch { /* best-effort */ }
+
   const redFlags: string[] = [
     ...connectorHealth.filter((c) => c.health === "red").map((c) => `${c.name ?? c.type}: ${c.reason}`),
     // A failed cron is always a red flag. An overdue high-frequency cron is a red flag
@@ -257,6 +278,7 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
         ? `Cron "${c.label}" last run failed${c.lastError ? `: ${c.lastError}` : ""}`
         : `Cron "${c.label}" is overdue — last ran ${c.lastRunAt ? new Date(c.lastRunAt).toISOString() : "never"}`),
     ...(subDupeFlag ? [subDupeFlag] : []),
+    ...(pendingFlag ? [pendingFlag] : []),
   ];
 
   const summary: HealthSummary = {

@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { logCronRun } from "@/lib/ops/cron-runs";
 import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { detectCashfreeSubDoubleCounts } from "@/lib/ops/sub-integrity";
+import { categorizeSource } from "@/lib/finance/transaction-status";
 import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
@@ -166,6 +167,67 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const worker = randomUUID();
   after(async () => {
     const sb = await createServiceClient();
+
+    // ── Integrity watchdogs FIRST ─────────────────────────────────────────────
+    // Read-only checks that run BEFORE the heavy reconciliation below, so they always
+    // complete and record to cron_runs even if a later phase exhausts the 300s budget.
+    // (sub-dupe-watch previously sat at the very tail and, when the tail was starved,
+    // never actually ran — its "no runs" on Sync Health is what surfaced this.)
+
+    // Payment-pending watchdog. After the persistTransactions revenue guard, NO new
+    // non-terminal payment CHARGE should ever be stored. Count any that remain, per org,
+    // so a regression (some path bypassing the guard) is caught and surfaced on Sync
+    // Health instead of silently re-accumulating. Payment charges only — pending
+    // disputes ("open") and settlements ("in transit") are legitimate and excluded.
+    {
+      const wStart = Date.now();
+      try {
+        const orgIds = Array.from(new Set((connectors as ConnectorRow[]).map((c) => c.org_id)));
+        const byOrg: Record<string, number> = {};
+        for (const oid of orgIds) {
+          const { data: pend } = await sb.from("transactions").select("source")
+            .eq("org_id", oid).eq("ledger", "payments").eq("status", "pending").limit(5000);
+          const n = (pend ?? []).filter((r) => categorizeSource(r.source as string) === "payment").length;
+          if (n > 0) byOrg[oid] = n;
+        }
+        const total = Object.values(byOrg).reduce((a, b) => a + b, 0);
+        await logCronRun(sb, "payment-pending-watch", wStart, "ok", null, { total, byOrg });
+        if (total) console.warn(`[cron/nightly-sync] ⚠ ${total} stranded payment-charge 'pending' row(s) across ${Object.keys(byOrg).length} org(s)`);
+      } catch (e) {
+        await logCronRun(sb, "payment-pending-watch", wStart, "failed", e instanceof Error ? e.message : String(e));
+      }
+    }
+
+    // Cashfree recurring-charge double-count watchdog (last 30 days). Read-only, non-fatal.
+    // The dedup invariant (cf_pay_<cf_txn_id> collapses webhook/poller/recon onto one row)
+    // is validated at 0 across full history; this catches a future regression. Scanned
+    // PER-ORG (only orgs with a Cashfree connector) so each query hits an org_id-leading
+    // index. Recorded to cron_runs; the Sync Health page surfaces any finding as a red flag.
+    {
+      const wStart = Date.now();
+      try {
+        const cfOrgIds = Array.from(new Set(cashfreeConnectors.map((c) => c.org_id)));
+        const byOrg: Record<string, number> = {};
+        const sample: Awaited<ReturnType<typeof detectCashfreeSubDoubleCounts>>["groups"] = [];
+        let scanned = 0;
+        for (const oid of cfOrgIds) {
+          const dupes = await detectCashfreeSubDoubleCounts(sb, { orgId: oid, sinceDays: 30 });
+          scanned += dupes.scanned;
+          if (dupes.groups.length) {
+            byOrg[oid] = dupes.groups.length;
+            for (const g of dupes.groups.slice(0, 5)) if (sample.length < 5) sample.push(g);
+          }
+        }
+        const offending = Object.values(byOrg).reduce((a, b) => a + b, 0);
+        await logCronRun(sb, "sub-dupe-watch", wStart, "ok", null, { scanned, offending, byOrg, sample });
+        if (offending) console.error(`[cron/nightly-sync] ⚠ ${offending} possible subscription double-count group(s) in last 30d`);
+      } catch (e) {
+        await logCronRun(sb, "sub-dupe-watch", wStart, "failed", e instanceof Error ? e.message : String(e));
+        console.error("[cron/nightly-sync] sub-dupe watch failed:", e);
+      }
+    }
+
+    // ── Heavy reconciliation ──────────────────────────────────────────────────
     try {
       await drainSyncJobs(sb, worker);
     } catch (e) {
@@ -231,37 +293,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
       }
     }
-    // Cashfree recurring-charge double-count watchdog (last 30 days). Read-only, non-fatal.
-    // The dedup invariant (cf_pay_<cf_txn_id> collapses webhook/poller/recon onto one row)
-    // is validated at 0 across full history; this catches a future regression. Scanned
-    // PER-ORG (only orgs with a Cashfree connector) so each query hits an org_id-leading
-    // index instead of full-scanning the whole transactions table. Recorded to cron_runs;
-    // the Sync Health page surfaces any finding as a red flag.
-    {
-      const wStart = Date.now();
-      try {
-        const cfOrgIds = Array.from(new Set(cashfreeConnectors.map((c) => c.org_id)));
-        const byOrg: Record<string, number> = {};
-        const sample: Awaited<ReturnType<typeof detectCashfreeSubDoubleCounts>>["groups"] = [];
-        let scanned = 0;
-        for (const oid of cfOrgIds) {
-          const dupes = await detectCashfreeSubDoubleCounts(sb, { orgId: oid, sinceDays: 30 });
-          scanned += dupes.scanned;
-          if (dupes.groups.length) {
-            byOrg[oid] = dupes.groups.length;
-            for (const g of dupes.groups.slice(0, 5)) if (sample.length < 5) sample.push(g);
-          }
-        }
-        const offending = Object.values(byOrg).reduce((a, b) => a + b, 0);
-        await logCronRun(sb, "sub-dupe-watch", wStart, "ok", null, { scanned, offending, byOrg, sample });
-        if (offending) {
-          console.error(`[cron/nightly-sync] ⚠ ${offending} possible subscription double-count group(s) in last 30d`);
-        }
-      } catch (e) {
-        await logCronRun(sb, "sub-dupe-watch", wStart, "failed", e instanceof Error ? e.message : String(e));
-        console.error("[cron/nightly-sync] sub-dupe watch failed:", e);
-      }
-    }
+    // (Integrity watchdogs — sub-dupe-watch + payment-pending-watch — now run at the
+    // TOP of this after() so they always execute, even if the heavy phases above are
+    // starved by the function budget.)
   });
 
   await logCronRun(supabase, "nightly-sync", startedAt, "ok", null, {
