@@ -482,81 +482,6 @@ const GATEWAY_LABEL: Record<string, string> = {
   paytm: "Paytm", easebuzz: "Easebuzz", app_store: "Apple App Store", mercury: "Mercury", brex: "Brex",
 };
 
-/**
- * Webhook endpoint reference — shown for EVERY org, even before any connector is
- * added. Each supported gateway lists its URL + the events to enable + a setup
- * note. A connected account shows its account-specific tokenized URL (…?c=token)
- * so events route to that exact connector; a gateway with no connector yet shows
- * the base URL as a template (dashed) with a note that the tokenized URL appears
- * once the connector is added (the token — and the webhook secret needed to verify
- * events — only exist after the connector is created).
- */
-function WebhookEndpoints({ connectors }: { connectors: Connector[] }) {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const types = Object.keys(WEBHOOK_INFO);
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Webhook className="h-3.5 w-3.5 text-muted-foreground/70" />
-        <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Webhook endpoints</span>
-        <div className="flex-1 h-px bg-accent/40" />
-      </div>
-      <p className="text-xs text-muted-foreground/70">
-        Set these on each gateway&apos;s dashboard and subscribe to the listed events. Each connected account gets its own tokenized URL so events route to the right connector; add a connector above to generate its account-specific URL.
-      </p>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {types.flatMap((type) => {
-          const info = WEBHOOK_INFO[type];
-          const label = GATEWAY_LABEL[type] ?? type;
-          const conns = connectors.filter((c) => c.type === type);
-
-          const EventChips = (
-            <div className="flex flex-wrap gap-1">
-              {info.events.map((e) => (
-                <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
-              ))}
-            </div>
-          );
-
-          if (conns.length === 0) {
-            // Not connected yet — template reference card.
-            const url = `${origin}${info.path}`;
-            return [(
-              <div key={type} className="rounded-xl border border-dashed border-border bg-accent/15 p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-foreground truncate">{label}</span>
-                  <span className="text-[9.5px] uppercase tracking-wide rounded bg-muted px-1.5 py-0.5 text-muted-foreground/70 flex-shrink-0">not connected</span>
-                </div>
-                <CopyField value={url} />
-                {EventChips}
-                <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">
-                  Add the {label} connector above to get your account-specific URL (<span className="font-mono">…?c=token</span>). {info.note}
-                </p>
-              </div>
-            )];
-          }
-
-          return conns.map((c) => {
-            const token = (c as { webhook_token?: string }).webhook_token;
-            const url = `${origin}${info.path}${token ? `?c=${token}` : ""}`;
-            return (
-              <div key={c.id} className="rounded-xl border border-border bg-accent/30 p-3 space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-foreground truncate">{c.name}</span>
-                  <span className="text-[9.5px] uppercase tracking-wide rounded bg-success/15 text-success px-1.5 py-0.5 flex-shrink-0">connected</span>
-                </div>
-                <CopyField value={url} />
-                {EventChips}
-                <p className="text-[10.5px] text-muted-foreground/70 leading-relaxed">{info.note}</p>
-              </div>
-            );
-          });
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children }: ConnectorsClientProps) {
   const [activeConnectors, setActiveConnectors] = React.useState<Connector[]>(connectors);
 
@@ -1262,6 +1187,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   const connectedDefs    = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length > 0);
   const notConnectedDefs = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length === 0);
   const hasAnySplit      = connectedDefs.length > 0;
+  const liveCount        = activeConnectors.filter((c) => c.status === "active").length;
+  // Origin for the per-account inbound webhook endpoint URLs shown inside each card.
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
 
   /** Renders a single connector card by its def */
   const renderCard = (def: ConnectorDef, i: number) => {
@@ -1331,6 +1259,12 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
               const showSweep = determinatePct == null && (backfillActive || syncingId === inst.id);
 
               const isConfirming = confirmRemove?.id === inst.id;
+
+              // Inbound webhook endpoint for THIS account (per-connector token) —
+              // shown inside the card so every connection can grab its own URL.
+              const wh = WEBHOOK_INFO[inst.type];
+              const whToken = (inst as { webhook_token?: string }).webhook_token;
+              const whUrl = wh ? `${origin}${wh.path}${whToken ? `?c=${whToken}` : ""}` : null;
 
               return (
                 <div
@@ -1429,6 +1363,18 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                     </div>
                   )}
 
+                  {/* Per-account inbound webhook endpoint — each connection gets its
+                      own tokenized URL (…?c=token) to copy into the gateway. */}
+                  {whUrl && !isConfirming && (
+                    <div className="px-3 pb-2.5 pt-0.5 space-y-1">
+                      <div className="flex items-center gap-1.5">
+                        <Webhook className="h-3 w-3 text-muted-foreground/50" />
+                        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">Webhook endpoint</span>
+                      </div>
+                      <CopyField value={whUrl} />
+                    </div>
+                  )}
+
                   {/* Live sync progress — a filling line on the card's bottom edge.
                       Determinate (fills to %) for queued backfills; indeterminate
                       sweep for quick inline syncs (link / "sync latest"). */}
@@ -1464,11 +1410,31 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
   return (
     <div className="space-y-6 max-w-[1400px]">
-      <div className="animate-enter">
-        <h1 className="text-xl font-bold text-foreground">Connectors</h1>
-        <p className="text-sm text-muted-foreground/70 mt-0.5">
-          Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
-        </p>
+      <div className="animate-enter rounded-2xl bg-foreground text-background px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold">Connectors</h1>
+            <p className="text-[13px] text-background/70 mt-0.5">
+              Connect payment gateways, accounting tools, and cloud storage — multiple accounts per source supported
+            </p>
+          </div>
+          <div className="flex items-center gap-6 flex-shrink-0">
+            <div>
+              <p className="text-2xl font-bold tabular-nums leading-none">{connectedDefs.length}</p>
+              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Sources</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums leading-none">{activeConnectors.length}</p>
+              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Accounts</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums leading-none flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />{liveCount}
+              </p>
+              <p className="text-[10px] uppercase tracking-wider text-background/60 mt-1">Live</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── Connected ──────────────────────────────────────────────────────── */}
@@ -1502,9 +1468,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
           {notConnectedDefs.map((def, i) => renderCard(def, i))}
         </div>
       </div>
-
-      {/* ── Webhook endpoints (per-account URL + events) ──────────────────── */}
-      <WebhookEndpoints connectors={activeConnectors} />
 
       {/* ── Cloud storage section (injected from page.tsx) ─────────────────── */}
       {children && (
@@ -1795,20 +1758,28 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
                   {/* Webhook connector: show the endpoint URL + the provider's own
                       setup note and captured events (keyed by type — NOT hardcoded
-                      to any one provider, so Brex/Mercury/App Store each show their
-                      own instructions). */}
-                  {openModal?.webhookPath && (() => {
+                      to any one provider). Shown for EVERY webhook-capable gateway so
+                      each connection can grab its endpoint while being added/edited;
+                      when editing an existing account it shows that account's own
+                      tokenized URL (…?c=token). */}
+                  {openModal && WEBHOOK_INFO[openModal.type] && (() => {
                     const wh = WEBHOOK_INFO[openModal.type];
                     const label = GATEWAY_LABEL[openModal.type] ?? "the provider";
+                    const whOrigin = typeof window !== "undefined" ? window.location.origin : "";
+                    const editToken = editingConnector ? (editingConnector as { webhook_token?: string }).webhook_token : undefined;
+                    const url = `${whOrigin}${wh.path}${editToken ? `?c=${editToken}` : ""}`;
                     return (
                       <div className="rounded-lg border border-border bg-accent/30 p-3 space-y-1.5">
-                        <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Webhook setup</p>
+                        <p className="text-[11px] font-semibold text-foreground uppercase tracking-wide">Webhook endpoint</p>
                         <p className="text-xs text-muted-foreground/80 leading-relaxed">
                           Register this URL with <span className="text-foreground">{label}</span> to receive events in real time:
                         </p>
-                        <code className="block text-[11px] break-all rounded bg-background/60 border border-border px-2 py-1.5 text-foreground select-all">
-                          {(typeof window !== "undefined" ? window.location.origin : "")}{openModal.webhookPath}
-                        </code>
+                        <CopyField value={url} />
+                        {!editToken && (
+                          <p className="text-[10.5px] text-muted-foreground/60 leading-relaxed">
+                            This account&apos;s own tokenized URL (<span className="font-mono">…?c=token</span>) is shown on its card once saved.
+                          </p>
+                        )}
                         {wh?.note && (
                           <p className="text-[11px] text-muted-foreground/70 leading-relaxed">{wh.note}</p>
                         )}

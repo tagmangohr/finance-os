@@ -75,13 +75,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Last login is free from Supabase auth.
+  // Last login is free from Supabase auth — BUT only disclose it for a user who
+  // actually belongs to THIS org. Without this scope check, an admin of org A
+  // could learn any user's last_sign_in_at by passing that user's auth uuid, even
+  // if the user is only a member of org B (cross-tenant PII leak).
   let lastSignInAt: string | null = null;
   if (userId) {
-    try {
-      const { data: authUser } = await service.auth.admin.getUserById(userId);
-      lastSignInAt = authUser?.user?.last_sign_in_at ?? null;
-    } catch { /* ignore */ }
+    const [{ data: memberRow }, { data: orgRow }] = await Promise.all([
+      service.from("org_members").select("id").eq("org_id", orgId).eq("user_id", userId).limit(1).maybeSingle(),
+      service.from("organizations").select("owner_id").eq("id", orgId).maybeSingle(),
+    ]);
+    const belongsToOrg = !!memberRow || orgRow?.owner_id === userId;
+    if (belongsToOrg) {
+      try {
+        const { data: authUser } = await service.auth.admin.getUserById(userId);
+        lastSignInAt = authUser?.user?.last_sign_in_at ?? null;
+      } catch { /* ignore */ }
+    }
   }
 
   // Events: things this member did (actor) + permission changes done to them (target).
