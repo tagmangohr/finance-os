@@ -1,12 +1,23 @@
 "use client";
 
 import * as React from "react";
-import { Copy, Check, Trash2, Plus, KeyRound, AlertTriangle, SlidersHorizontal } from "lucide-react";
+import { Copy, Check, Trash2, Plus, KeyRound, AlertTriangle, SlidersHorizontal, Webhook, Send, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ApiKey = {
   id: string; name: string; key_prefix: string; scopes: string[];
   created_at: string; last_used_at: string | null; revoked_at: string | null;
+};
+
+type WebhookEndpoint = {
+  id: string; url: string; description: string | null; enabled: boolean;
+  event_types: string[]; enabled_at: string; created_at: string;
+};
+
+type WebhookDelivery = {
+  id: string; endpoint_id: string; event_id: string; transaction_id: string | null;
+  event_type: string; status: string; attempts: number; response_code: number | null;
+  last_error: string | null; delivered_at: string | null; next_attempt_at: string; created_at: string;
 };
 
 export type ConnectorToggle = {
@@ -79,6 +90,66 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
   const revoke = async (id: string) => {
     await fetch(`/api/settings/api-keys?id=${id}`, { method: "DELETE" });
     await load();
+  };
+
+  // ── Outbound webhooks ────────────────────────────────────────────
+  const [endpoints, setEndpoints] = React.useState<WebhookEndpoint[]>([]);
+  const [deliveries, setDeliveries] = React.useState<WebhookDelivery[]>([]);
+  const [whLoading, setWhLoading] = React.useState(true);
+  const [newUrl, setNewUrl] = React.useState("");
+  const [newDesc, setNewDesc] = React.useState("");
+  const [addingWh, setAddingWh] = React.useState(false);
+  const [whError, setWhError] = React.useState<string | null>(null);
+  const [freshSecret, setFreshSecret] = React.useState<string | null>(null); // shown once
+  const [testMsg, setTestMsg] = React.useState<{ id: string; text: string; ok: boolean } | null>(null);
+
+  const loadWebhooks = React.useCallback(async () => {
+    setWhLoading(true);
+    try {
+      const [e, d] = await Promise.all([
+        fetch("/api/webhooks/endpoints").then((r) => r.json()),
+        fetch("/api/webhooks/deliveries").then((r) => r.json()),
+      ]);
+      setEndpoints(e.endpoints ?? []);
+      setDeliveries(d.deliveries ?? []);
+    } finally { setWhLoading(false); }
+  }, []);
+  React.useEffect(() => { void loadWebhooks(); }, [loadWebhooks]);
+
+  const addEndpoint = async () => {
+    setAddingWh(true); setWhError(null); setFreshSecret(null);
+    try {
+      const r = await fetch("/api/webhooks/endpoints", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: newUrl, description: newDesc }),
+      });
+      const d = await r.json();
+      if (!r.ok) { setWhError(d.error ?? "Could not add endpoint"); return; }
+      setFreshSecret(d.secret); setNewUrl(""); setNewDesc("");
+      await loadWebhooks();
+    } finally { setAddingWh(false); }
+  };
+  const toggleEndpoint = async (id: string, enabled: boolean) => {
+    setEndpoints((prev) => prev.map((e) => (e.id === id ? { ...e, enabled } : e)));
+    const r = await fetch(`/api/webhooks/endpoints?id=${id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }),
+    });
+    if (!r.ok) setEndpoints((prev) => prev.map((e) => (e.id === id ? { ...e, enabled: !enabled } : e)));
+  };
+  const removeEndpoint = async (id: string) => {
+    await fetch(`/api/webhooks/endpoints?id=${id}`, { method: "DELETE" });
+    await loadWebhooks();
+  };
+  const sendTest = async (id: string) => {
+    setTestMsg({ id, text: "Sending…", ok: true });
+    const r = await fetch(`/api/webhooks/endpoints/test?id=${id}`, { method: "POST" });
+    const d = await r.json();
+    setTestMsg({ id, text: d.ok ? `Delivered (HTTP ${d.status})` : `Failed: ${d.error ?? `HTTP ${d.status}`}`, ok: !!d.ok });
+    setTimeout(() => setTestMsg((m) => (m?.id === id ? null : m)), 4000);
+  };
+  const retryDelivery = async (id: string) => {
+    await fetch(`/api/webhooks/deliveries?id=${id}`, { method: "POST" });
+    await loadWebhooks();
   };
 
   // Flip one connector's income/expense switch. Optimistic; reverts on failure.
@@ -185,6 +256,89 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
             </div>
           ))}
         </div>
+      </section>
+
+      {/* ── Outbound webhooks ────────────────────────────────────── */}
+      <section className="rounded-xl border border-border bg-card p-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Webhook className="h-4 w-4 text-muted-foreground" />
+          <div>
+            <h2 className="text-[14px] font-semibold text-foreground">Outbound webhooks</h2>
+            <p className="text-[12px] text-muted-foreground/80">Push every payment (plus its refunds and status changes) to an external URL in real time — signed, retried, and auditable. Forward-only from when you add the endpoint.</p>
+          </div>
+        </div>
+
+        {/* add endpoint */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <input value={newUrl} onChange={(e) => setNewUrl(e.target.value)} placeholder="https://colleague-dashboard.com/webhooks/finance-os"
+              className="flex-1 h-9 px-3 rounded-lg border border-border bg-background text-[12.5px] focus:outline-none focus:border-primary" />
+            <button onClick={addEndpoint} disabled={addingWh || !newUrl.trim()}
+              className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-primary text-primary-foreground text-[12.5px] font-medium hover:bg-primary/90 disabled:opacity-60">
+              <Plus className="h-3.5 w-3.5" /> {addingWh ? "Adding…" : "Add endpoint"}
+            </button>
+          </div>
+          <input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="Label (optional) — e.g. Colleague's dashboard"
+            className="w-full h-8 px-3 rounded-lg border border-border bg-background text-[12px] focus:outline-none focus:border-primary" />
+          {whError && <p className="text-[11.5px] text-destructive">{whError}</p>}
+        </div>
+
+        {/* fresh signing secret — shown once */}
+        {freshSecret && (
+          <div className="rounded-lg border border-warning/30 bg-warning/[0.06] p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
+              <AlertTriangle className="h-3.5 w-3.5 text-warning" /> Signing secret — copy it now, it won&apos;t be shown again.
+            </div>
+            <Copyable value={freshSecret} />
+            <p className="text-[11px] text-muted-foreground/70">Your colleague verifies each request: HMAC-SHA256 of <code className="text-foreground">&quot;&#123;t&#125;.&#123;body&#125;&quot;</code> with this secret, compared to the <code className="text-foreground">X-FinanceOS-Signature</code> header (<code className="text-foreground">t=&lt;unix&gt;,v1=&lt;hex&gt;</code>).</p>
+          </div>
+        )}
+
+        {/* endpoints */}
+        <div className="space-y-2">
+          {whLoading && <p className="text-[12px] text-muted-foreground">Loading…</p>}
+          {!whLoading && endpoints.length === 0 && <p className="text-[12px] text-muted-foreground/70">No endpoints yet.</p>}
+          {endpoints.map((ep) => (
+            <div key={ep.id} className="rounded-lg border border-border bg-accent/30 px-3 py-2.5 space-y-1.5">
+              <div className="flex items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] font-medium text-foreground truncate">{ep.description || ep.url}</p>
+                  {ep.description && <p className="text-[11px] text-muted-foreground/70 truncate font-mono">{ep.url}</p>}
+                </div>
+                <div className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+                  <span className={cn(ep.enabled ? "text-foreground" : "text-muted-foreground/50")}>{ep.enabled ? "Enabled" : "Paused"}</span>
+                  <Switch checked={ep.enabled} onChange={(v) => toggleEndpoint(ep.id, v)} />
+                </div>
+                <button onClick={() => sendTest(ep.id)} className="p-1.5 rounded-lg border border-border hover:bg-muted flex-shrink-0" title="Send test event"><Send className="h-3.5 w-3.5 text-muted-foreground" /></button>
+                <button onClick={() => removeEndpoint(ep.id)} className="p-1.5 rounded-lg text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 flex-shrink-0" title="Delete"><Trash2 className="h-3.5 w-3.5" /></button>
+              </div>
+              {testMsg?.id === ep.id && <p className={cn("text-[11px]", testMsg.ok ? "text-success" : "text-destructive")}>{testMsg.text}</p>}
+            </div>
+          ))}
+        </div>
+
+        {/* recent deliveries */}
+        {deliveries.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Recent deliveries</p>
+            <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
+              {deliveries.slice(0, 12).map((d) => (
+                <div key={d.id} className="flex items-center gap-2 px-3 py-1.5 text-[11.5px]">
+                  <span className={cn("inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium capitalize flex-shrink-0",
+                    d.status === "delivered" ? "bg-success/10 text-success" :
+                    d.status === "dead" ? "bg-destructive/10 text-destructive" :
+                    d.status === "failed" ? "bg-warning/10 text-warning" : "bg-muted text-muted-foreground")}>{d.status}</span>
+                  <span className="text-muted-foreground font-mono flex-shrink-0">{d.event_type}</span>
+                  <span className="text-muted-foreground/60 flex-1 truncate">{d.last_error ?? (d.response_code ? `HTTP ${d.response_code}` : "")}</span>
+                  <span className="text-muted-foreground/50 tabular-nums flex-shrink-0">{new Date(d.created_at).toLocaleString("en-IN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                  {(d.status === "failed" || d.status === "dead") && (
+                    <button onClick={() => retryDelivery(d.id)} className="p-1 rounded hover:bg-muted flex-shrink-0" title="Retry now"><RotateCw className="h-3 w-3 text-muted-foreground" /></button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ── Usage docs ───────────────────────────────────────────── */}
