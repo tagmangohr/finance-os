@@ -18,6 +18,7 @@ import {
   Copy,
   Check,
   Webhook,
+  ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -410,51 +411,60 @@ interface ConnectorsClientProps {
 // Per-gateway webhook endpoint reference: the path, the events to subscribe to,
 // and how the signature is verified. The connectors page shows each connected
 // account's tokenized URL (…?c=<webhook_token>) so events route to that account.
+// Per-gateway inbound webhook config. `events` is the accurate set of events this
+// connector's receiver actually processes (verified against each route handler):
+//  • razorpay/cashfree = whole prefix families captured (the note says so; the list
+//    names the concrete events worth subscribing to).
+//  • stripe/app_store = an exact switch — the list is the full handled set.
+//  • payu/paytm/easebuzz = one verified callback → one transaction (entries are the
+//    payment OUTCOMES that callback can carry, not distinct event types).
+//  • mercury/brex = every verified event triggers a fresh sync (the note says so;
+//    the list is representative, not a switch).
 const WEBHOOK_INFO: Record<string, { path: string; events: string[]; note: string }> = {
   razorpay: {
     path: "/api/webhooks/razorpay",
-    events: ["payment.captured", "payment.failed", "payment.authorized", "refund.created", "refund.processed", "payment.dispute.created", "payment.dispute.won", "payment.dispute.lost", "settlement.processed", "invoice.paid", "subscription.activated", "subscription.charged", "subscription.completed", "subscription.cancelled", "subscription.halted"],
-    note: "In the Razorpay dashboard set a webhook to this URL, choose a secret, and paste the same secret into this connector's Webhook Secret field.",
+    events: ["payment.captured", "payment.failed", "payment.authorized", "refund.created", "refund.processed", "refund.failed", "payment.dispute.created", "payment.dispute.won", "payment.dispute.lost", "payment.dispute.closed", "settlement.processed", "invoice.paid", "invoice.partially_paid", "invoice.expired", "subscription.activated", "subscription.charged", "subscription.pending", "subscription.halted", "subscription.cancelled", "subscription.completed"],
+    note: "In the Razorpay dashboard set a webhook to this URL, choose a secret, and paste the same secret into this connector's Webhook Secret field. Every event in the payment / refund / dispute / settlement / invoice / subscription families is processed.",
   },
   stripe: {
     path: "/api/webhooks/stripe",
-    events: ["charge.succeeded", "charge.refunded", "charge.dispute.created", "charge.dispute.closed", "payout.paid", "invoice.paid", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"],
+    events: ["charge.succeeded", "charge.failed", "charge.captured", "charge.updated", "charge.refunded", "charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed", "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated", "payout.created", "payout.updated", "payout.paid", "payout.failed", "payout.canceled", "invoice.paid", "invoice.payment_failed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "customer.subscription.paused", "customer.subscription.resumed"],
     note: "Add this URL as a Stripe webhook endpoint and paste its signing secret (whsec_…) into this connector's Webhook Signing Secret field.",
   },
   cashfree: {
     path: "/api/webhooks/cashfree",
-    events: ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK", "REFUND_STATUS_WEBHOOK", "SUBSCRIPTION_STATUS_CHANGE", "SUBSCRIPTION_PAYMENT_SUCCESS", "SUBSCRIPTION_PAYMENT_DECLINED"],
-    note: "Verified with your Cashfree client secret — no extra secret to enter.",
+    events: ["PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK", "REFUND_STATUS_WEBHOOK", "DISPUTE_CREATED", "SUBSCRIPTION_STATUS_CHANGED", "SUBSCRIPTION_PAYMENT_SUCCESS", "SUBSCRIPTION_PAYMENT_DECLINED"],
+    note: "Verified with your Cashfree client secret — no extra secret to enter. Every PAYMENT / REFUND / DISPUTE / SUBSCRIPTION event is processed.",
   },
   payu: {
     path: "/api/webhooks/payu",
-    events: ["Successful transaction", "Failed transaction", "Refund"],
-    note: "Verified with your PayU salt — no extra secret to enter.",
+    events: ["Payment success", "Payment failure"],
+    note: "Verified with your PayU salt — no extra secret to enter. Each verified callback records one transaction with its final status.",
   },
   paytm: {
     path: "/api/webhooks/paytm",
-    events: ["Transaction status (success / failure)", "Refund status"],
-    note: "Verified with your Paytm merchant key — no extra secret to enter.",
+    events: ["Payment success", "Payment failure"],
+    note: "Verified with your Paytm merchant key — no extra secret to enter. Each verified callback records one transaction with its final status.",
   },
   easebuzz: {
     path: "/api/webhooks/easebuzz",
-    events: ["Successful transaction", "Failed transaction", "Refund"],
-    note: "Verified with your Easebuzz salt — no extra secret to enter.",
+    events: ["Payment success", "Payment failure"],
+    note: "Verified with your Easebuzz salt — no extra secret to enter. Each verified callback records one transaction with its final status.",
   },
   app_store: {
     path: "/api/webhooks/app-store",
-    events: ["App Store Server Notifications V2 — all types (subscribe once)"],
-    note: "No secret — verified against Apple's certificate. Set this as the Version 2 Production (and Sandbox) URL.",
+    events: ["SUBSCRIBED", "DID_RENEW", "ONE_TIME_CHARGE", "OFFER_REDEEMED", "REFUND", "REVOKE", "REFUND_REVERSED", "REFUND_DECLINED", "DID_CHANGE_RENEWAL_STATUS", "DID_CHANGE_RENEWAL_PREF", "PRICE_INCREASE", "DID_FAIL_TO_RENEW", "GRACE_PERIOD_EXPIRED", "EXPIRED"],
+    note: "No secret — verified against Apple's certificate. Set this one URL as the Version 2 Production (and Sandbox) endpoint; Apple sends every notification type here.",
   },
   mercury: {
     path: "/api/webhooks/mercury",
-    events: ["transaction.created / updated"],
-    note: "Paste Mercury's signing secret into this connector's Webhook Signing Secret field.",
+    events: ["transaction.created", "transaction.updated", "account.balance.updated"],
+    note: "Paste Mercury's signing secret into this connector's Webhook Signing Secret field. Every verified event triggers a fresh sync (transactions re-pulled + recategorized, balances refreshed).",
   },
   brex: {
     path: "/api/webhooks/brex",
-    events: ["TRANSFER_PROCESSED", "TRANSFER_FAILED", "EXPENSE_PAYMENT_UPDATED", "EXPENSE_UPDATED", "EXPENSE_CREATED"],
-    note: "Create a webhook in Brex (Developer → Webhooks) pointing to this URL and subscribe to the events. Then call GET /v1/webhooks/secrets and paste the whsec_… signing secret into this connector's Webhook Signing Secret field. Any event triggers a fresh sync, so all card + cash activity is captured.",
+    events: ["TRANSFER_PROCESSED", "TRANSFER_FAILED", "EXPENSE_CREATED", "EXPENSE_UPDATED", "EXPENSE_PAYMENT_UPDATED"],
+    note: "Create a webhook in Brex (Developer → Webhooks) pointing to this URL and subscribe to the events. Then call GET /v1/webhooks/secrets and paste the whsec_… signing secret into this connector's Webhook Signing Secret field. Every event triggers a fresh sync, so all card + cash activity is captured.",
   },
 };
 
@@ -471,6 +481,39 @@ function CopyField({ value }: { value: string }) {
       >
         {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5 text-muted-foreground" />}
       </button>
+    </div>
+  );
+}
+
+/** Vertical list of the events a connector's webhook receiver captures. */
+function EventsList({ events }: { events: string[] }) {
+  return (
+    <ul className="space-y-1">
+      {events.map((e) => (
+        <li key={e} className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
+          <Check className="h-3 w-3 mt-[1px] text-success/70 flex-shrink-0" />
+          <code className="font-mono break-all leading-tight">{e}</code>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Collapsible "N events captured" disclosure shown inside a connector card. */
+function CardEvents({ events }: { events: string[] }) {
+  const [open, setOpen] = React.useState(false);
+  if (events.length === 0) return null;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+      >
+        <ChevronDown className={cn("h-3 w-3 transition-transform", !open && "-rotate-90")} />
+        {events.length} event{events.length === 1 ? "" : "s"} captured
+      </button>
+      {open && <div className="mt-1.5 pl-1"><EventsList events={events} /></div>}
     </div>
   );
 }
@@ -1362,13 +1405,16 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
 
                   {/* Per-account inbound webhook endpoint — each connection gets its
                       own tokenized URL (…?c=token) to copy into the gateway. */}
-                  {whUrl && !isConfirming && (
-                    <div className="px-3 pb-2.5 pt-0.5 space-y-1">
-                      <div className="flex items-center gap-1.5">
-                        <Webhook className="h-3 w-3 text-muted-foreground/50" />
-                        <span className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">Webhook endpoint</span>
+                  {whUrl && wh && !isConfirming && (
+                    <div className="px-3 pb-2.5 pt-0.5 space-y-1.5">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <Webhook className="h-3 w-3 text-muted-foreground/50" />
+                          <span className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">Webhook endpoint</span>
+                        </div>
+                        <CopyField value={whUrl} />
                       </div>
-                      <CopyField value={whUrl} />
+                      <CardEvents events={wh.events} />
                     </div>
                   )}
 
@@ -1761,13 +1807,9 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                           <p className="text-[11px] text-muted-foreground/70 leading-relaxed">{wh.note}</p>
                         )}
                         {wh?.events?.length ? (
-                          <div className="pt-1 space-y-1">
+                          <div className="pt-1 space-y-1.5">
                             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Events captured</p>
-                            <div className="flex flex-wrap gap-1">
-                              {wh.events.map((e) => (
-                                <span key={e} className="text-[10px] rounded bg-background/60 border border-border px-1.5 py-0.5 text-muted-foreground font-mono">{e}</span>
-                              ))}
-                            </div>
+                            <EventsList events={wh.events} />
                           </div>
                         ) : null}
                       </div>
