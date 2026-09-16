@@ -26,41 +26,76 @@ export type ConnectorHealth = {
   jobs: SyncJobLite[];
 };
 
+export type CronRunLite = {
+  status: "running" | "ok" | "failed" | string;
+  at: string;
+  durationMs: number | null;
+  error: string | null;
+};
+
 export type CronHealth = {
   jobName: string;
+  label: string;
+  schedule: string;
   lastStatus: "ok" | "failed" | "running" | "none";
   lastRunAt: string | null;
   lastDurationMs: number | null;
   lastError: string | null;
   health: "green" | "amber" | "red";
+  /** "ok" | "failed" | "overdue" | "scheduled" — drives the human label. */
+  state: "ok" | "failed" | "overdue" | "scheduled";
+  runs: CronRunLite[]; // recent history, newest first (the audit log)
+};
+
+export type HealthSummary = {
+  connectorsTotal: number;
+  connectorsGreen: number;
+  connectorsAmber: number;
+  connectorsRed: number;
+  cronsTotal: number;
+  cronsGreen: number;
+  cronsAmber: number;
+  cronsRed: number;
 };
 
 export type SyncHealthData = {
   connectors: ConnectorHealth[];
   crons: CronHealth[];
   redFlags: string[];
+  summary: HealthSummary;
   generatedAt: string;
 };
 
-const STALE_HOURS = 48;         // an active connector that hasn't synced in this long → amber
+const STALE_HOURS = 48; // an active POLLED connector that hasn't synced in this long → amber
 // Only POLLED connectors get the stale-since-last-sync check. Webhook-only connectors
 // (App Store, Brex) never set last_synced_at from a poll, so staleness there is
-// meaningless — flag them only on actual failed jobs.
+// meaningless — flag them only on actual failed/erroring jobs.
 const POLLED_TYPES = new Set(["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz", "mercury", "google_sheets", "excel"]);
-const CRON_STALE: Record<string, number> = {   // hours after which a cron's last run is "stale"
-  "nightly-sync": 30, "snapshot": 30, "fx-backfill": 1, "drive-sync": 3,
+
+// Every Vercel cron (vercel.json) + the sub-dupe watchdog it runs. `staleHours` is how
+// long after its last run a cron is "overdue"; `dailyish` crons that have simply never
+// run yet read as "scheduled" (neutral) rather than a problem.
+const CRON_META: Record<string, { label: string; schedule: string; staleHours: number; dailyish: boolean }> = {
+  "nightly-sync":      { label: "Nightly reconcile",  schedule: "Daily · 00:30 IST", staleHours: 30, dailyish: true },
+  "snapshot":          { label: "Snapshot & rollups", schedule: "Daily · 07:30 IST", staleHours: 30, dailyish: true },
+  "process-sync-jobs": { label: "Sync queue worker",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
+  "deliver-webhooks":  { label: "Outbound webhooks",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
+  "fx-backfill":       { label: "FX backfill",        schedule: "Every 5 minutes",   staleHours: 1, dailyish: false },
+  "drive-sync":        { label: "Drive sync",         schedule: "Hourly",            staleHours: 3, dailyish: false },
 };
-const CRON_JOBS = ["nightly-sync", "snapshot", "fx-backfill", "drive-sync"];
+const CRON_ORDER = ["nightly-sync", "snapshot", "process-sync-jobs", "deliver-webhooks", "fx-backfill", "drive-sync"];
 
 const hoursSince = (iso: string | null): number =>
   iso == null ? Infinity : (Date.now() - new Date(iso).getTime()) / 3_600_000;
 
+const shorten = (s: string | null, n = 140): string | null => (s == null ? null : s.length > n ? s.slice(0, n) + "…" : s);
+
 /**
  * Sync Health for one org: per-connector status (from connectors + recent sync_jobs)
- * plus the system crons (from cron_runs). Read with the SERVICE client — sync_jobs is
- * member-readable but cron_runs is service-only; the PAGE gates access (grantable
- * "health" page), so the data is fetched server-side and never exposed to the client
- * directly. Bounded queries (few connectors, recent jobs), so no pagination needed.
+ * plus the system crons (from cron_runs, with recent-run history). Read with the SERVICE
+ * client — sync_jobs is member-readable but cron_runs is service-only; the PAGE gates
+ * access (grantable "health" page), so the data is fetched server-side and never exposed
+ * to the client directly.
  */
 export async function getSyncHealth(orgId: string, supabase: ServiceClient): Promise<SyncHealthData> {
   const { data: connectors } = await supabase
@@ -91,17 +126,32 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
 
   const connectorHealth: ConnectorHealth[] = (connectors ?? []).map((c) => {
     const jobs = jobsByConnector.get(c.id as string) ?? [];
-    const failedJobs = jobs.filter((j) => j.status === "failed").length;
+    // A job is "failed" only when it has exhausted retries. A pending/running job that
+    // carries a last_error is mid-retry (transient). Resolved "done" jobs no longer keep
+    // an error (jobs.ts clears last_error on the success paths), so a lingering error is
+    // real, not stale.
+    const failed = jobs.filter((j) => j.status === "failed");
+    const failedJobs = failed.length;
+    const erroringRetry = jobs.find((j) => (j.status === "pending" || j.status === "running") && j.attempts > 0 && j.last_error);
     const active = c.status === "active";
     const stale = active && POLLED_TYPES.has(c.type as string) && hoursSince(c.last_synced_at as string | null) > STALE_HOURS;
-    const retrying = jobs.some((j) => (j.status === "pending" || j.status === "running") && j.attempts > 0);
 
     let health: ConnectorHealth["health"] = "green";
     let reason: string | null = null;
-    if (failedJobs > 0) { health = "red"; reason = `${failedJobs} failed sync job${failedJobs === 1 ? "" : "s"} — sync is stalled here`; }
-    else if (stale) { health = "amber"; reason = `No successful sync in over ${STALE_HOURS}h`; }
-    else if (retrying) { health = "amber"; reason = "Retrying after an earlier failure"; }
-    else if (!active) { health = "amber"; reason = `Connector is ${c.status}`; }
+    if (failedJobs > 0) {
+      health = "red";
+      const err = shorten(failed[0].last_error);
+      reason = err ? `Sync failing: ${err}` : `${failedJobs} failed sync job${failedJobs === 1 ? "" : "s"}`;
+    } else if (erroringRetry) {
+      health = "amber";
+      reason = `Retrying: ${shorten(erroringRetry.last_error, 100)}`;
+    } else if (stale) {
+      health = "amber";
+      reason = `No successful sync in over ${STALE_HOURS}h`;
+    } else if (!active) {
+      health = "amber";
+      reason = `Connector is ${c.status}`;
+    }
 
     return {
       id: c.id as string, type: c.type as string, name: (c.name as string | null) ?? null,
@@ -111,41 +161,62 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
     };
   });
 
-  // System crons — latest run per job.
-  const { data: cronRows } = await supabase
-    .from("cron_runs")
-    .select("job_name, status, started_at, finished_at, duration_ms, error")
-    .in("job_name", CRON_JOBS)
-    .order("started_at", { ascending: false })
-    .limit(60);
+  // System crons — recent run history per job (one small indexed query each).
+  const cronHistories = await Promise.all(
+    CRON_ORDER.map(async (jobName) => {
+      const { data } = await supabase
+        .from("cron_runs")
+        .select("status, started_at, duration_ms, error")
+        .eq("job_name", jobName)
+        .order("started_at", { ascending: false })
+        .limit(8);
+      return [jobName, (data ?? [])] as const;
+    })
+  );
 
-  const latestByCron = new Map<string, NonNullable<typeof cronRows>[number]>();
-  for (const r of cronRows ?? []) {
-    if (!latestByCron.has(r.job_name as string)) latestByCron.set(r.job_name as string, r);
-  }
+  const crons: CronHealth[] = cronHistories.map(([jobName, rows]) => {
+    const meta = CRON_META[jobName];
+    const runs: CronRunLite[] = rows.map((r) => ({
+      status: r.status as string,
+      at: r.started_at as string,
+      durationMs: (r.duration_ms as number | null) ?? null,
+      error: (r.error as string | null) ?? null,
+    }));
+    const latest = runs[0] ?? null;
 
-  const crons: CronHealth[] = CRON_JOBS.map((jobName) => {
-    const r = latestByCron.get(jobName);
-    if (!r) return { jobName, lastStatus: "none", lastRunAt: null, lastDurationMs: null, lastError: null, health: "amber" };
-    const staleH = CRON_STALE[jobName] ?? 30;
-    const isStale = hoursSince((r.started_at as string) ?? null) > staleH;
-    const status = r.status as CronHealth["lastStatus"];
-    const health: CronHealth["health"] = status === "failed" ? "red" : isStale ? "amber" : "green";
+    let health: CronHealth["health"];
+    let state: CronHealth["state"];
+    if (!latest) {
+      // Never recorded a run. A daily job simply hasn't fired since instrumentation
+      // (neutral); a high-frequency job that has NO runs is overdue (should have fired).
+      state = meta.dailyish ? "scheduled" : "overdue";
+      health = meta.dailyish ? "green" : "amber";
+    } else if (latest.status === "failed") {
+      state = "failed"; health = "red";
+    } else if (hoursSince(latest.at) > meta.staleHours) {
+      state = "overdue"; health = "amber";
+    } else {
+      state = "ok"; health = "green";
+    }
+
     return {
       jobName,
-      lastStatus: status,
-      lastRunAt: (r.started_at as string) ?? null,
-      lastDurationMs: (r.duration_ms as number | null) ?? null,
-      lastError: (r.error as string | null) ?? null,
+      label: meta.label,
+      schedule: meta.schedule,
+      lastStatus: latest ? (latest.status as CronHealth["lastStatus"]) : "none",
+      lastRunAt: latest?.at ?? null,
+      lastDurationMs: latest?.durationMs ?? null,
+      lastError: shorten(latest?.error ?? null),
       health,
+      state,
+      runs,
     };
   });
 
   // Cashfree recurring-charge double-count watchdog. The nightly sync runs the actual
   // 30-day scan (detectCashfreeSubDoubleCounts) across all orgs and records a per-org
   // count in the `sub-dupe-watch` cron_runs meta — so here we just read that latest
-  // result cheaply instead of re-scanning thousands of rows on every page open. Baseline
-  // is 0; freshness is ~last night, which is fine for this insurance signal. Non-fatal.
+  // result cheaply. Baseline is 0; freshness is ~last night. Non-fatal.
   let subDupeFlag: string | null = null;
   try {
     const { data: watch } = await supabase
@@ -165,9 +236,29 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
 
   const redFlags: string[] = [
     ...connectorHealth.filter((c) => c.health === "red").map((c) => `${c.name ?? c.type}: ${c.reason}`),
-    ...crons.filter((c) => c.health === "red").map((c) => `Cron "${c.jobName}" last run failed`),
+    // A failed cron is always a red flag. An overdue high-frequency cron is a red flag
+    // ONLY once it has actually run before and then gone stale (queue/webhooks stopped
+    // draining) — a high-frequency cron with NO runs yet (e.g. just after instrumentation
+    // deploys, before its first tick) is a "watch", not an alarm; a daily cron never
+    // alarms on staleness here.
+    ...crons
+      .filter((c) => c.state === "failed" || (c.state === "overdue" && c.lastRunAt != null && !CRON_META[c.jobName].dailyish))
+      .map((c) => c.state === "failed"
+        ? `Cron "${c.label}" last run failed${c.lastError ? `: ${c.lastError}` : ""}`
+        : `Cron "${c.label}" is overdue — last ran ${c.lastRunAt ? new Date(c.lastRunAt).toISOString() : "never"}`),
     ...(subDupeFlag ? [subDupeFlag] : []),
   ];
 
-  return { connectors: connectorHealth, crons, redFlags, generatedAt: new Date().toISOString() };
+  const summary: HealthSummary = {
+    connectorsTotal: connectorHealth.length,
+    connectorsGreen: connectorHealth.filter((c) => c.health === "green").length,
+    connectorsAmber: connectorHealth.filter((c) => c.health === "amber").length,
+    connectorsRed: connectorHealth.filter((c) => c.health === "red").length,
+    cronsTotal: crons.length,
+    cronsGreen: crons.filter((c) => c.health === "green").length,
+    cronsAmber: crons.filter((c) => c.health === "amber").length,
+    cronsRed: crons.filter((c) => c.health === "red").length,
+  };
+
+  return { connectors: connectorHealth, crons, redFlags, summary, generatedAt: new Date().toISOString() };
 }

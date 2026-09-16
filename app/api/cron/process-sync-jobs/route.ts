@@ -2,6 +2,7 @@ import { NextRequest, NextResponse, after } from "next/server";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { drainSyncJobs } from "@/lib/connectors/jobs";
+import { logCronRun } from "@/lib/ops/cron-runs";
 
 export const maxDuration = 60;
 
@@ -24,10 +25,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // A `chain=1` invocation is an internal self-chained drain pass (below), NOT the
+  // scheduled cron tick — those don't record to cron_runs, so the audit log stays
+  // ~1 row per minute instead of one per rapid drain-loop iteration.
+  const isChain = req.nextUrl.searchParams.get("chain") === "1";
   const worker = randomUUID();
   after(async () => {
+    const startedAt = Date.now();
+    const supabase = await createServiceClient();
     try {
-      const supabase = await createServiceClient();
       const summary = await drainSyncJobs(supabase, worker);
 
       // Keep the queue table tidy — finished jobs older than 7 days are history.
@@ -37,11 +43,22 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         .delete()
         .in("status", ["done", "failed"])
         .lt("updated_at", cutoff);
+      // Keep the cron audit log bounded — 30 days of history is plenty for Sync Health.
+      await supabase
+        .from("cron_runs")
+        .delete()
+        .lt("started_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
 
       console.log(
         `[cron/process-sync-jobs] worker=${worker} processed=${summary.processed} ` +
         `done=${summary.done} failed=${summary.failed} progressed=${summary.progressed}`
       );
+      if (!isChain) {
+        await logCronRun(supabase, "process-sync-jobs", startedAt, "ok", null, {
+          worker, processed: summary.processed, done: summary.done,
+          failed: summary.failed, progressed: summary.progressed,
+        });
+      }
 
       // Continuous drain: if work is ready NOW, chain another pass immediately so a
       // large backfill finishes in a tight loop instead of crawling between sparse
@@ -56,11 +73,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       // `processed > 0` guard prevents a hot loop if the queue is empty or every
       // job is locked by another worker (claimBatch returned nothing).
       if ((ready ?? 0) > 0 && summary.processed > 0) {
-        await fetch(`${req.nextUrl.origin}/api/cron/process-sync-jobs`, {
+        await fetch(`${req.nextUrl.origin}/api/cron/process-sync-jobs?chain=1`, {
           headers: { authorization: `Bearer ${cronSecret}` },
         }).catch(() => { /* fire-and-forget; cron tick is the backstop */ });
       }
     } catch (err) {
+      if (!isChain) {
+        await logCronRun(supabase, "process-sync-jobs", startedAt, "failed",
+          err instanceof Error ? err.message : String(err), { worker });
+      }
       console.error(`[cron/process-sync-jobs] worker=${worker} drain failed:`, err);
     }
   });

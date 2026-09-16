@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { decryptValue } from "@/lib/crypto/secrets";
 import { buildWebhookPayload, signWebhookBody, type WebhookEventType } from "@/lib/webhooks/contract";
 import { nextBackoffMs } from "@/lib/webhooks/endpoints";
+import { logCronRun } from "@/lib/ops/cron-runs";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -32,23 +33,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   after(async () => {
+    const startedAt = Date.now();
+    const supabase = await createServiceClient();
     try {
-      const supabase = await createServiceClient();
       const { data: claimed, error } = await supabase.rpc("claim_webhook_deliveries" as never, { p_limit: BATCH } as never);
-      if (error || !claimed || (claimed as DeliveryRow[]).length === 0) return;
-      const rows = claimed as DeliveryRow[];
+      if (error) throw new Error(error.message ?? "claim_webhook_deliveries failed");
+      const rows = (claimed ?? []) as DeliveryRow[];
 
-      // Load the endpoints referenced by this batch in one query (url + secret).
-      const endpointIds = [...new Set(rows.map((r) => r.endpoint_id))];
-      const { data: eps } = await supabase
-        .from("webhook_endpoints")
-        .select("id, url, secret, enabled")
-        .in("id", endpointIds);
-      const epById = new Map<string, EndpointRow>(((eps ?? []) as EndpointRow[]).map((e) => [e.id, e]));
+      if (rows.length > 0) {
+        // Load the endpoints referenced by this batch in one query (url + secret).
+        const endpointIds = [...new Set(rows.map((r) => r.endpoint_id))];
+        const { data: eps } = await supabase
+          .from("webhook_endpoints")
+          .select("id, url, secret, enabled")
+          .in("id", endpointIds);
+        const epById = new Map<string, EndpointRow>(((eps ?? []) as EndpointRow[]).map((e) => [e.id, e]));
 
-      await Promise.all(rows.map((row) => deliverOne(supabase, row, epById.get(row.endpoint_id))));
-    } catch {
-      /* never throw from a cron; the lease auto-recovers stuck rows next run */
+        await Promise.all(rows.map((row) => deliverOne(supabase, row, epById.get(row.endpoint_id))));
+      }
+      await logCronRun(supabase, "deliver-webhooks", startedAt, "ok", null, { claimed: rows.length });
+    } catch (err) {
+      // never throw from a cron; the lease auto-recovers stuck rows next run.
+      await logCronRun(supabase, "deliver-webhooks", startedAt, "failed", err instanceof Error ? err.message : String(err));
     }
   });
 

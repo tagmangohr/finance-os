@@ -47,6 +47,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   }
 
   if (!files || files.length === 0) {
+    // Log the idle run too — otherwise a healthy hourly drive-sync that simply has
+    // nothing due shows as "no runs" on Sync Health forever.
+    await logCronRun(supabase, "drive-sync", startedAt, "ok", null, { files: 0 });
     return NextResponse.json({ message: "No drive files due for sync", synced: 0 });
   }
 

@@ -20,7 +20,7 @@ function SectionCardSkeleton({ children }: { children: React.ReactNode }) {
  */
 export default function HealthLoading() {
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-[1100px]">
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="space-y-1.5">
@@ -32,6 +32,16 @@ export default function HealthLoading() {
 
       {/* Status banner */}
       <Skeleton className="h-14 w-full rounded-xl" />
+
+      {/* Summary strip */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-xl border border-border bg-card p-3.5 space-y-2">
+            <Skeleton className="h-2.5 w-24" />
+            <Skeleton className="h-5 w-40" />
+          </div>
+        ))}
+      </div>
 
       {/* Connectors */}
       <SectionCardSkeleton>

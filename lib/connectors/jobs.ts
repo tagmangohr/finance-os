@@ -390,8 +390,10 @@ async function processResumableChunk(
       return "progress";
     }
 
-    // All streams done.
-    await supabase.from("sync_jobs").update({ ...base, status: "done", cursor: null, result: { processed } }).eq("id", job.id);
+    // All streams done. Clear last_error so a transient error from an earlier pass
+    // (e.g. a statement timeout that later succeeded on retry) doesn't linger on a
+    // successful "done" row and read as a live failure on Sync Health.
+    await supabase.from("sync_jobs").update({ ...base, status: "done", cursor: null, last_error: null, result: { processed } }).eq("id", job.id);
     await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connector.id);
     if (job.advance_checkpoint) await advanceCheckpoint(supabase, connector.id, new Date(job.window_to));
     return "done";
@@ -442,7 +444,7 @@ async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, conn
     const processed = (job.processed ?? 0) + r.fetched;
     if (r.hasMore) { await requeue({ processed, stream: "subs", cursor: r.cursor }); return "progress"; }
     await supabase.from("sync_jobs").update({
-      status: "done", cursor: null, result: { processed }, updated_at: new Date().toISOString(),
+      status: "done", cursor: null, last_error: null, result: { processed }, updated_at: new Date().toISOString(),
     }).eq("id", job.id);
     return "done";
   } catch (err) {
@@ -508,7 +510,7 @@ async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connecto
       if (cErr) throw new Error(cErr.message);
       await supabase.from("connectors").update({ last_synced_at: new Date().toISOString() }).eq("id", connector.id);
       await supabase.from("sync_jobs").update({
-        status: "done", cursor: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
+        status: "done", cursor: null, last_error: null, result: { processed: job.processed ?? 0 }, updated_at: new Date().toISOString(),
       }).eq("id", job.id);
       return "done";
     }
