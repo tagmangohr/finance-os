@@ -287,6 +287,26 @@ const CONNECTOR_DEFS: ConnectorDef[] = [
   },
 ];
 
+// ─── Category grouping ────────────────────────────────────────────────────────
+// The connector grid is organized by what the source IS, connected items first in
+// each group (cloud storage is its own section, injected from page.tsx).
+type ConnCategory = "gateways" | "banking" | "appstores" | "accounting" | "files";
+const CATEGORY_LABEL: Record<ConnCategory, string> = {
+  gateways: "Payment gateways",
+  banking: "Banking",
+  appstores: "App stores",
+  accounting: "Accounting",
+  files: "Files & sheets",
+};
+const CATEGORY_ORDER: ConnCategory[] = ["gateways", "banking", "appstores", "accounting", "files"];
+const CATEGORY_OF: Record<string, ConnCategory> = {
+  razorpay: "gateways", stripe: "gateways", cashfree: "gateways", payu: "gateways", paytm: "gateways", easebuzz: "gateways",
+  mercury: "banking", brex: "banking",
+  app_store: "appstores",
+  zoho: "accounting", quickbooks: "accounting", tally: "accounting",
+  bank_statement: "files", csv: "files", google_sheets: "files", excel: "files",
+};
+
 const CSV_COLUMN_OPTIONS = [
   { value: "", label: "— Ignore —" },
   { value: "date", label: "Transaction Date" },
@@ -515,6 +535,26 @@ function CardEvents({ events }: { events: string[] }) {
       </button>
       {open && <div className="mt-1.5 pl-1"><EventsList events={events} /></div>}
     </div>
+  );
+}
+
+/** Compact one-line webhook endpoint — the full URL is copied on click (and in the
+ *  title tooltip); the row stays a single line so cards don't get tall. */
+function CompactEndpoint({ url }: { url: string }) {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <button
+      type="button"
+      title={`Copy webhook endpoint\n${url}`}
+      onClick={() => { void navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+      className="group/ep flex w-full items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 text-left hover:border-border/80 transition-colors"
+    >
+      <Webhook className="h-3 w-3 text-muted-foreground/50 flex-shrink-0" />
+      <code className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground/90">{url}</code>
+      {copied
+        ? <Check className="h-3 w-3 text-success flex-shrink-0" />
+        : <Copy className="h-3 w-3 text-muted-foreground/40 flex-shrink-0 group-hover/ep:text-muted-foreground" />}
+    </button>
   );
 }
 
@@ -1227,9 +1267,6 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   // ── Split defs by connection state ───────────────────────────────────────────
-  const connectedDefs    = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length > 0);
-  const notConnectedDefs = CONNECTOR_DEFS.filter((d) => getConnectorsOfType(d.type).length === 0);
-  const hasAnySplit      = connectedDefs.length > 0;
   // Origin for the per-account inbound webhook endpoint URLs shown inside each card.
   const origin = typeof window !== "undefined" ? window.location.origin : "";
 
@@ -1407,13 +1444,7 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
                       own tokenized URL (…?c=token) to copy into the gateway. */}
                   {whUrl && wh && !isConfirming && (
                     <div className="px-3 pb-2.5 pt-0.5 space-y-1.5">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-1.5">
-                          <Webhook className="h-3 w-3 text-muted-foreground/50" />
-                          <span className="text-[9.5px] font-semibold uppercase tracking-wider text-muted-foreground/60">Webhook endpoint</span>
-                        </div>
-                        <CopyField value={whUrl} />
-                      </div>
+                      <CompactEndpoint url={whUrl} />
                       <CardEvents events={wh.events} />
                     </div>
                   )}
@@ -1460,45 +1491,55 @@ export function ConnectorsClient({ orgId, connectors, syncTokens = {}, children 
         </p>
       </div>
 
-      {/* ── Connected ──────────────────────────────────────────────────────── */}
-      {hasAnySplit && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_hsl(158_64%_48%/0.8)]" />
-            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-success/60">
-              Connected ({connectedDefs.length})
-            </span>
-            <div className="flex-1 h-px bg-accent/40" />
+      {/* ── Connectors grouped by category (connected first in each) ────────── */}
+      {CATEGORY_ORDER.map((cat) => {
+        const defs = CONNECTOR_DEFS
+          .filter((d) => CATEGORY_OF[d.type] === cat)
+          .sort((a, b) => (getConnectorsOfType(b.type).length ? 1 : 0) - (getConnectorsOfType(a.type).length ? 1 : 0));
+        if (defs.length === 0) return null;
+        const connectedCount = defs.filter((d) => getConnectorsOfType(d.type).length > 0).length;
+        return (
+          <div key={cat} className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">
+                {CATEGORY_LABEL[cat]}
+              </span>
+              <span className="text-[10px] font-medium tabular-nums text-muted-foreground/45">
+                {connectedCount}/{defs.length} connected
+              </span>
+              <div className="flex-1 h-px bg-accent/40" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {defs.map((def, i) => renderCard(def, i))}
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {connectedDefs.map((def, i) => renderCard(def, i))}
-          </div>
-        </div>
-      )}
+        );
+      })}
 
-      {/* ── Not connected ──────────────────────────────────────────────────── */}
-      <div className="space-y-3">
-        {hasAnySplit && (
-          <div className="flex items-center gap-2">
-            <div className="h-1.5 w-1.5 rounded-full bg-accent/40" />
-            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">
-              Not connected ({notConnectedDefs.length})
-            </span>
-            <div className="flex-1 h-px bg-accent/40" />
+      {/* Safety net: any connector not assigned a category above still renders,
+          so a newly added connector def can never silently vanish from the grid. */}
+      {(() => {
+        const uncategorized = CONNECTOR_DEFS.filter((d) => !CATEGORY_ORDER.includes(CATEGORY_OF[d.type]));
+        if (uncategorized.length === 0) return null;
+        return (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">Other</span>
+              <div className="flex-1 h-px bg-accent/40" />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {uncategorized.map((def, i) => renderCard(def, i))}
+            </div>
           </div>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {notConnectedDefs.map((def, i) => renderCard(def, i))}
-        </div>
-      </div>
+        );
+      })()}
 
       {/* ── Cloud storage section (injected from page.tsx) ─────────────────── */}
       {children && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
-            <div className="flex-1 h-px bg-accent/40" />
-            <span className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
-              Cloud Storage
+            <span className="text-[11px] font-bold tracking-[0.12em] uppercase text-muted-foreground/70">
+              Cloud storage
             </span>
             <div className="flex-1 h-px bg-accent/40" />
           </div>
