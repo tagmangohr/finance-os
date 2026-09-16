@@ -30,12 +30,6 @@ function money(amount: unknown, currency: unknown) {
   return formatCurrency(a, (currency as string) || "INR");
 }
 
-const SEG_STYLE: Record<string, string> = {
-  active: "bg-emerald-500/15 text-emerald-600",
-  past_due: "bg-amber-500/15 text-amber-600",
-  churned: "bg-rose-500/15 text-rose-600",
-  pending: "bg-neutral-500/15 text-neutral-500",
-};
 const SEG_TABS = [["active", "Active"], ["past_due", "Past due (revivable)"], ["churned", "Churned"], ["pending", "Pending"]] as const;
 
 export function SubscriptionsClient({ data, prefs, orgId }: { data: SubscriptionsOverview; prefs: { pinned: string[]; visibleCount: number }; orgId: string }) {
@@ -142,7 +136,7 @@ export function SubscriptionsClient({ data, prefs, orgId }: { data: Subscription
         )}
         <div className="mt-3 max-h-56 overflow-auto">
           <table className="w-full text-xs">
-            <thead><tr className="text-left text-muted-foreground border-b border-border/50 sticky top-0 bg-background">
+            <thead><tr className="text-left text-background bg-foreground sticky top-0">
               <th className="py-1.5 font-medium">Month</th><th className="font-medium text-right">Active</th><th className="font-medium text-right">MRR</th>
               <th className="font-medium text-right">New</th><th className="font-medium text-right">Churned</th><th className="font-medium text-right">Net-new MRR</th>
               <th className="font-medium text-right">Past-due</th><th className="font-medium text-right">Renewals ₹</th>
@@ -210,15 +204,15 @@ export function SubscriptionsClient({ data, prefs, orgId }: { data: Subscription
       <SectionCard title="Cohort retention" subtitle="% of each start-month cohort still active after N months · darker = higher">
         <div className="overflow-x-auto">
           <table className="text-xs" style={{ borderCollapse: "separate", borderSpacing: "2px" }}>
-            <thead><tr className="text-muted-foreground">
-              <th className="text-left font-medium px-2 py-1">Cohort</th>
-              <th className="text-right font-medium px-2 py-1">Size</th>
-              {Array.from({ length: cohortPeriods + 1 }, (_, k) => <th key={k} className="text-center font-medium px-1 py-1 min-w-[32px]">M{k}</th>)}
+            <thead><tr>
+              <th className="text-left font-medium px-2 py-1 bg-foreground text-background rounded">Cohort</th>
+              <th className="text-right font-medium px-2 py-1 bg-foreground text-background rounded">Size</th>
+              {Array.from({ length: cohortPeriods + 1 }, (_, k) => <th key={k} className="text-center font-medium px-1 py-1 min-w-[32px] bg-foreground text-background rounded">M{k}</th>)}
             </tr></thead>
             <tbody>
               {[...cohorts].reverse().map((c) => (
                 <tr key={c.cohort}>
-                  <td className="px-2 py-1 whitespace-nowrap">{monthLabel(c.cohort)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap bg-foreground text-background rounded font-medium">{monthLabel(c.cohort)}</td>
                   <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{nfmt(c.size)}</td>
                   {c.pct.map((p, k) => (
                     <td key={k} className="px-1 py-1 text-center tabular-nums rounded"
@@ -297,16 +291,16 @@ function CustomersSection({ grace }: { grace: number }) {
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search className="size-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search customer / plan / id" className="h-7 w-56 rounded-md border border-border bg-background pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-ring" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search customer / plan / id" className="h-7 w-56 rounded-md border border-foreground bg-background pl-7 pr-2 text-xs outline-none focus:ring-1 focus:ring-ring" />
           </div>
           <select value={sort} onChange={(e) => { setSort(e.target.value); setPage(1); }} className="h-7 rounded-md border border-border bg-background px-2 text-xs outline-none">
             <option value="mrr">Sort: MRR</option>
             <option value="lapsed">Sort: oldest lapse</option>
             <option value="recent">Sort: newest</option>
           </select>
-          <DateRangePicker from={from} to={to} max={new Date().toISOString().slice(0, 10)} align="end" onChange={(f, t) => { setFrom(f); setTo(t); setPage(1); }} />
-          <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />CSV</a>
-          <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-border hover:bg-muted"><Download className="size-3.5" />Excel</a>
+          <DateRangePicker from={from} to={to} max={new Date().toISOString().slice(0, 10)} align="end" variant="dark" onChange={(f, t) => { setFrom(f); setTo(t); setPage(1); }} />
+          <a href={exportHref("csv")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-transparent bg-foreground text-background hover:bg-foreground/90"><Download className="size-3.5" />CSV</a>
+          <a href={exportHref("xlsx")} className="inline-flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-transparent bg-foreground text-background hover:bg-foreground/90"><Download className="size-3.5" />Excel</a>
         </div>
       }>
       <div className="flex gap-1 mb-2 flex-wrap">
@@ -317,21 +311,22 @@ function CustomersSection({ grace }: { grace: number }) {
       </div>
       <div className="max-h-[520px] overflow-auto">
         <table className="w-full text-xs">
-          <thead><tr className="text-left text-muted-foreground border-b border-border/50 sticky top-0 bg-background">
-            <th className="py-1.5 font-medium">Customer</th><th className="font-medium">Gateway</th><th className="font-medium">Plan</th><th className="font-medium text-right">Amount</th><th className="font-medium">Started</th><th className="font-medium">Last charge</th><th className="font-medium">Period end</th>
+          <thead><tr className="text-left text-background bg-foreground sticky top-0">
+            <th className="py-1.5 font-medium text-right w-10 pr-3">#</th><th className="py-1.5 font-medium">Customer</th><th className="font-medium">Gateway</th><th className="font-medium">Plan</th><th className="font-medium text-right">Amount</th><th className="font-medium">Started</th><th className="font-medium">Last charge</th><th className="font-medium">Period end</th>
           </tr></thead>
           <tbody>
             {loading ? (
               Array.from({ length: 8 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="border-b border-border/30">
-                  <td colSpan={7} className="py-2"><Skeleton className="h-4 w-full" /></td>
+                  <td colSpan={8} className="py-2"><Skeleton className="h-4 w-full" /></td>
                 </tr>
               ))
             ) : rows.length === 0 ? (
-              <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">No subscriptions</td></tr>
+              <tr><td colSpan={8} className="py-6 text-center text-muted-foreground">No subscriptions</td></tr>
             ) : (
               rows.map((r, i) => (
                 <tr key={i} className="border-b border-border/30 hover:bg-muted/40">
+                  <td className="py-1.5 text-right tabular-nums text-muted-foreground w-10 pr-3 align-top">{(page - 1) * pageSize + i + 1}</td>
                   <td className="py-1.5">
                     <div className="font-medium">{s(r.customer_name) || <span className="text-muted-foreground">—</span>}</div>
                     <div className="text-muted-foreground">{s(r.customer_email) || s(r.customer_phone)}</div>

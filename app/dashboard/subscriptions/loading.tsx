@@ -23,7 +23,7 @@ export default function SubscriptionsLoading() {
 
       <ChartCardSkeleton bodyClassName="h-40" />
 
-      <TableCardSkeleton rows={8} cols={7} />
+      <TableCardSkeleton rows={8} cols={8} />
     </div>
   );
 }
