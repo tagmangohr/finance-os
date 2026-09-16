@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Search, LayoutDashboard, TrendingUp, ArrowLeftRight, Plug, Table2, Landmark, Sheet, LineChart, Scale } from "lucide-react";
+import { Search, LayoutDashboard, TrendingUp, Plug, Table2, Landmark, Sheet, LineChart, Scale } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard",             label: "War Room",      Icon: LayoutDashboard, hint: "⌘1" },
@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { href: "/dashboard/forecast",    label: "Forecast",      Icon: LineChart,       hint: "" },
   { href: "/dashboard/variance",    label: "Variance",      Icon: Scale,           hint: "" },
   { href: "/dashboard/revenue",     label: "Revenue",       Icon: TrendingUp,      hint: "⌘2" },
-  { href: "/dashboard/cashflow",    label: "Cash Flow",     Icon: ArrowLeftRight,  hint: "⌘3" },
   { href: "/dashboard/connectors",  label: "Connectors",    Icon: Plug,            hint: "⌘6" },
   { href: "/dashboard/data",        label: "Payments",      Icon: Table2,          hint: "⌘7" },
   { href: "/dashboard/bank",        label: "Bank",          Icon: Landmark,        hint: "⌘8" },

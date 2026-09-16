@@ -39,7 +39,7 @@ const NAV_GROUPS: NavGroup[] = [
   { label: "Money out", items: [
     // "bank" is a grantable (PII) slug now — visible to owners/admins and members granted it.
     { href: "/dashboard/bank",     slug: "bank",     label: "Bank",      Icon: Landmark },
-    { href: "/dashboard/cashflow", slug: "cashflow", label: "Cash flow", Icon: Activity },
+    // Cash flow hidden from nav per request (2026-09-16) — route/page kept, just not linked.
   ]},
 ];
 
