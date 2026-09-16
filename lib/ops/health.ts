@@ -77,13 +77,14 @@ const POLLED_TYPES = new Set(["razorpay", "stripe", "cashfree", "payu", "paytm",
 // run yet read as "scheduled" (neutral) rather than a problem.
 const CRON_META: Record<string, { label: string; schedule: string; staleHours: number; dailyish: boolean }> = {
   "nightly-sync":      { label: "Nightly reconcile",  schedule: "Daily · 00:30 IST", staleHours: 30, dailyish: true },
+  "mercury-balances":  { label: "Mercury balances",   schedule: "Daily · 00:30 IST", staleHours: 30, dailyish: true },
   "snapshot":          { label: "Snapshot & rollups", schedule: "Daily · 07:30 IST", staleHours: 30, dailyish: true },
   "process-sync-jobs": { label: "Sync queue worker",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
   "deliver-webhooks":  { label: "Outbound webhooks",  schedule: "Every minute",      staleHours: 0.5, dailyish: false },
   "fx-backfill":       { label: "FX backfill",        schedule: "Every 5 minutes",   staleHours: 1, dailyish: false },
   "drive-sync":        { label: "Drive sync",         schedule: "Hourly",            staleHours: 3, dailyish: false },
 };
-const CRON_ORDER = ["nightly-sync", "snapshot", "process-sync-jobs", "deliver-webhooks", "fx-backfill", "drive-sync"];
+const CRON_ORDER = ["nightly-sync", "mercury-balances", "snapshot", "process-sync-jobs", "deliver-webhooks", "fx-backfill", "drive-sync"];
 
 const hoursSince = (iso: string | null): number =>
   iso == null ? Infinity : (Date.now() - new Date(iso).getTime()) / 3_600_000;
