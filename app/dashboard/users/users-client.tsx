@@ -10,6 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { GRANTABLE_PAGES } from "@/lib/org/pages";
+import { PageHeader } from "@/components/dashboard/page-header";
+import { UserAvatar } from "@/components/ui/user-avatar";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -33,6 +35,7 @@ export interface OrgMember {
   invited_email: string;
   user_id:       string | null;
   full_name:     string | null;
+  avatar_url?:   string | null;
   role:          Role;
   page_access:   string[];
   payments_search_only?: boolean;
@@ -53,16 +56,8 @@ type CreateResponse = OrgMember & {
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
-function Avatar({ name, email }: { name: string | null; email: string }) {
-  const letter = (name?.trim() || email).charAt(0).toUpperCase();
-  return (
-    <div
-      className="w-8 h-8 rounded-lg flex items-center justify-center text-[12px] font-bold text-white flex-shrink-0"
-      style={{ background: "linear-gradient(135deg, #2a3a6f, #0f1628)" }}
-    >
-      {letter}
-    </div>
-  );
+function Avatar({ name, email, src }: { name: string | null; email: string; src?: string | null }) {
+  return <UserAvatar name={name} email={email} src={src} size="sm" rounded="lg" />;
 }
 
 function RoleBadge({ role }: { role: Role }) {
@@ -231,7 +226,7 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
             <div className="flex items-center gap-3 min-w-0">
               {/* In edit mode, show WHO is being edited (avatar + name + email). */}
               {mode === "edit" && member && !credentials && (
-                <Avatar name={member.full_name} email={member.invited_email} />
+                <Avatar name={member.full_name} email={member.invited_email} src={member.avatar_url} />
               )}
               <div className="min-w-0">
                 <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">
@@ -1005,7 +1000,7 @@ function MemberRow({
   return (
     <div className={cn(
       "flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all",
-      isPending ? "border-amber-500/15 bg-amber-500/[0.03]" : "border-border bg-accent/40",
+      isPending ? "border-amber-500/15 bg-amber-500/[0.03]" : "border-border bg-muted/20 hover:bg-muted/40",
       selected && "ring-1 ring-primary/40 border-primary/30"
     )}>
       <button
@@ -1020,11 +1015,11 @@ function MemberRow({
       >
         {selected && <Check className="w-2.5 h-2.5 text-white" />}
       </button>
-      <Avatar name={member.full_name} email={member.invited_email} />
+      <Avatar name={member.full_name} email={member.invited_email} src={member.avatar_url} />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <p className="text-[12.5px] font-medium text-muted-foreground truncate">
+          <p className="text-[12.5px] font-semibold text-foreground truncate">
             {member.full_name || member.invited_email.split("@")[0]}
           </p>
           <RoleBadge role={member.role} />
@@ -1133,6 +1128,12 @@ function OrgSection({
 
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [removing, setRemoving] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? ordered.filter((m) => (m.full_name ?? "").toLowerCase().includes(q) || m.invited_email.toLowerCase().includes(q) || m.role.includes(q))
+    : ordered;
 
   // Drop selections that no longer exist (after a removal/refresh).
   React.useEffect(() => {
@@ -1144,7 +1145,7 @@ function OrgSection({
   }, [group.members]);
 
   const toggle = (id: string) =>
-    setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const allSelected = ordered.length > 0 && selected.size === ordered.length;
   const toggleAll = () => setSelected(allSelected ? new Set() : new Set(ordered.map((m) => m.id)));
 
@@ -1174,20 +1175,29 @@ function OrgSection({
   };
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid hsl(var(--border))" }}>
-      <div
-        className="px-4 py-3 flex items-center justify-between"
-        style={{ background: "hsl(var(--accent))", borderBottom: "1px solid hsl(var(--border))" }}
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <Building2 className="w-3.5 h-3.5 text-muted-foreground/70 flex-shrink-0" />
-          <span className="text-[13px] font-semibold text-foreground truncate">{group.org.name}</span>
-          <span className="text-[10px] text-muted-foreground/70 font-mono">
+    <div className="rounded-xl border border-border bg-card overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-3 flex-wrap border-b border-border bg-muted/30">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <Building2 className="w-4 h-4 text-muted-foreground/60 flex-shrink-0" />
+          <span className="text-[13.5px] font-semibold text-foreground truncate">{group.org.name}</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 flex-shrink-0">
             {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
           </span>
         </div>
-        <Button size="sm" className="gap-1.5 h-7 text-[11px]" onClick={() => onCreate(group.org.id, group.org.name)}>
-          <UserPlus className="w-3 h-3" /> Add Users
+        {group.members.length > 3 && (
+          <div className="relative flex-shrink-0">
+            <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search members…"
+              spellCheck={false}
+              className="h-8 w-40 sm:w-52 pl-8 pr-2.5 rounded-lg border border-border bg-background text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary/40 transition-all"
+            />
+          </div>
+        )}
+        <Button size="sm" className="gap-1.5 h-8 text-[11.5px] flex-shrink-0" onClick={() => onCreate(group.org.id, group.org.name)}>
+          <UserPlus className="w-3.5 h-3.5" /> Add users
         </Button>
       </div>
 
@@ -1210,11 +1220,13 @@ function OrgSection({
 
       <div className="p-3 space-y-1.5">
         {group.members.length === 0 ? (
-          <p className="text-[12px] text-muted-foreground/70 text-center py-4">
+          <p className="text-[12px] text-muted-foreground/70 rounded-lg border border-dashed border-border py-6 text-center">
             No members yet — add users for {group.org.name}
           </p>
+        ) : visible.length === 0 ? (
+          <p className="text-[12px] text-muted-foreground/70 text-center py-6">No members match “{query}”.</p>
         ) : (
-          ordered.map((m) => (
+          visible.map((m) => (
             <MemberRow key={m.id} member={m} onEdit={onEdit} onRevoke={onRevoke}
               selected={selected.has(m.id)} onToggleSelect={toggle} />
           ))
@@ -1272,14 +1284,13 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
     ));
   }
 
+  const totalMembers = groups.reduce((n, g) => n + g.members.length, 0);
   return (
     <>
-      <div>
-        <h1 className="text-[18px] font-bold text-foreground tracking-tight">Team</h1>
-        <p className="text-[12px] text-muted-foreground/70 mt-0.5">
-          Create users for any organisation you manage and control their role &amp; page access
-        </p>
-      </div>
+      <PageHeader
+        title="Team"
+        subtitle={`Manage roles & page access · ${totalMembers} member${totalMembers === 1 ? "" : "s"} across ${groups.length} org${groups.length === 1 ? "" : "s"}`}
+      />
 
       <div className="space-y-4">
         {groups.map((g) => (

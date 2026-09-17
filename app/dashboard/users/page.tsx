@@ -26,11 +26,12 @@ export default async function UsersPage() {
         .order("created_at", { ascending: true });
 
       const enriched: OrgMember[] = await Promise.all((members ?? []).map(async (m) => {
-        if (!m.user_id) return { ...m, full_name: null } as OrgMember;
+        if (!m.user_id) return { ...m, full_name: null, avatar_url: null } as OrgMember;
         const { data: authUser } = await service.auth.admin.getUserById(m.user_id);
         return {
           ...m,
           full_name: (authUser?.user?.user_metadata?.full_name as string | undefined) ?? null,
+          avatar_url: (authUser?.user?.user_metadata?.avatar_url as string | undefined) ?? null,
         } as OrgMember;
       }));
 
@@ -39,7 +40,7 @@ export default async function UsersPage() {
   );
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-[880px] space-y-5">
       <UsersClient groups={groups} />
     </div>
   );
