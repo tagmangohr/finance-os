@@ -23,6 +23,7 @@ import {
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 import { parsePaymentText, type ParsedPayment } from "@/lib/ocr/parse";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCountUp } from "@/components/ui/animated-number";
 import { CustomizableCards } from "@/components/dashboard/customizable-cards";
 
 // ─── Client-side OCR (no AI) ─────────────────────────────────────────────────
@@ -1116,6 +1117,9 @@ function SummaryCard({
       Math.abs(n)
     );
   const sign = showSign ? (amount >= 0 ? "+" : "−") : "";
+  // Count the figure up to its value; sign is fixed by the target so only the
+  // magnitude tallies (fmt already takes Math.abs).
+  const animAmount = useCountUp(amount);
 
   return (
     // flex-col + mt-auto on the amount pins it to the BOTTOM, so the figure sits on
@@ -1138,7 +1142,7 @@ function SummaryCard({
         </p>
       )}
       <p className={cn("mt-auto text-lg font-bold tabular-nums leading-none", colour)}>
-        {sign}₹{fmt(amount)}
+        {sign}₹{fmt(animAmount)}
       </p>
     </div>
   );

@@ -100,56 +100,71 @@ export interface AnimatedNumberProps {
 }
 
 /**
- * A number that counts up to its value with an ease-out "tallying" animation,
- * then settles on the exact `display` string. Animates on mount (0 → value) and
- * again whenever `value` genuinely changes (prev → next) — not on unrelated
- * re-renders. SSR-safe and honours prefers-reduced-motion.
+ * The count-up engine, exposed as a hook so bespoke cards can format the number
+ * their own way. Returns the current numeric value, easing 0 → value on mount and
+ * prev → next when `value` changes (resuming from the on-screen value if a change
+ * interrupts an in-flight run). When settled it returns EXACTLY `value`, so a
+ * caller can render its exact final string on `n === value`. SSR-safe (returns
+ * `value` on the server + first client render) and honours prefers-reduced-motion.
  */
-export function AnimatedNumber({ value, format = "number", display, disabled, className }: AnimatedNumberProps) {
+export function useCountUp(value: number, opts?: { disabled?: boolean }): number {
   const reduced = useReducedMotion();
-  const final = display ?? formatMetricFrame(value, format, "");
-  const animatable = !disabled && Number.isFinite(value) && format !== "duration";
+  const animatable = !opts?.disabled && Number.isFinite(value);
 
-  // Last value we settled ON, so a change animates prev → next (mount: 0 → value).
+  // Last value we settled ON (baseline) + latest value actually on screen.
   const fromRef = React.useRef<number | null>(null);
-  // Latest value actually on screen (updated every frame) so a value change that
-  // interrupts an in-flight animation resumes from what's visible, not from 0.
   const liveRef = React.useRef<number | null>(null);
-  // SSR + first client render = the final value (hydration-safe).
-  const [text, setText] = React.useState(final);
+  const [n, setN] = React.useState(value); // SSR + first client render = final value
 
   useIsoLayoutEffect(() => {
     if (!animatable || reduced) {
-      setText(final);
+      setN(value);
       fromRef.current = value;
       liveRef.current = value;
       return;
     }
     const from = liveRef.current ?? fromRef.current ?? 0;
     const to = value;
-    if (from === to) { setText(final); return; }
+    if (from === to) { setN(value); return; }
 
     let raf = 0;
     const start = performance.now();
     // Set the start value before paint so the final number never flashes.
     liveRef.current = from;
-    setText(formatMetricFrame(from, format, final));
+    setN(from);
     const tick = (now: number) => {
       const t = Math.min(1, (now - start) / DURATION_MS);
       if (t >= 1) {
-        setText(final);            // land on the exact app-provided string
+        setN(to);                  // settle on the exact target
         fromRef.current = to;
         liveRef.current = to;
         return;
       }
       const cur = from + (to - from) * easeOut(t);
       liveRef.current = cur;
-      setText(formatMetricFrame(cur, format, final));
+      setN(cur);
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [value, final, animatable, reduced, format]);
+  }, [value, animatable, reduced]);
 
+  return n;
+}
+
+/**
+ * A number that counts up to its value with an ease-out "tallying" animation,
+ * then settles on the exact `display` string. Animates on mount (0 → value) and
+ * again whenever `value` genuinely changes (prev → next) — not on unrelated
+ * re-renders. SSR-safe and honours prefers-reduced-motion.
+ */
+export function AnimatedNumber({ value, format = "number", display, disabled, className }: AnimatedNumberProps) {
+  const final = display ?? formatMetricFrame(value, format, "");
+  const animatable = !disabled && Number.isFinite(value) && format !== "duration";
+  const n = useCountUp(value, { disabled: !animatable });
+  // Land on the EXACT app-provided string when settled; format intermediate frames.
+  // `Number.isNaN` guard: a NaN value is non-animatable and must render statically,
+  // but `NaN === NaN` is false, so it would otherwise fall through to a "₹NaN" frame.
+  const text = Number.isNaN(n) || n === value ? final : formatMetricFrame(n, format, final);
   return <span className={className}>{text}</span>;
 }
