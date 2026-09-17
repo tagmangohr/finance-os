@@ -43,6 +43,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
     await getActiveOrg();
   if (!org) redirect("/onboarding");
 
+  // The Team page manages EVERY org the user owns/admins, not just the active one,
+  // so its nav link must show whenever the user can manage at least one org — not be
+  // gated by the active org's role like the (active-org-scoped) Settings link.
+  const canManageAnyOrg = accessibleOrgs.some((o) => o.role === "owner" || o.role === "admin");
+
   // ── Connector status for the sidebar ───────────────────────────────────────
   const { data: connectors } = await supabase
     .from("connectors")
@@ -77,6 +82,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           userAvatarUrl={userAvatar}
           pageAccess={pageAccess}
           canManageTeam={canManageTeam}
+          canManageAnyOrg={canManageAnyOrg}
           connectorCount={connectorCount}
           liveCount={liveCount}
           lastSyncedAt={lastSyncedAt}
@@ -94,6 +100,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         userAvatarUrl={userAvatar}
         pageAccess={pageAccess}
         canManageTeam={canManageTeam}
+        canManageAnyOrg={canManageAnyOrg}
       />
 
       {/* Main column */}

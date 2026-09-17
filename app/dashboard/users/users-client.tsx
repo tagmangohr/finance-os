@@ -4,7 +4,7 @@ import * as React from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import {
-  UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, User, Trash2, Settings2, Check, Building2, Copy, KeyRound,
+  UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, Trash2, Settings2, Check, Building2, Copy, KeyRound,
   History, Search as SearchIcon, Download as DownloadIcon, ShieldCheck, LogIn, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -47,12 +47,6 @@ export interface OrgGroup {
   org:     { id: string; name: string };
   members: OrgMember[];
 }
-
-// Response of POST /api/users — a member row plus one-time credentials.
-type CreateResponse = OrgMember & {
-  created: boolean;
-  credentials: { email: string; password: string } | null;
-};
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
@@ -117,31 +111,26 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-// ─── Create / Edit dialog ─────────────────────────────────────────────────────
+// ─── Edit-permissions dialog ──────────────────────────────────────────────────
+// Adding members goes through BulkAddDialog (→ /api/users/bulk); this dialog only
+// edits an existing member's role / page access.
 
 interface MemberDialogProps {
-  mode:    "create" | "edit";
   orgId:   string;
   orgName: string;
-  member?: OrgMember;
+  member:  OrgMember;
   onClose: () => void;
   onSaved: (orgId: string, member: OrgMember) => void;
 }
 
-function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: MemberDialogProps) {
-  const [fullName,   setFullName]   = React.useState(member?.full_name ?? "");
-  const [email,      setEmail]      = React.useState(member?.invited_email ?? "");
-  const [role,       setRole]       = React.useState<Role>(member?.role ?? "viewer");
-  const [pageAccess, setPageAccess] = React.useState<string[]>(
-    member?.page_access ?? ["dashboard", "revenue", "cashflow"]
-  );
+function MemberDialog({ orgId, orgName, member, onClose, onSaved }: MemberDialogProps) {
+  const [role,       setRole]       = React.useState<Role>(member.role);
+  const [pageAccess, setPageAccess] = React.useState<string[]>(member.page_access ?? []);
   // Search-only Payments (support/calling teams): they can look up a payment but
   // never browse the whole book. Only meaningful for restricted members with
   // Payments access.
-  const [searchOnlyPay, setSearchOnlyPay] = React.useState<boolean>(member?.payments_search_only ?? false);
+  const [searchOnlyPay, setSearchOnlyPay] = React.useState<boolean>(member.payments_search_only ?? false);
   const [saving, setSaving] = React.useState(false);
-  // Once a user is created, show their credentials instead of the form.
-  const [credentials, setCredentials] = React.useState<{ email: string; password: string } | null>(null);
 
   // Admins implicitly get all pages; viewers/managers use the explicit list.
   const restrictsPages  = role !== "admin";
@@ -160,58 +149,24 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
   }
 
   const handleSave = async () => {
-    if (mode === "create" && (!email.trim() || !email.includes("@"))) {
-      toast.error("Enter a valid email address");
-      return;
-    }
     setSaving(true);
     try {
-      let res: Response;
-      if (mode === "create") {
-        res = await fetch("/api/users", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            org_id: orgId, email: email.trim(), full_name: fullName.trim() || null,
-            role, page_access: effectiveAccess,
-            payments_search_only: paymentsSearchOnly,
-          }),
-        });
-      } else {
-        res = await fetch(`/api/users/${member!.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role, page_access: effectiveAccess, payments_search_only: paymentsSearchOnly }),
-        });
-      }
+      const res = await fetch(`/api/users/${member.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role, page_access: effectiveAccess, payments_search_only: paymentsSearchOnly }),
+      });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed");
-
-      if (mode === "edit") {
-        onSaved(orgId, data as OrgMember);
-        toast.success("Permissions updated");
-        onClose();
-        return;
-      }
-
-      // Create: update the list, then either show credentials or close.
-      const resp = data as CreateResponse;
-      onSaved(orgId, resp);
-      if (resp.credentials) {
-        setCredentials(resp.credentials);
-      } else {
-        // Existing account linked to the org — no new password to share.
-        toast.success("Added — they can sign in with their existing password.");
-        onClose();
-      }
+      onSaved(orgId, data as OrgMember);
+      toast.success("Permissions updated");
+      onClose();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
       setSaving(false);
     }
   };
-
-  const title = credentials ? "User created" : mode === "create" ? "Create Team Member" : "Edit Permissions";
 
   return (
     <Dialog.Root open onOpenChange={(o) => !o && onClose()}>
@@ -221,30 +176,19 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
           className="fixed z-[201] w-[calc(100vw-32px)] max-w-[460px] bg-popover border border-border rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.75)] focus:outline-none"
           style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
         >
-          {/* Header */}
+          {/* Header — who is being edited */}
           <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border">
             <div className="flex items-center gap-3 min-w-0">
-              {/* In edit mode, show WHO is being edited (avatar + name + email). */}
-              {mode === "edit" && member && !credentials && (
-                <Avatar name={member.full_name} email={member.invited_email} src={member.avatar_url} />
-              )}
+              <Avatar name={member.full_name} email={member.invited_email} src={member.avatar_url} />
               <div className="min-w-0">
                 <Dialog.Title className="text-[14px] font-semibold text-foreground truncate">
-                  {mode === "edit" && member && !credentials
-                    ? (member.full_name?.trim() || member.invited_email)
-                    : title}
+                  {member.full_name?.trim() || member.invited_email}
                 </Dialog.Title>
-                {mode === "edit" && member && !credentials ? (
-                  <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mt-0.5 truncate">
-                    <Mail className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{member.invited_email}</span>
-                    <span className="text-muted-foreground/40">·</span>
-                    <Building2 className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{orgName}</span>
-                  </p>
-                ) : (
-                  <p className="flex items-center gap-1 text-[11px] text-muted-foreground/70 mt-0.5">
-                    <Building2 className="w-3 h-3" /> {orgName}
-                  </p>
-                )}
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/70 mt-0.5 truncate">
+                  <Mail className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{member.invited_email}</span>
+                  <span className="text-muted-foreground/40">·</span>
+                  <Building2 className="w-3 h-3 flex-shrink-0" /> <span className="truncate">{orgName}</span>
+                </p>
               </div>
             </div>
             <Dialog.Close asChild>
@@ -254,200 +198,136 @@ function MemberDialog({ mode, orgId, orgName, member, onClose, onSaved }: Member
             </Dialog.Close>
           </div>
 
-          {credentials ? (
-            /* ── Credentials view (shown once) ─────────────────────────────── */
-            <>
-              <div className="px-5 py-4 space-y-4">
-                <div className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg bg-emerald-500/[0.07] border border-emerald-500/20">
-                  <KeyRound className="w-4 h-4 text-success mt-0.5 flex-shrink-0" />
-                  <p className="text-[11.5px] text-muted-foreground leading-relaxed">
-                    Account ready. <span className="font-semibold text-foreground">Copy these now</span> and share them
-                    securely — the password is shown only once. They&apos;ll be asked to set their own password on first login.
-                  </p>
-                </div>
-                <CopyField label="Email" value={credentials.email} />
-                <CopyField label="Temporary Password" value={credentials.password} />
-              </div>
-              <div className="flex gap-2.5 px-5 pb-5 pt-2">
-                <Button className="flex-1" onClick={onClose}>Done</Button>
-              </div>
-            </>
-          ) : (
-            /* ── Form view ─────────────────────────────────────────────────── */
-            <>
-              <div className="px-5 py-4 space-y-4">
-                {/* Name + Email (create only) */}
-                {mode === "create" && (
-                  <>
-                    <div>
-                      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
-                        Full Name <span className="font-medium text-muted-foreground/50 normal-case tracking-normal">(optional)</span>
-                      </label>
-                      <div className="relative">
-                        <User className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
-                        <input
-                          type="text"
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          placeholder="Jane Doe"
-                          autoFocus
-                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30"
-                          style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
-                        Email Address
-                      </label>
-                      <div className="relative">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/70" />
-                        <input
-                          type="email"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && handleSave()}
-                          placeholder="colleague@company.com"
-                          className="w-full pl-9 pr-3 py-2 rounded-lg text-[13px] text-muted-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary/30"
-                          style={{ background: "hsl(var(--accent))", border: "1px solid hsl(var(--border))" }}
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Role */}
-                <div>
-                  <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
-                    Role
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(Object.keys(ROLE_META) as Role[]).map((r) => {
-                      const active = role === r;
-                      const { label, desc, Icon } = ROLE_META[r];
-                      return (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => setRole(r)}
-                          className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
-                          style={{
-                            background: active ? "rgba(124,82,240,0.10)" : "hsl(var(--accent))",
-                            border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "hsl(var(--border))"}`,
-                          }}
-                        >
-                          <div className="flex items-center gap-1.5 mb-0.5">
-                            <Icon className={cn("w-3 h-3", active ? "text-primary" : "text-muted-foreground/70")} />
-                            <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
-                              {label}
-                            </span>
-                          </div>
-                          <span className="text-[9.5px] leading-tight text-muted-foreground/70">{desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Page access */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
-                      Page Access
-                    </label>
-                    {restrictsPages && (
-                      <button
-                        type="button"
-                        onClick={toggleAll}
-                        className="text-[10px] text-primary/70 hover:text-primary transition-colors"
-                      >
-                        {pageAccess.length === PAGE_OPTIONS.length ? "Deselect all" : "Select all"}
-                      </button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {PAGE_OPTIONS.map(({ value, label }) => {
-                      const on = effectiveAccess.includes(value);
-                      return (
-                        <button
-                          key={value}
-                          type="button"
-                          onClick={() => togglePage(value)}
-                          disabled={!restrictsPages}
-                          className={cn(
-                            "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
-                            on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
-                               : "bg-accent/40 border border-border hover:bg-accent",
-                            !restrictsPages && "opacity-60"
-                          )}
-                        >
-                          <div className={cn(
-                            "w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0 border",
-                            on ? "bg-emerald-500/20 border-emerald-500/40" : "border-border"
-                          )}>
-                            {on && <Check className="w-2 h-2 text-success" />}
-                          </div>
-                          <span className={cn("text-[11.5px] font-medium", on ? "text-muted-foreground" : "text-muted-foreground/70")}>
-                            {label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {!restrictsPages && (
-                    <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Admins always have access to all pages.</p>
-                  )}
-                  {role === "manager" && (
-                    <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
-                  )}
-
-                  {/* Search-only Payments sub-toggle — shown when a restricted member
-                      has Payments access. Turns Payments into a lookup-only tool. */}
-                  {canSearchOnly && (
+          {/* Form */}
+          <div className="px-5 py-4 space-y-4">
+            {/* Role */}
+            <div>
+              <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70 block mb-1.5">
+                Role
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {(Object.keys(ROLE_META) as Role[]).map((r) => {
+                  const active = role === r;
+                  const { label, desc, Icon } = ROLE_META[r];
+                  return (
                     <button
+                      key={r}
                       type="button"
-                      onClick={() => setSearchOnlyPay((v) => !v)}
+                      onClick={() => setRole(r)}
+                      className="flex flex-col items-start px-2.5 py-2.5 rounded-xl transition-all text-left"
+                      style={{
+                        background: active ? "rgba(124,82,240,0.10)" : "hsl(var(--accent))",
+                        border: `1px solid ${active ? "rgba(124,82,240,0.30)" : "hsl(var(--border))"}`,
+                      }}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <Icon className={cn("w-3 h-3", active ? "text-primary" : "text-muted-foreground/70")} />
+                        <span className={cn("text-[12px] font-semibold", active ? "text-foreground" : "text-muted-foreground")}>
+                          {label}
+                        </span>
+                      </div>
+                      <span className="text-[9.5px] leading-tight text-muted-foreground/70">{desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Page access */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[10px] font-bold tracking-[0.14em] uppercase text-muted-foreground/70">
+                  Page Access
+                </label>
+                {restrictsPages && (
+                  <button
+                    type="button"
+                    onClick={toggleAll}
+                    className="text-[10px] text-primary/70 hover:text-primary transition-colors"
+                  >
+                    {pageAccess.length === PAGE_OPTIONS.length ? "Deselect all" : "Select all"}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {PAGE_OPTIONS.map(({ value, label }) => {
+                  const on = effectiveAccess.includes(value);
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => togglePage(value)}
+                      disabled={!restrictsPages}
                       className={cn(
-                        "mt-2.5 w-full flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all border",
-                        searchOnlyPay ? "bg-primary/[0.06] border-primary/25" : "bg-accent/40 border-border hover:bg-accent"
+                        "flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-all disabled:cursor-default",
+                        on ? "bg-emerald-500/[0.08] border border-emerald-500/20"
+                           : "bg-accent/40 border border-border hover:bg-accent",
+                        !restrictsPages && "opacity-60"
                       )}
                     >
                       <div className={cn(
-                        "mt-0.5 w-8 h-[18px] rounded-full flex-shrink-0 relative transition-colors",
-                        searchOnlyPay ? "bg-primary" : "bg-muted-foreground/25"
+                        "w-3.5 h-3.5 rounded flex items-center justify-center flex-shrink-0 border",
+                        on ? "bg-emerald-500/20 border-emerald-500/40" : "border-border"
                       )}>
-                        <span className={cn(
-                          "absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all",
-                          searchOnlyPay ? "left-[15px]" : "left-0.5"
-                        )} />
+                        {on && <Check className="w-2 h-2 text-success" />}
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-[11.5px] font-semibold text-foreground">Payments: search-only</p>
-                        <p className="text-[10.5px] text-muted-foreground/70 leading-snug mt-0.5">
-                          No transaction list or totals — they must search (name, email, phone, order/UTR/payment ID)
-                          to look up a specific payment. Ideal for support / calling teams.
-                        </p>
-                      </div>
+                      <span className={cn("text-[11.5px] font-medium", on ? "text-muted-foreground" : "text-muted-foreground/70")}>
+                        {label}
+                      </span>
                     </button>
-                  )}
-                </div>
+                  );
+                })}
               </div>
+              {!restrictsPages && (
+                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Admins always have access to all pages.</p>
+              )}
+              {role === "manager" && (
+                <p className="text-[10.5px] text-muted-foreground/70 mt-1.5">Managers can view and edit data on the selected pages.</p>
+              )}
 
-              {/* Footer */}
-              <div className="flex gap-2.5 px-5 pb-5 pt-2">
-                <Dialog.Close asChild>
-                  <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
-                    Cancel
-                  </Button>
-                </Dialog.Close>
-                <Button className="flex-1 gap-2" onClick={handleSave} disabled={saving}>
-                  {saving
-                    ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> {mode === "create" ? "Creating…" : "Saving…"}</>
-                    : mode === "create" ? "Create User" : "Save Changes"}
-                </Button>
-              </div>
-            </>
-          )}
+              {/* Search-only Payments sub-toggle — shown when a restricted member
+                  has Payments access. Turns Payments into a lookup-only tool. */}
+              {canSearchOnly && (
+                <button
+                  type="button"
+                  onClick={() => setSearchOnlyPay((v) => !v)}
+                  className={cn(
+                    "mt-2.5 w-full flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-left transition-all border",
+                    searchOnlyPay ? "bg-primary/[0.06] border-primary/25" : "bg-accent/40 border-border hover:bg-accent"
+                  )}
+                >
+                  <div className={cn(
+                    "mt-0.5 w-8 h-[18px] rounded-full flex-shrink-0 relative transition-colors",
+                    searchOnlyPay ? "bg-primary" : "bg-muted-foreground/25"
+                  )}>
+                    <span className={cn(
+                      "absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all",
+                      searchOnlyPay ? "left-[15px]" : "left-0.5"
+                    )} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11.5px] font-semibold text-foreground">Payments: search-only</p>
+                    <p className="text-[10.5px] text-muted-foreground/70 leading-snug mt-0.5">
+                      No transaction list or totals — they must search (name, email, phone, order/UTR/payment ID)
+                      to look up a specific payment. Ideal for support / calling teams.
+                    </p>
+                  </div>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex gap-2.5 px-5 pb-5 pt-2">
+            <Dialog.Close asChild>
+              <Button variant="outline" className="flex-1 border-border bg-transparent text-muted-foreground hover:text-muted-foreground hover:bg-accent hover:border-border">
+                Cancel
+              </Button>
+            </Dialog.Close>
+            <Button className="flex-1 gap-2" onClick={handleSave} disabled={saving}>
+              {saving ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Saving…</> : "Save Changes"}
+            </Button>
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -1349,7 +1229,6 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
 
       {editing && (
         <MemberDialog
-          mode="edit"
           orgId={editing.org_id}
           orgName={orgNameFor(editing.org_id)}
           member={editing}

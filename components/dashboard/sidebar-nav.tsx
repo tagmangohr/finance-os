@@ -19,7 +19,9 @@ import { UserAvatar } from "@/components/ui/user-avatar";
 // pinned last. `slug` drives page-access gating; items without a slug are always
 // shown (subject to ownerOnly). This mirrors the app's revenue/expense firewall.
 
-type NavItem = { href: string; slug?: string; label: string; Icon: LucideIcon; exact?: boolean; ownerOnly?: boolean };
+// ownerOnly: visible only to owner/admin of the ACTIVE org (active-org-scoped pages).
+// anyOrgManage: visible when the user manages ≥1 org (cross-org pages like Team).
+type NavItem = { href: string; slug?: string; label: string; Icon: LucideIcon; exact?: boolean; ownerOnly?: boolean; anyOrgManage?: boolean };
 type NavGroup = { label: string; items: NavItem[] };
 
 const NAV_GROUPS: NavGroup[] = [
@@ -48,7 +50,7 @@ const SETUP_NAV: NavItem[] = [
   { href: "/dashboard/connectors", slug: "connectors", label: "Connectors", Icon: Plug },
   { href: "/dashboard/health",     slug: "health",     label: "Sync Health", Icon: Activity },
   { href: "/dashboard/profile",    label: "Profile",   Icon: User },
-  { href: "/dashboard/users",      label: "Team",      Icon: Users, ownerOnly: true },
+  { href: "/dashboard/users",      label: "Team",      Icon: Users, anyOrgManage: true },
   { href: "/dashboard/settings",   label: "Settings",  Icon: Settings, ownerOnly: true },
 ];
 
@@ -64,6 +66,8 @@ export interface SidebarNavProps {
   /** null = owner/admin (all pages visible); string[] = specific slugs allowed */
   pageAccess?:    string[] | null;
   canManageTeam?: boolean;
+  /** True when the user owns/admins ≥1 org — gates cross-org links (Team). */
+  canManageAnyOrg?: boolean;
   connectorCount?: number;
   liveCount?:      number;
   lastSyncedAt?:   string | null;
@@ -94,6 +98,7 @@ export function SidebarNav({
   userAvatarUrl = null,
   pageAccess   = null,
   canManageTeam = true,
+  canManageAnyOrg = false,
   connectorCount = 0,
   liveCount      = 0,
   lastSyncedAt,
@@ -122,9 +127,11 @@ export function SidebarNav({
 
   const isActive = (href: string, exact?: boolean) => (exact ? pathname === href : pathname.startsWith(href));
 
-  // An item is visible if: it has no access slug (always), OR access is unrestricted
-  // (owner/admin), OR the slug is in the member's allowed set. Team is ownerOnly.
+  // Visibility: anyOrgManage items (Team) show when the user manages ≥1 org;
+  // ownerOnly items (Settings) require active-org owner/admin; otherwise an item
+  // shows if it has no access slug, access is unrestricted, or its slug is allowed.
   const canSee = (item: NavItem) => {
+    if (item.anyOrgManage) return canManageAnyOrg;
     if (item.ownerOnly && !canManageTeam) return false;
     if (!item.slug) return true;
     return pageAccess === null || pageAccess.includes(item.slug);
