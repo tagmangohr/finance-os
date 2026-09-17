@@ -11,6 +11,18 @@ export function initialsOf(name?: string | null, email?: string | null): string 
   return e ? e.charAt(0).toUpperCase() : "?";
 }
 
+/**
+ * Only render an avatar image if it points at OUR Supabase avatars storage. avatar_url
+ * lives on user_metadata (client-settable via updateUser), so a user could technically
+ * set it to an arbitrary external URL — which would make every teammate's browser fetch
+ * that URL (an IP/tracking vector). Restricting rendering to our own storage path closes
+ * that; anything else falls back to initials. blob:/data: previews are allowed (local).
+ */
+function isTrustedAvatar(src: string): boolean {
+  if (src.startsWith("blob:") || src.startsWith("data:")) return true;
+  return src.includes("/storage/v1/object/public/avatars/");
+}
+
 const SIZES: Record<string, { box: string; text: string }> = {
   xs: { box: "w-6 h-6", text: "text-[10px]" },
   sm: { box: "w-8 h-8", text: "text-[12px]" },
@@ -41,7 +53,7 @@ export function UserAvatar({
 }) {
   const s = SIZES[size];
   const corner = rounded === "full" ? "rounded-full" : rounded === "lg" ? "rounded-lg" : "rounded-2xl";
-  if (src) {
+  if (src && isTrustedAvatar(src)) {
     return (
       // eslint-disable-next-line @next/next/no-img-element
       <img

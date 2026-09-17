@@ -73,7 +73,11 @@ export function AvatarCropper({
     if (file.size > MAX_BYTES) { setErr("Image is too large (max 8 MB)."); return; }
     const url = URL.createObjectURL(file);
     const image = new Image();
-    image.onload = () => { setImg(image); setZoom(1); setOffset({ x: 0, y: 0 }); URL.revokeObjectURL(url); };
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      if (!image.width || !image.height) { setErr("That image has no dimensions — try a PNG or JPG."); return; }
+      setImg(image); setZoom(1); setOffset({ x: 0, y: 0 });
+    };
     image.onerror = () => { setErr("Couldn't read that image."); URL.revokeObjectURL(url); };
     image.src = url;
   };
@@ -91,13 +95,16 @@ export function AvatarCropper({
         out.toBlob((b) => (b ? res(b) : rej(new Error("Encode failed"))), "image/jpeg", 0.9));
 
       const supabase = createClient();
-      const path = `${userId}/avatar-${Date.now()}.jpg`;
+      // Fixed filename per user + upsert → exactly one object per user (no orphan
+      // accumulation). A ?v= cache-buster on the stored URL defeats the CDN cache since
+      // the path itself no longer changes.
+      const path = `${userId}/avatar.jpg`;
       const { error: upErr } = await supabase.storage.from("avatars").upload(path, blob, {
         cacheControl: "3600", upsert: true, contentType: "image/jpeg",
       });
       if (upErr) throw new Error(upErr.message);
       const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
-      const url = pub.publicUrl;
+      const url = `${pub.publicUrl}?v=${Date.now()}`;
       const { error: metaErr } = await supabase.auth.updateUser({ data: { avatar_url: url } });
       if (metaErr) throw new Error(metaErr.message);
       onUploaded(url);
@@ -129,7 +136,7 @@ export function AvatarCropper({
                 <p className="text-[12.5px] font-medium text-foreground">Choose a photo</p>
                 <p className="text-[11px] text-muted-foreground">PNG or JPG, up to 8 MB</p>
               </div>
-              <input type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+              <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
             </label>
           ) : (
             <>
@@ -140,6 +147,9 @@ export function AvatarCropper({
                 onMouseMove={(e) => { if (drag.current) setOffset(clamp({ x: e.clientX - drag.current.x, y: e.clientY - drag.current.y }, zoom)); }}
                 onMouseUp={() => { drag.current = null; }}
                 onMouseLeave={() => { drag.current = null; }}
+                onTouchStart={(e) => { const t = e.touches[0]; drag.current = { x: t.clientX - offset.x, y: t.clientY - offset.y }; }}
+                onTouchMove={(e) => { if (drag.current) { const t = e.touches[0]; setOffset(clamp({ x: t.clientX - drag.current.x, y: t.clientY - drag.current.y }, zoom)); } }}
+                onTouchEnd={() => { drag.current = null; }}
                 onWheel={(e) => { const z = Math.max(1, Math.min(3, zoom + (e.deltaY < 0 ? 0.1 : -0.1))); setZoom(z); setOffset((o) => clamp(o, z)); }}
               >
                 <canvas ref={canvasRef} width={VIEW} height={VIEW} />
@@ -164,7 +174,7 @@ export function AvatarCropper({
           {img && (
             <label className="text-[12px] text-muted-foreground hover:text-foreground cursor-pointer px-2 py-1.5">
               Replace
-              <input type="file" accept="image/*" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
+              <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
             </label>
           )}
           <button type="button" onClick={onClose} className="text-[12px] font-medium text-muted-foreground hover:text-foreground rounded-lg px-3 py-1.5">Cancel</button>
