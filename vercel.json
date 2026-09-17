@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/nightly-sync",      "schedule": "0 19 * * *" },
+    { "path": "/api/cron/reconcile",         "schedule": "30 20 * * *" },
     { "path": "/api/cron/mercury-balances",  "schedule": "0 19 * * *" },
     { "path": "/api/cron/process-sync-jobs", "schedule": "* * * * *"  },
     { "path": "/api/cron/deliver-webhooks",  "schedule": "* * * * *"  },

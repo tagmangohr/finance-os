@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { invalidateOrg } from "@/lib/cache/org-cache";
 import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { logCronRun } from "@/lib/ops/cron-runs";
 import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { detectCashfreeSubDoubleCounts } from "@/lib/ops/sub-integrity";
 import { categorizeSource } from "@/lib/finance/transaction-status";
-import { enqueueIncremental, drainSyncJobs, pollCashfreeSubscriptions, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
-import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
-import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
-import { categorizeBankTransactions } from "@/lib/expenses/categorize";
-import { reconcileCashfreeFees } from "@/lib/connectors/cashfree-fees";
+import { enqueueIncremental, drainSyncJobs, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
 import { syncStripeEventsDelta, reconcileStripeFees } from "@/lib/connectors/stripe-events";
 import { isLinkConnector } from "@/lib/connectors/links";
 import { reconcileFxRates } from "@/lib/fx/rates";
@@ -149,21 +144,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     console.error("[cron/nightly-sync] fx reconcile failed:", e);
   }
 
-  // Kick the worker so draining starts immediately instead of waiting for the
-  // next per-minute process-sync-jobs tick. Then self-heal Cashfree recurring
-  // charges: poll each known subscription's payments (Layer 2 net) so any charge a
-  // webhook never delivered is recovered — least-recently-polled first, so the whole
-  // registry rotates over successive nights within the function budget.
+  // Cashfree connectors are still needed here for the sub-dupe watchdog (below). The
+  // heavy per-connector reconciliation (poll/fees/subs/invoices/categorize) moved to
+  // /api/cron/reconcile, so subApi/bank connector lists are computed there now.
   const cashfreeConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "cashfree");
-  // Stripe/Razorpay expose listable subscription APIs → sync the whole current FY each
-  // night (idempotent upserts). This both backfills and keeps the subscriptions table
-  // fresh. Bounded by a deadline so it never overruns the function budget.
-  const subApiConnectors = (connectors as ConnectorRow[]).filter((c) => c.type === "stripe" || c.type === "razorpay");
-  // Distinct orgs with a bank feed → auto-categorize freshly-synced bank rows.
-  const bankOrgIds = Array.from(
-    new Set((connectors as ConnectorRow[]).filter((c) => c.type === "mercury").map((c) => c.org_id))
-  );
-  const fyStartMs = new Date("2026-04-01T00:00:00+05:30").getTime();
   const worker = randomUUID();
   after(async () => {
     const sb = await createServiceClient();
@@ -227,75 +211,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       }
     }
 
-    // ── Heavy reconciliation ──────────────────────────────────────────────────
+    // ── Drain kick ────────────────────────────────────────────────────────────
+    // Start applying the night's enqueued backfills immediately instead of waiting for
+    // the next per-minute worker tick. Bounded; safe to overlap (SKIP LOCKED).
     try {
       await drainSyncJobs(sb, worker);
     } catch (e) {
       console.error("[cron/nightly-sync] drain failed:", e);
     }
-    for (const c of cashfreeConnectors) {
-      try {
-        const res = await pollCashfreeSubscriptions(sb, c, { deadlineMs: Date.now() + 20_000 });
-        if (res.polled) console.log(`[cron/nightly-sync] cashfree subs polled=${res.polled} inserted=${res.inserted} updated=${res.updated} (${c.id})`);
-      } catch (e) {
-        console.error(`[cron/nightly-sync] subscription poll failed (${c.id}):`, e);
-      }
-      // Cashfree fees live ONLY in the Settlement Recon feed and settle a day or two
-      // late — the webhooks carry none. Sweep a TRAILING window every night (not the
-      // forward payment checkpoint) so late-settling fees AND any window Cashfree's
-      // flaky recon failed on are always back-filled onto metadata.fee. Fill-only.
-      try {
-        const feeFrom = new Date(Date.now() - 75 * 86_400_000);
-        const res = await reconcileCashfreeFees(sb, c, { fromDate: feeFrom, toDate: now, deadlineMs: Date.now() + 45_000 });
-        if (res.updated) { console.log(`[cron/nightly-sync] cashfree fees filled=${res.updated}/${res.feesSeen} (${c.id})`); invalidateOrg(c.org_id); }
-      } catch (e) {
-        console.error(`[cron/nightly-sync] cashfree fee reconcile failed (${c.id}):`, e);
-      }
-    }
-    for (const c of subApiConnectors) {
-      try {
-        const res = await syncGatewaySubscriptions(sb, c, { fromMs: fyStartMs, deadlineMs: Date.now() + 20_000 });
-        if (res.fetched) console.log(`[cron/nightly-sync] ${c.type} subscriptions synced=${res.fetched} (${c.id})`);
-      } catch (e) {
-        console.error(`[cron/nightly-sync] ${c.type} subscription sync failed (${c.id}):`, e);
-      }
-      try {
-        const inv = await syncGatewayInvoices(sb, c, { fromMs: fyStartMs, deadlineMs: Date.now() + 20_000 });
-        if (inv.fetched) console.log(`[cron/nightly-sync] ${c.type} invoices synced=${inv.fetched} (${c.id})`);
-      } catch (e) {
-        console.error(`[cron/nightly-sync] ${c.type} invoice sync failed (${c.id}):`, e);
-      }
-    }
-    // Reconcile: tag any subscription charges now bridgeable via invoices. Fill-only,
-    // idempotent — guarantees the "every subscription charge carries subscription_id"
-    // invariant stays true as new invoices/charges arrive (no drift).
-    if (subApiConnectors.length) {
-      try {
-        const tagged = await tagSubscriptionCharges(sb);
-        if (tagged) console.log(`[cron/nightly-sync] tagged ${tagged} subscription charges from invoices`);
-      } catch (e) {
-        console.error("[cron/nightly-sync] tag reconcile failed:", e);
-      }
-    }
-    // Mercury balance refresh now runs in its own isolated cron
-    // (/api/cron/mercury-balances) so it can't be starved at the tail of this heavy
-    // after() (which left the Bank cash position weeks stale + missing Treasury).
-    // Auto-categorize newly-synced bank transactions (rules + AI if configured).
-    // Fill-only, so it only touches rows the last run didn't classify.
-    for (const orgId of bankOrgIds) {
-      try {
-        const res = await categorizeBankTransactions(orgId, sb);
-        if (res.scanned) console.log(`[cron/nightly-sync] bank categorize org=${orgId} scanned=${res.scanned} system=${res.systemApplied} rule=${res.ruleApplied} ai=${res.aiApplied} remaining=${res.remaining}`);
-        // Bust the org cache so the Bank/P&L aggregates reflect the new categories
-        // (the cron path previously left them stale until the 1h TTL).
-        if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(orgId);
-      } catch (e) {
-        console.error(`[cron/nightly-sync] bank categorize failed (${orgId}):`, e);
-      }
-    }
-    // (Integrity watchdogs — sub-dupe-watch + payment-pending-watch — now run at the
-    // TOP of this after() so they always execute, even if the heavy phases above are
-    // starved by the function budget.)
+
+    // The heavy per-connector reconciliation (Cashfree poll + fee recon, Stripe/Razorpay
+    // subscription + invoice sync, subscription-charge tagging, bank categorization) has
+    // moved to its OWN cron — /api/cron/reconcile (02:00 IST) — so it can never be starved
+    // by this after()'s budget the way it silently was before. This after() now does only
+    // the cheap, always-completing work: the integrity watchdogs (above) + the drain kick.
   });
 
   await logCronRun(supabase, "nightly-sync", startedAt, "ok", null, {

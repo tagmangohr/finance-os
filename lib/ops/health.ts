@@ -73,6 +73,9 @@ export type SyncHealthData = {
 };
 
 const STALE_HOURS = 48; // an active POLLED connector that hasn't synced in this long → amber
+// A cron_runs row still in status "running" longer than this was killed mid-run (no cron
+// legitimately runs this long — maxDuration ≤ 300s). Used to unmask silent timeouts.
+const RUNNING_STUCK_HOURS = 0.25; // 15 min
 // Only POLLED connectors get the stale-since-last-sync check. Webhook-only connectors
 // (App Store, Brex) never set last_synced_at from a poll, so staleness there is
 // meaningless — flag them only on actual failed/erroring jobs.
@@ -188,6 +191,7 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
 
     let health: CronHealth["health"];
     let state: CronHealth["state"];
+    let syntheticError: string | null = null;
     if (!enabled) {
       // Turned OFF via the toggle. Intentional — a neutral "off", never overdue/red, so
       // a paused job doesn't false-alarm the page or count as a red flag. Its stored
@@ -198,6 +202,17 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
       // (neutral); a high-frequency job that has NO runs is overdue (should have fired).
       state = meta.dailyish ? "scheduled" : "overdue";
       health = meta.dailyish ? "green" : "amber";
+    } else if (latest.status === "running") {
+      // recordCronRun inserts a "running" row then updates it to ok/failed. A row still
+      // "running" well past any legitimate runtime (no cron runs > ~15 min; maxDuration
+      // ≤ 300s) means the function was KILLED mid-run — a timeout/OOM that never got to
+      // record a result. Surface it as a failure instead of letting it hide as "ok".
+      if (hoursSince(latest.at) > RUNNING_STUCK_HOURS) {
+        state = "failed"; health = "red";
+        syntheticError = "Did not finish — the run started but never recorded a result (likely timed out).";
+      } else {
+        state = "ok"; health = "green"; // legitimately in progress right now
+      }
     } else if (latest.status === "failed") {
       state = "failed"; health = "red";
     } else if (hoursSince(latest.at) > meta.staleHours) {
@@ -216,7 +231,7 @@ export async function getSyncHealth(orgId: string, supabase: ServiceClient): Pro
       lastStatus: latest ? (latest.status as CronHealth["lastStatus"]) : "none",
       lastRunAt: latest?.at ?? null,
       lastDurationMs: latest?.durationMs ?? null,
-      lastError: shorten(latest?.error ?? null),
+      lastError: shorten(syntheticError ?? latest?.error ?? null),
       health,
       state,
       runs,
