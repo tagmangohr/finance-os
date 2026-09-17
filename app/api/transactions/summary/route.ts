@@ -31,9 +31,13 @@ export const maxDuration = 60;
  *                 dispute is money contested or lost, so it's always shown. (Pulled
  *                 from a category='dispute' query because 'lost' disputes can map to
  *                 a failed status that the main pass filters out.)
- *   Fees        — non-transfer posted rows, Σ metadata.fee (FX-converted to INR)
- *   Net Flow    — posted payments − posted operational debits − fees; transfers
- *                 (gateway payouts/settlements) excluded entirely.
+ *   Fees        — non-transfer posted rows, Σ metadata.fee (FX-converted to INR),
+ *                 PLUS gateway dispute (chargeback) fees: Σ metadata.dispute_fee over
+ *                 category='dispute' rows, ANY status (the fee is charged when a dispute
+ *                 is raised, so it's counted irrespective of outcome — same as the
+ *                 disputes card and the P&L "Dispute Fees" line).
+ *   Net Flow    — posted payments − posted operational debits − fees (incl. dispute
+ *                 fees); transfers (gateway payouts/settlements) excluded entirely.
  * ─────────────────────────────────────────────────────────────────────────────
  */
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -74,15 +78,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // We then reduce those few dozen rows with the EXACT locked card logic below —
   // identical numbers to the old per-row pass, but ONE query instead of paging
   // through tens of thousands of rows (which timed out on long ranges).
-  const { data: groupRows, error } = await auth.supabase.rpc("transactions_summary_groups", {
-    p_org:       auth.org.id,
-    p_connector: connectorId,
-    p_source:    source,
-    p_type:      type,
-    p_from:      from ? from.slice(0, 10) : null,
-    p_to:        to ? to.slice(0, 10) : null,
-    p_search:    search || null,
-  });
+  // The RPC's fee measure reads only metadata.fee/fees; gateway DISPUTE (chargeback)
+  // fees live under the dedicated metadata.dispute_fee key (see the P&L "Dispute Fees"
+  // line), so they need a small SEPARATE pass — the dispute slice is a tiny,
+  // index-backed set (category='dispute', migration 081). Run it in PARALLEL with the
+  // rollup RPC, applying the SAME filters the card uses so the two stay in lock-step.
+  let dfQuery = auth.supabase
+    .from("transactions")
+    .select("currency, fx_rate, metadata")
+    .eq("org_id", auth.org.id)
+    .eq("ledger", "payments")
+    .eq("category", "dispute")
+    .or("metadata->>dispute_fee.not.is.null")
+    .limit(50000); // disputes are in the hundreds — this bound is never hit
+  if (connectorId) dfQuery = dfQuery.eq("connector_id", connectorId);
+  if (source)      dfQuery = dfQuery.eq("source", source);
+  if (type)        dfQuery = dfQuery.eq("type", type);
+  if (from)        dfQuery = dfQuery.gte("transaction_date", from.slice(0, 10));
+  if (to)          dfQuery = dfQuery.lte("transaction_date", to.slice(0, 10));
+  if (search)      dfQuery = dfQuery.ilike("search_text", `%${search}%`);
+
+  const [{ data: groupRows, error }, disputeFeeRes] = await Promise.all([
+    auth.supabase.rpc("transactions_summary_groups", {
+      p_org:       auth.org.id,
+      p_connector: connectorId,
+      p_source:    source,
+      p_type:      type,
+      p_from:      from ? from.slice(0, 10) : null,
+      p_to:        to ? to.slice(0, 10) : null,
+      p_search:    search || null,
+    }),
+    dfQuery,
+  ]);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   type GroupRow = { source: string; category: string | null; status: string; type: string; cnt: number | string; sum_base: number | string; sum_fee: number | string };
@@ -131,6 +158,25 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       if (!transfer) operationalDebits += sumBase;
     }
     if (!transfer) totalFees += sumFee;
+  }
+
+  // Gateway dispute (chargeback) fees → into "Fees Charged" (and therefore Net Flow).
+  // Counted IRRESPECTIVE of dispute status (open/won/lost): the fee is charged when the
+  // dispute is raised, so — like the disputes card and the P&L "Dispute Fees" line — no
+  // posted/failed gate applies. (A won Stripe dispute nets its fee to 0 at ingest, so
+  // only fees actually borne are present.) FX-converted like every other fee.
+  const DISPUTE_FEE_NUM = /^-?[0-9]+(\.[0-9]+)?$/;
+  if (disputeFeeRes.error) {
+    console.warn("[summary] dispute-fee pass failed, treating as 0:", disputeFeeRes.error.message);
+  } else {
+    for (const r of (disputeFeeRes.data ?? []) as { currency: string | null; fx_rate: number | null; metadata: Record<string, unknown> | null }[]) {
+      const raw = r.metadata?.["dispute_fee"];
+      const s = raw == null ? "" : String(raw);
+      if (!DISPUTE_FEE_NUM.test(s)) continue;
+      const n = Number(s);
+      if (!Number.isFinite(n)) continue;
+      totalFees += r.currency && r.currency !== "INR" ? n * (r.fx_rate ?? 1) : n;
+    }
   }
 
   return NextResponse.json({
