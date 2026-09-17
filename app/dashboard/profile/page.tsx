@@ -10,7 +10,7 @@ export default async function ProfilePage() {
   const supabase = await createClient();
 
   // Show details for the ACTIVE org (owned or member).
-  const { userId, org: active, canManageTeam } = await getActiveOrg();
+  const { userId, org: active, canManageTeam, accessibleOrgs } = await getActiveOrg();
   if (!userId) redirect("/auth/login");
   if (!active) redirect("/onboarding");
 
@@ -35,10 +35,14 @@ export default async function ProfilePage() {
             email: user.email ?? "",
             full_name: (user.user_metadata?.full_name as string | undefined) ?? "",
             avatar_url: (user.user_metadata?.avatar_url as string | undefined) ?? null,
+            member_since: user.created_at ?? null,
           },
           org,
           is_owner: active.role === "owner",
           can_manage: canManageTeam, // owner OR admin → may edit org details
+          active_org_id: active.id,
+          // Every org the user belongs to, with their role — powers the "at a glance" rail.
+          orgs: accessibleOrgs.map((o) => ({ id: o.id, name: o.name, role: o.role })),
         }}
       />
     </div>

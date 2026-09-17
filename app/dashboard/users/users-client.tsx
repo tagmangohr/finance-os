@@ -1045,6 +1045,11 @@ function MemberRow({
         </div>
       </div>
 
+      <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0 mr-1">
+        <span className={cn("w-1.5 h-1.5 rounded-full", isPending ? "bg-amber-500" : "bg-emerald-500")} />
+        <span className="text-[10.5px] text-muted-foreground">{isPending ? "Pending" : "Active"}</span>
+      </div>
+
       <div className="flex items-center gap-0.5 flex-shrink-0">
         <button
           onClick={() => setShowActivity(true)}
@@ -1177,8 +1182,8 @@ function OrgSection({
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap border-b border-border bg-muted/30">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <Building2 className="w-4 h-4 text-muted-foreground/60 flex-shrink-0" />
+        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+          <UserAvatar name={group.org.name} size="xs" rounded="lg" />
           <span className="text-[13.5px] font-semibold text-foreground truncate">{group.org.name}</span>
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 flex-shrink-0">
             {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
@@ -1284,13 +1289,36 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
     ));
   }
 
-  const totalMembers = groups.reduce((n, g) => n + g.members.length, 0);
+  // Aggregate stats across every managed org for the summary header.
+  const stat = React.useMemo(() => {
+    let active = 0, admins = 0, pending = 0;
+    for (const g of groups) for (const m of g.members) {
+      if (m.status === "pending") pending++;
+      else if (m.status === "active") { active++; if (m.role === "admin") admins++; }
+    }
+    return { active, admins, pending, orgs: groups.length };
+  }, [groups]);
+
+  const statItems = [
+    { label: stat.active === 1 ? "Member" : "Members", value: stat.active, amber: false },
+    { label: stat.admins === 1 ? "Admin" : "Admins", value: stat.admins, amber: false },
+    { label: "Pending invites", value: stat.pending, amber: stat.pending > 0 },
+    { label: stat.orgs === 1 ? "Organisation" : "Organisations", value: stat.orgs, amber: false },
+  ];
+
   return (
     <>
-      <PageHeader
-        title="Team"
-        subtitle={`Manage roles & page access · ${totalMembers} member${totalMembers === 1 ? "" : "s"} across ${groups.length} org${groups.length === 1 ? "" : "s"}`}
-      />
+      <PageHeader title="Team" subtitle="Manage who can access your organisations" />
+
+      {/* Summary stat strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {statItems.map((s) => (
+          <div key={s.label} className="rounded-xl border border-border bg-card px-4 py-3">
+            <p className={cn("text-[22px] font-extrabold tracking-tight tabular-nums", s.amber ? "text-amber-600 dark:text-amber-400" : "text-foreground")}>{s.value}</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{s.label}</p>
+          </div>
+        ))}
+      </div>
 
       <div className="space-y-4">
         {groups.map((g) => (

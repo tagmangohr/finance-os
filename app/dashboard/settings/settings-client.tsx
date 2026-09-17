@@ -1,11 +1,26 @@
 "use client";
 
 import * as React from "react";
-import { Trash2, Plus, AlertTriangle, Send, RotateCw, KeyRound, Webhook, SlidersHorizontal } from "lucide-react";
+import { Trash2, Plus, AlertTriangle, Send, RotateCw, KeyRound, Webhook, SlidersHorizontal, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SectionCard } from "@/components/dashboard/section-card";
 import { Switch } from "@/components/ui/switch";
 import { CopyField } from "@/components/ui/copy-field";
+
+type TabId = "pnl" | "keys" | "webhooks" | "docs";
+const TABS: { id: TabId; label: string; Icon: typeof KeyRound }[] = [
+  { id: "pnl", label: "P&L treatment", Icon: SlidersHorizontal },
+  { id: "keys", label: "API keys", Icon: KeyRound },
+  { id: "webhooks", label: "Outbound webhooks", Icon: Webhook },
+  { id: "docs", label: "API reference", Icon: Terminal },
+];
+
+/** Header inside a settings content pane. */
+const PaneHead = ({ title, subtitle }: { title: string; subtitle: string }) => (
+  <div className="mb-3">
+    <h2 className="text-[14px] font-bold text-foreground">{title}</h2>
+    <p className="text-[12px] text-muted-foreground mt-0.5">{subtitle}</p>
+  </div>
+);
 
 type ApiKey = {
   id: string; name: string; key_prefix: string; scopes: string[];
@@ -50,6 +65,7 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
   const [newName, setNewName] = React.useState("");
   const [freshKey, setFreshKey] = React.useState<string | null>(null);
   const [origin, setOrigin] = React.useState("");
+  const [tab, setTab] = React.useState<TabId>("pnl");
 
   React.useEffect(() => { setOrigin(window.location.origin); }, []);
   const load = React.useCallback(async () => {
@@ -133,9 +149,29 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
   const curl = `curl -H "Authorization: Bearer <YOUR_KEY>" \\\n  "${origin}/api/v1/payments?search=customer@email.com"`;
 
   return (
-    <div className="space-y-4 max-w-[900px]">
+    <div className="grid grid-cols-1 md:grid-cols-[200px_1fr] gap-4 items-start max-w-[960px]">
+      {/* ── Left nav rail ────────────────────────────────────────── */}
+      <nav className="rounded-xl border border-border bg-card p-2 flex md:flex-col gap-1 overflow-x-auto md:sticky md:top-4">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[12.5px] transition-colors whitespace-nowrap flex-shrink-0",
+              tab === t.id ? "bg-primary/10 text-primary font-semibold" : "font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+          >
+            <t.Icon className="h-4 w-4 flex-shrink-0" /> {t.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* ── Content pane ─────────────────────────────────────────── */}
+      <div className="min-w-0">
       {/* ── Connector P&L treatment ──────────────────────────────── */}
-      <SectionCard title="Connector P&L treatment" subtitle="What each source contributes to Income & Expense" action={<SlidersHorizontal className="h-4 w-4 text-muted-foreground/60" />}>
+      {tab === "pnl" && (
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <PaneHead title="Connector P&L treatment" subtitle="What each source contributes to Income & Expense" />
         <Lead>Choose whether each connector&apos;s money counts toward Income and Expense across the P&amp;L, Dashboard and Analytics. Both on by default — turning one off applies instantly.</Lead>
         {conns.length === 0 ? (
           <Empty>No connectors yet — add one on the Connectors page.</Empty>
@@ -162,10 +198,13 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
         <p className="text-[11px] text-muted-foreground/60 leading-relaxed mt-3">
           <span className="font-medium text-muted-foreground">Income off</span> excludes that connector&apos;s revenue (captures + bank income) and its refunds/chargebacks. <span className="font-medium text-muted-foreground">Expense off</span> excludes its expense debits and payment-gateway fees.
         </p>
-      </SectionCard>
+      </section>
+      )}
 
       {/* ── API keys ─────────────────────────────────────────────── */}
-      <SectionCard title="API keys" subtitle="Read-only, search-only partner access to your payments" action={<KeyRound className="h-4 w-4 text-muted-foreground/60" />}>
+      {tab === "keys" && (
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <PaneHead title="API keys" subtitle="Read-only, search-only partner access to your payments" />
         <Lead>Give a partner system read-only, search access to your payments — no gateway setup on their side.</Lead>
         <div className="flex items-center gap-2">
           <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Key name (e.g. Colleague's dashboard)" className={cn(inputCls, "flex-1")} />
@@ -192,10 +231,13 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
               </div>
             ))}
         </div>
-      </SectionCard>
+      </section>
+      )}
 
       {/* ── Outbound webhooks ────────────────────────────────────── */}
-      <SectionCard title="Outbound webhooks" subtitle="Push payments to an external URL in real time" action={<Webhook className="h-4 w-4 text-muted-foreground/60" />}>
+      {tab === "webhooks" && (
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <PaneHead title="Outbound webhooks" subtitle="Push payments to an external URL in real time" />
         <Lead>Push every payment (plus its refunds and status changes) to an external URL in real time — signed, retried, and auditable. Forward-only from when you add the endpoint.</Lead>
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -257,10 +299,13 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
             </div>
           </div>
         )}
-      </SectionCard>
+      </section>
+      )}
 
       {/* ── Usage docs ───────────────────────────────────────────── */}
-      <SectionCard title="Payments Search API" subtitle="Endpoint reference">
+      {tab === "docs" && (
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-5">
+        <PaneHead title="Payments Search API" subtitle="Endpoint reference" />
         <Lead>Search-only, read-only, scoped to this organisation. Pass a <code className="text-foreground">search</code> term (order id, payment id, UTR/RRN, email, or phone — min 3 chars). Returns matching gateway payments with customer name/email/phone; no card data.</Lead>
         <div className="space-y-3">
           <div>
@@ -273,7 +318,9 @@ export function SettingsClient({ connectors }: { connectors: ConnectorToggle[] }
           </div>
           <p className="text-[11px] text-muted-foreground/70">Send the key only from a server — never expose it in a browser or mobile app.</p>
         </div>
-      </SectionCard>
+      </section>
+      )}
+      </div>
     </div>
   );
 }
