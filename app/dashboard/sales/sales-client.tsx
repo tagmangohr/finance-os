@@ -178,10 +178,10 @@ export function SalesClient({
 
       {/* Smart cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-enter">
-        <MetricCard title="Total sales" value={inr(overview.total, true)} icon={<TrendingUp className="size-4" />} accentColor="#10b981" subtitle="Net sales in range (revenue)" />
-        <MetricCard title="Orders" value={overview.orders.toLocaleString("en-IN")} icon={<Hash className="size-4" />} subtitle="Sale records in range" />
-        <MetricCard title="Avg order value" value={inr(overview.aov, true)} icon={<Receipt className="size-4" />} subtitle="Total ÷ orders" />
-        <MetricCard title="Sources" value={sources.length.toLocaleString("en-IN")} icon={<Layers className="size-4" />} subtitle="Connected sales tabs" />
+        <MetricCard title="Total sales" value={inr(overview.total, true)} numericValue={overview.total} format="currency" icon={<TrendingUp className="size-4" />} accentColor="#10b981" subtitle="Net sales in range (revenue)" />
+        <MetricCard title="Orders" value={overview.orders.toLocaleString("en-IN")} numericValue={overview.orders} format="number" icon={<Hash className="size-4" />} subtitle="Sale records in range" />
+        <MetricCard title="Avg order value" value={inr(overview.aov, true)} numericValue={overview.aov} format="currency" icon={<Receipt className="size-4" />} subtitle="Total ÷ orders" />
+        <MetricCard title="Sources" value={sources.length.toLocaleString("en-IN")} numericValue={sources.length} format="number" icon={<Layers className="size-4" />} subtitle="Connected sales tabs" />
       </div>
 
       {/* Trend */}

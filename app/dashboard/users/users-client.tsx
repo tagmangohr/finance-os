@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { GRANTABLE_PAGES } from "@/lib/org/pages";
 import { PageHeader } from "@/components/dashboard/page-header";
 import { UserAvatar } from "@/components/ui/user-avatar";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1194,7 +1195,9 @@ export function UsersClient({ groups: initialGroups }: { groups: OrgGroup[] }) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {statItems.map((s) => (
           <div key={s.label} className="rounded-xl border border-border bg-card px-4 py-3">
-            <p className={cn("text-[22px] font-extrabold tracking-tight tabular-nums", s.amber ? "text-amber-600 dark:text-amber-400" : "text-foreground")}>{s.value}</p>
+            <p className={cn("text-[22px] font-extrabold tracking-tight tabular-nums", s.amber ? "text-amber-600 dark:text-amber-400" : "text-foreground")}>
+              <AnimatedNumber value={s.value} format="number" />
+            </p>
             <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{s.label}</p>
           </div>
         ))}

@@ -2,12 +2,18 @@ import * as React from "react";
 import { ArrowUpRight, ArrowDownRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sparkline } from "@/components/ui/sparkline";
+import { AnimatedNumber } from "@/components/ui/animated-number";
+import type { MetricFormat } from "@/lib/metrics/types";
 
 type Severity = "good" | "warning" | "critical" | "neutral";
 
 interface MetricCardProps {
   title: string;
   value: string;
+  /** Raw numeric value — when provided with `format`, the value counts up to it. */
+  numericValue?: number | null;
+  /** Format kind for the count-up animation (matches the metric's MetricFormat). */
+  format?: MetricFormat;
   subtitle?: string;
   trend?: number;
   trendLabel?: string;
@@ -27,6 +33,8 @@ interface MetricCardProps {
 export function MetricCard({
   title,
   value,
+  numericValue,
+  format,
   subtitle,
   trend,
   trendLabel,
@@ -80,7 +88,11 @@ export function MetricCard({
 
       {/* Value + inline trend delta */}
       <div className="flex items-baseline gap-2 flex-wrap">
-        <span className="num text-[22px] font-bold tracking-[-0.02em] leading-[1.1] text-foreground">{value}</span>
+        <span className="num text-[22px] font-bold tracking-[-0.02em] leading-[1.1] text-foreground">
+          {numericValue != null && format
+            ? <AnimatedNumber value={numericValue} format={format} display={value} />
+            : value}
+        </span>
         {hasTrend && (
           <span
             className={cn(

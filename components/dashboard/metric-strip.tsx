@@ -150,6 +150,8 @@ export function MetricStrip({ computed, initialPinned, initialVisibleCount, orgI
               <MetricCard
                 title={def.label}
                 value={c.display}
+                numericValue={c.available ? c.value : undefined}
+                format={def.format}
                 subtitle={c.note ?? undefined}
                 trend={c.available ? c.trend ?? undefined : undefined}
                 trendLabel={c.trendLabel}

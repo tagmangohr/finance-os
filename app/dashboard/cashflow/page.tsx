@@ -70,19 +70,19 @@ export default async function CashFlowPage({ searchParams }: { searchParams: Pro
 
   const cards: CardItem[] = [
     { key: "cash", label: "Cash Balance", node: (
-      <MetricCard title="Cash Balance" value={formatCurrency(v.cashBalance, "INR", true)}
+      <MetricCard title="Cash Balance" value={formatCurrency(v.cashBalance, "INR", true)} numericValue={v.cashBalance} format="currency"
         icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
     ) },
     { key: "burn", label: "Burn Rate", node: (
-      <MetricCard title="Burn Rate" value={`${formatCurrency(v.burnRate, "INR", true)}/mo`} subtitle="operating burn"
+      <MetricCard title="Burn Rate" value={`${formatCurrency(v.burnRate, "INR", true)}/mo`} numericValue={v.burnRate} format="currencyPerMonth" subtitle="operating burn"
         icon={<Flame className="w-4 h-4" />} accentColor="hsl(var(--metric-opex))" />
     ) },
     { key: "net", label: "Net Monthly", node: (
-      <MetricCard title="Net Monthly" value={`${v.avgNet >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.avgNet), "INR", true)}`} subtitle="avg inflow − outflow"
+      <MetricCard title="Net Monthly" value={`${v.avgNet >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.avgNet), "INR", true)}`} numericValue={v.avgNet} format="currency" subtitle="avg inflow − outflow"
         icon={<ArrowLeftRight className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
     ) },
     { key: "forecast90", label: "90-day Forecast", node: (
-      <MetricCard title="90-day Forecast" value={`${v.forecast90 >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.forecast90), "INR", true)}`} subtitle="projected net"
+      <MetricCard title="90-day Forecast" value={`${v.forecast90 >= 0 ? "+" : "-"}${formatCurrency(Math.abs(v.forecast90), "INR", true)}`} numericValue={v.forecast90} format="currency" subtitle="projected net"
         icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-runway))" />
     ) },
   ];

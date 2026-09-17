@@ -5,6 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { SlidersHorizontal, GripVertical, X, Check, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { MetricCard } from "@/components/dashboard/metric-card";
+import { inferMetricFormat } from "@/components/ui/animated-number";
 import { Button } from "@/components/ui/button";
 import { SUB_METRICS, SUB_METRICS_BY_KEY, SUB_VISIBLE_COUNT_OPTIONS, SUB_METRIC_GROUPS } from "@/lib/subscriptions/metric-registry";
 import type { ComputedMetric } from "@/lib/metrics/types";
@@ -123,6 +124,7 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
         {shown.map((key) => {
           const def = SUB_METRICS_BY_KEY[key];
           const c = computed[key] ?? { value: null, display: "—", available: false };
+          const subFmt = c.available ? inferMetricFormat(c.display) : null;
           const isTarget = overKey === key && gridDrag.current && gridDrag.current !== key;
           return (
             <div
@@ -135,6 +137,8 @@ export function SubscriptionMetricStrip({ computed, initialPinned, initialVisibl
               className={`cursor-grab active:cursor-grabbing rounded-xl transition-shadow ${isTarget ? "ring-2 ring-primary/60" : ""} ${gridDrag.current === key ? "opacity-50" : ""}`}
             >
               <MetricCard title={def.label} value={c.display} subtitle={c.note ?? undefined}
+                numericValue={c.available && subFmt ? c.value : undefined}
+                format={subFmt ?? undefined}
                 trend={c.available ? c.trend ?? undefined : undefined} trendLabel={c.trendLabel}
                 period={SUB_PERIOD[def.key]}
                 icon={<def.icon className="w-4 h-4" />} accentColor={def.accent} />

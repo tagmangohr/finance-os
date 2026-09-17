@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 
 type RunwaySeverity = "good" | "warning" | "critical";
 
@@ -99,7 +100,7 @@ export function RunwayCard({
                 backgroundClip: "text",
               }}
             >
-              {days > 0 ? days : "—"}
+              {days > 0 ? <AnimatedNumber value={days} format="number" /> : "—"}
               <span style={{ fontSize: "0.45em", opacity: 0.7 }}>d</span>
             </div>
             <p className="text-[10px] text-muted-foreground/70 mt-0.5">

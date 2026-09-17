@@ -60,23 +60,23 @@ export default async function RevenuePage({ searchParams }: { searchParams: Prom
 
   const cards: CardItem[] = [
     { key: "total", label: "Total Revenue", node: (
-      <MetricCard title="Total Revenue" value={formatCurrency(v.totalRevenue, "INR", true)} subtitle="collected in range"
+      <MetricCard title="Total Revenue" value={formatCurrency(v.totalRevenue, "INR", true)} numericValue={v.totalRevenue} format="currency" subtitle="collected in range"
         icon={<Wallet className="w-4 h-4" />} accentColor="hsl(var(--metric-revenue))" />
     ) },
     { key: "mrr", label: "MRR", node: (
-      <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)} subtitle="avg last 3 months"
+      <MetricCard title="MRR" value={formatCurrency(v.mrr, "INR", true)} numericValue={v.mrr} format="currency" subtitle="avg last 3 months"
         icon={<TrendingUp className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
     ) },
     { key: "arr", label: "ARR", node: (
-      <MetricCard title="ARR" value={formatCurrency(v.arr, "INR", true)} subtitle="annual run rate"
+      <MetricCard title="ARR" value={formatCurrency(v.arr, "INR", true)} numericValue={v.arr} format="currency" subtitle="annual run rate"
         icon={<Coins className="w-4 h-4" />} accentColor="hsl(var(--metric-profit))" />
     ) },
     { key: "mom", label: "MoM Growth", node: (
-      <MetricCard title="MoM Growth" value={`${v.momGrowth > 0 ? "+" : ""}${v.momGrowth.toFixed(1)}%`} subtitle="month over month"
+      <MetricCard title="MoM Growth" value={`${v.momGrowth > 0 ? "+" : ""}${v.momGrowth.toFixed(1)}%`} numericValue={v.momGrowth} format="percent" subtitle="month over month"
         icon={<ArrowUpRight className="w-4 h-4" />} accentColor="hsl(var(--metric-cash))" />
     ) },
     { key: "yoy", label: "YoY Growth", node: (
-      <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} subtitle="year over year"
+      <MetricCard title="YoY Growth" value={`${v.yoyGrowth > 0 ? "+" : ""}${v.yoyGrowth.toFixed(0)}%`} numericValue={v.yoyGrowth} format="percent" subtitle="year over year"
         icon={<Percent className="w-4 h-4" />} accentColor="hsl(var(--metric-margin))" />
     ) },
   ];
