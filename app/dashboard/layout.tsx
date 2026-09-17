@@ -58,6 +58,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     .at(-1) ?? null;
 
   const userName = (user.user_metadata?.full_name as string | undefined) ?? "";
+  const userAvatar = (user.user_metadata?.avatar_url as string | undefined) ?? null;
 
   // Sidebar collapsed preference (read server-side so the rail renders correctly on
   // first paint — no expand→collapse flash / hydration mismatch).
@@ -73,6 +74,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           canCreateOrg={canCreateOrg}
           userEmail={user.email ?? ""}
           userName={userName}
+          userAvatarUrl={userAvatar}
           pageAccess={pageAccess}
           canManageTeam={canManageTeam}
           connectorCount={connectorCount}
@@ -89,6 +91,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         canCreateOrg={canCreateOrg}
         userEmail={user.email ?? ""}
         userName={userName}
+        userAvatarUrl={userAvatar}
         pageAccess={pageAccess}
         canManageTeam={canManageTeam}
       />

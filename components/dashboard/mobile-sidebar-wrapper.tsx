@@ -12,12 +12,13 @@ interface MobileSidebarWrapperProps {
   canCreateOrg?: boolean;
   userEmail:     string;
   userName?:     string;
+  userAvatarUrl?: string | null;
   pageAccess?:   string[] | null;
   canManageTeam?: boolean;
 }
 
 export function MobileSidebarWrapper({
-  org, accessibleOrgs = [], canCreateOrg = false, userEmail, userName,
+  org, accessibleOrgs = [], canCreateOrg = false, userEmail, userName, userAvatarUrl = null,
   pageAccess = null, canManageTeam = true,
 }: MobileSidebarWrapperProps) {
   const [open, setOpen] = React.useState(false);
@@ -61,6 +62,7 @@ export function MobileSidebarWrapper({
             canCreateOrg={canCreateOrg}
             userEmail={userEmail}
             userName={userName}
+            userAvatarUrl={userAvatarUrl}
             pageAccess={pageAccess}
             canManageTeam={canManageTeam}
           />

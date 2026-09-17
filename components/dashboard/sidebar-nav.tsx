@@ -11,6 +11,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { OrgSwitcher, type SwitcherOrg } from "@/components/dashboard/org-switcher";
+import { UserAvatar } from "@/components/ui/user-avatar";
 
 // ─── Nav definitions ──────────────────────────────────────────────────────────
 // One intent-grouped navigation (the old top tab bar is folded in here): the user
@@ -59,6 +60,7 @@ export interface SidebarNavProps {
   canCreateOrg?:  boolean;
   userEmail:      string;
   userName?:      string;
+  userAvatarUrl?: string | null;
   /** null = owner/admin (all pages visible); string[] = specific slugs allowed */
   pageAccess?:    string[] | null;
   canManageTeam?: boolean;
@@ -89,6 +91,7 @@ export function SidebarNav({
   canCreateOrg   = false,
   userEmail,
   userName,
+  userAvatarUrl = null,
   pageAccess   = null,
   canManageTeam = true,
   connectorCount = 0,
@@ -128,7 +131,6 @@ export function SidebarNav({
   };
 
   const displayName = userName || userEmail.split("@")[0];
-  const avatarLetter = (userName?.charAt(0) || userEmail.charAt(0)).toUpperCase();
 
   const NavLink = ({ item }: { item: NavItem }) => {
     const active = isActive(item.href, item.exact);
@@ -252,9 +254,7 @@ export function SidebarNav({
             collapsed ? "justify-center p-1" : "gap-2 px-2 py-1.5 mb-1"
           )}
         >
-          <div className="w-[30px] h-[30px] rounded-[9px] flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-primary-foreground bg-primary">
-            {avatarLetter}
-          </div>
+          <UserAvatar name={userName} email={userEmail} src={userAvatarUrl} size="sm" rounded="lg" />
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <p className="text-[12px] font-medium text-sidebar-foreground truncate group-hover:text-white transition-colors">{displayName}</p>
