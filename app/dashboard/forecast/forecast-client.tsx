@@ -68,7 +68,11 @@ export function ForecastClient({ data, orgId }: { data: ForecastData; orgId: str
   // Derived monthly value by row id at month i.
   const valueAt = (rowId: string, slug: string | undefined, i: number): number => {
     if (slug) return proj(slug, i);
-    const gross = proj("__gross__", i), refunds = proj("__refunds__", i), fees = proj("__pg_fees__", i);
+    // `fees` = payment-gateway fees + dispute (chargeback) fees. Both are CM1 cost
+    // buckets (in CM_CONFIG[0].cats) subtracted by the CM loop below AND rolled into
+    // Total Opex / Net Profit here, so the two stay consistent (each counted once).
+    const gross = proj("__gross__", i), refunds = proj("__refunds__", i);
+    const fees = proj("__pg_fees__", i) + proj("__dispute_fees__", i);
     const netRev = gross - refunds;
     const opexCats = catSlugs.reduce((a, s) => a + proj(s, i), 0);
     if (rowId === "net_rev") return netRev;

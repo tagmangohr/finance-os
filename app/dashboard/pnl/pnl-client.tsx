@@ -61,7 +61,7 @@ const TipCtx = React.createContext<(text: string | null, x?: number, y?: number)
 type Group = { name: string; amount: number; txn_count: number; email?: string | null; phone?: string | null };
 type DrillTxn = { id: string; transaction_date: string; counterparty_name: string | null; amount: number; currency: string | null; source: string | null; status: string | null; email: string | null; phone: string | null; fee: number | null };
 
-const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__"]);
+const GATEWAY_KEYS = new Set(["revenue", "refunds", "__pg_fees__", "dispute_fees"]);
 const groupDisplayName = (drillKey: string, name: string) =>
   name.startsWith("bank:") ? (name.slice(5) === "—" ? "Bank collection (unnamed)" : name.slice(5)) // bank payer under Gross Revenue
   // disputes_lost top level = payment gateway (stem) → pretty gateway label

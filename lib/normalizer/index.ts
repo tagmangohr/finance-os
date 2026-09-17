@@ -203,6 +203,11 @@ export type StripeDispute = {
   created: number;
   charge: string | null;
   metadata: Record<string, string>;
+  // Zero, one, or two balance transactions showing funds (and the ~$15 dispute FEE)
+  // withdrawn when the dispute opens, and reinstated if it's won. Returned inline on
+  // the dispute object (no expand needed), on the API list AND on webhook events. The
+  // NET of their `fee` amounts is the dispute fee actually borne (0 if won & refunded).
+  balance_transactions?: { amount: number; currency: string; fee: number; net: number }[];
 };
 
 export type CsvColumnMapping = {
@@ -774,6 +779,28 @@ export function normalizeStripeDispute(
   const status: NormalizedTransaction["status"] =
     dispute.status === "won" ? "completed" : dispute.status === "lost" ? "completed" : "pending";
 
+  // Dispute FEE = the net of the balance transactions' `fee` amounts (charged when the
+  // dispute opens, reinstated if won → 0 for a won-and-refunded dispute). Stored in the
+  // settlement currency's major units under metadata.dispute_fee, matching the
+  // metadata.fee convention on payment rows (×fx_rate to INR downstream). Distinct from
+  // `amount` (the disputed principal) and from `fee` (never set on a dispute), so it
+  // can never be mistaken for a payment-gateway fee or double-counted.
+  const btxns = dispute.balance_transactions ?? [];
+  let feeMinor = 0;
+  let feeCurrency = currency;
+  for (const bt of btxns) {
+    feeMinor += Number(bt.fee ?? 0) || 0;
+    if (bt.currency) feeCurrency = bt.currency.toUpperCase();
+  }
+  const feeZeroDec = ZERO_DECIMAL_CURRENCIES.has(feeCurrency);
+  // The fee is in the SETTLEMENT currency; the row's currency/fx_rate are the
+  // PRESENTMENT currency. disputeFeeInr (downstream) ×fx_rate assumes the fee is in
+  // the row's currency, so only stamp when they match (the norm — this Stripe account
+  // settles in its presentment currency). If they ever differ (a cross-currency
+  // dispute), skip rather than apply the wrong FX and mis-state the fee.
+  const feeCurrencyMatches = feeCurrency === currency;
+  const disputeFee = feeMinor === 0 || !feeCurrencyMatches ? 0 : feeZeroDec ? feeMinor : feeMinor / 100;
+
   return {
     external_id: dispute.id,
     type: "debit",
@@ -790,6 +817,9 @@ export function normalizeStripeDispute(
       dispute_status: dispute.status,
       charge: dispute.charge,
       stripe_metadata: dispute.metadata,
+      // Only stamp a positive borne fee; a won-and-reimbursed dispute nets to 0 and
+      // carries no fee (so the P&L Dispute Fees line reflects only fees actually paid).
+      ...(disputeFee > 0 ? { dispute_fee: Number(disputeFee.toFixed(2)) } : {}),
     },
     raw: dispute,
   };

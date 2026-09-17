@@ -5,7 +5,10 @@ import { recordCronRun } from "@/lib/ops/cron-runs";
 import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { drainSyncJobs, pollCashfreeSubscriptions } from "@/lib/connectors/jobs";
-import { reconcileCashfreeFees } from "@/lib/connectors/cashfree-fees";
+import { reconcileCashfreeFees, reconcileCashfreeDisputeFees } from "@/lib/connectors/cashfree-fees";
+import { CashfreeConnector } from "@/lib/connectors/cashfree";
+import { decryptConfigSecrets } from "@/lib/crypto/secrets";
+import type { CashfreeReconEvent } from "@/lib/normalizer";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
@@ -82,11 +85,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
             const res = await pollCashfreeSubscriptions(supabase, c, { deadlineMs: Date.now() + 20_000 });
             if (res.polled) console.log(`[cron/reconcile] cashfree subs polled=${res.polled} inserted=${res.inserted} updated=${res.updated} (${c.id})`);
           } catch (e) { note(`cashfree poll (${c.id})`, e); }
+          // Payment fees AND chargeback fees both live in the settlement-recon feed.
+          // Fetch that (flaky) endpoint ONCE and hand the raw events to both passes so
+          // it's paginated a single time per night. If the fetch fails, each pass falls
+          // back to fetching for itself (never blocks the other).
+          const feeFrom = new Date(Date.now() - 75 * 86_400_000);
+          let rawEvents: CashfreeReconEvent[] | undefined;
           try {
-            const feeFrom = new Date(Date.now() - 75 * 86_400_000);
-            const res = await reconcileCashfreeFees(supabase, c, { fromDate: feeFrom, toDate: now, deadlineMs: Date.now() + 45_000 });
+            const cfg = decryptConfigSecrets((c.config ?? {}) as Record<string, string>);
+            if (cfg.client_id && cfg.client_secret) {
+              rawEvents = await new CashfreeConnector(cfg.client_id, cfg.client_secret).fetchReconRaw(feeFrom, now);
+            }
+          } catch (e) { note(`cashfree recon fetch (${c.id})`, e); }
+          try {
+            const res = await reconcileCashfreeFees(supabase, c, { fromDate: feeFrom, toDate: now, deadlineMs: Date.now() + 45_000, rawEvents });
             if (res.updated) { console.log(`[cron/reconcile] cashfree fees filled=${res.updated}/${res.feesSeen} (${c.id})`); invalidateOrg(c.org_id); }
           } catch (e) { note(`cashfree fees (${c.id})`, e); }
+          try {
+            // Chargeback fees → stamp onto the webhook dispute rows (fill-only). Trailing
+            // window; disputes are rare. History beyond the window: the one-off backfill.
+            const res = await reconcileCashfreeDisputeFees(supabase, c, { fromDate: feeFrom, toDate: now, deadlineMs: Date.now() + 30_000, rawEvents });
+            if (res.updated) { console.log(`[cron/reconcile] cashfree dispute fees filled=${res.updated}/${res.feesSeen} unmatched=${res.unmatched} (${c.id})`); invalidateOrg(c.org_id); }
+          } catch (e) { note(`cashfree dispute fees (${c.id})`, e); }
         }
 
         // Stripe/Razorpay: sync subscriptions + invoices for the current FY (idempotent).

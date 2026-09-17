@@ -52,6 +52,83 @@ export async function getLostDisputesByMonth(
   }
 }
 
+// ─── Dispute (chargeback) FEES ────────────────────────────────────────────────
+// The gateway's PENALTY for a chargeback, distinct from the disputed principal
+// (getLostDisputesByMonth above). Charged when the dispute is raised, regardless of
+// who ultimately wins — so, unlike lost chargebacks, it is a COST (folded into the
+// P&L "Dispute Fees" line inside Cost of Revenue), NOT contra-revenue.
+//
+// The fee is stamped onto the dispute row itself under metadata.dispute_fee, in the
+// ROW's presentment currency (same convention as metadata.fee on payment rows):
+//   • Stripe   — net of Stripe's balance-transaction fees (charged on creation,
+//                reinstated if won → a won-and-refunded fee nets to 0), in the
+//                settlement currency (USD for this account) → ×fx_rate to INR.
+//   • Cashfree — event_service_charge + event_service_tax from the settlement-recon
+//                DISPUTE/CHARGEBACK event, already INR (fx_rate 1).
+// Whichever gateways lack a reachable fee source simply carry no dispute_fee and
+// contribute 0 — the line self-heals as fees are stamped. Same tiny index-backed
+// slice + timeout guard as getLostDisputesByMonth.
+const DISPUTE_FEE_NUM = /^-?[0-9]+(\.[0-9]+)?$/;
+type DisputeFeeRow = { transaction_date: string; currency: string | null; fx_rate: number | null; metadata: Record<string, unknown> | null };
+
+function disputeFeeInr(r: DisputeFeeRow): number {
+  const raw = r.metadata?.["dispute_fee"];
+  const s = raw == null ? "" : String(raw);
+  if (!DISPUTE_FEE_NUM.test(s)) return 0;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return 0;
+  return r.currency && r.currency !== "INR" ? n * (r.fx_rate ?? 1) : n;
+}
+
+export async function getDisputeFeesByMonth(
+  supabase: SupabaseClient,
+  orgId: string,
+  from: string,
+  to: string
+): Promise<Record<string, number>> {
+  try {
+    const rows = await Promise.race([
+      drainDisputeFees(supabase, orgId, from, to),
+      new Promise<DisputeFeeRow[]>((_, reject) => setTimeout(() => reject(new Error("dispute-fee query timed out")), 6000)),
+    ]);
+    const byMonth: Record<string, number> = {};
+    for (const r of rows) {
+      const fee = disputeFeeInr(r);
+      if (fee === 0) continue;
+      const k = r.transaction_date.slice(0, 7);
+      byMonth[k] = (byMonth[k] ?? 0) + fee;
+    }
+    return byMonth;
+  } catch (e) {
+    console.warn("[getDisputeFeesByMonth] falling back to empty:", e instanceof Error ? e.message : e);
+    return {};
+  }
+}
+
+function drainDisputeFees(supabase: SupabaseClient, orgId: string, from: string, to: string): Promise<DisputeFeeRow[]> {
+  return selectAllKeyset<DisputeFeeRow & { id: string }>((afterId, limit) => {
+    let q = supabase
+      .from("transactions")
+      .select("id, transaction_date, currency, fx_rate, metadata")
+      .eq("org_id", orgId)
+      .eq("ledger", "payments")
+      .eq("category", "dispute")
+      // The fee rides on the dispute row, which follows the connector income toggle
+      // (084/085) everywhere disputes are read — keep it consistent so a fee and its
+      // dispute row are always both-in or both-out.
+      .eq("conn_include_income", true)
+      // Only rows that actually carry a stamped fee — keeps the drain tiny. (Uses the
+      // same `.or(...not.is.null)` JSON-path form proven elsewhere for metadata->>fee.)
+      .or("metadata->>dispute_fee.not.is.null")
+      .gte("transaction_date", from)
+      .lte("transaction_date", to)
+      .order("id", { ascending: true })
+      .limit(limit);
+    if (afterId) q = q.gt("id", afterId);
+    return q as unknown as PromiseLike<{ data: (DisputeFeeRow & { id: string })[] | null; error: { message: string } | null }>;
+  });
+}
+
 // ─── Dispute → customer identity resolution ───────────────────────────────────
 // A dispute row often lacks the customer (esp. Stripe: only metadata.charge). The
 // customer lives on the linked charge/payment, so we resolve it for the drill.

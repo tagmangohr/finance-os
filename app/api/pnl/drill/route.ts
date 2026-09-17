@@ -38,6 +38,15 @@ function feeInr(r: Row): number {
   const n = Number(s);
   return r.currency && r.currency !== "INR" ? n * (r.fx_rate ?? 1) : n;
 }
+// The gateway chargeback fee, stored on the dispute row (metadata.dispute_fee) in the
+// row's presentment currency — same INR conversion as metadata.fee above.
+function disputeFeeInr(r: { metadata: Record<string, unknown> | null; currency: string | null; fx_rate: number | null }): number {
+  const raw = r.metadata?.["dispute_fee"] as unknown;
+  const s = raw == null ? "" : String(raw);
+  if (!FEE_NUM.test(s)) return 0;
+  const n = Number(s);
+  return r.currency && r.currency !== "INR" ? n * (r.fx_rate ?? 1) : n;
+}
 
 /**
  * GET /api/pnl/drill?org=&key=&from=&to=
@@ -142,6 +151,46 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       fee: null,
     }));
     return NextResponse.json({ rows, count: filtered.length });
+  }
+
+  // ── Expand gateway dispute (chargeback) FEES — the "Dispute Fees" P&L line. Rows
+  // are dispute rows carrying metadata.dispute_fee; the shown amount is the FEE (INR),
+  // not the disputed principal. Single-level, filtered by gateway stem (party).
+  if (key === "dispute_fees") {
+    let dq = supabase
+      .from("transactions")
+      .select("id, transaction_date, counterparty_name, currency, fx_rate, source, status, category, type, metadata")
+      .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
+      .eq("conn_include_income", true)
+      .or("metadata->>dispute_fee.not.is.null")
+      .gte("transaction_date", from).lte("transaction_date", to);
+    if (party != null) {
+      if (party === "—") dq = dq.or("source.is.null,source.eq.");
+      else dq = dq.ilike("source", `${party}%`);
+    }
+    const { data, error } = await dq.limit(5000);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    type FRow = { id: string; transaction_date: string; counterparty_name: string | null; currency: string | null; fx_rate: number | null; source: string | null; status: string | null; category: string | null; type: string; metadata: Record<string, unknown> | null };
+    const frows = (data ?? []) as FRow[];
+    const linked = await fetchLinkedIdentities(supabase, org, frows.map((r) => disputeLinkId(r.metadata)));
+    const enriched = frows.map((r) => ({ r, fee: disputeFeeInr(r), id: resolveDisputeIdentity(r, linked) }))
+      .filter((e) => e.fee > 0)
+      .sort((a, b) => b.fee - a.fee);
+    const rows = enriched.slice(0, LIMIT).map(({ r, fee, id }) => ({
+      id: r.id,
+      transaction_date: r.transaction_date,
+      counterparty_name: id.name,
+      amount: Number(fee.toFixed(2)),
+      currency: "INR",
+      source: r.source,
+      status: r.status,
+      category: r.category,
+      type: r.type,
+      email: id.email,
+      phone: id.phone,
+      fee: Number(fee.toFixed(2)),
+    }));
+    return NextResponse.json({ rows, count: enriched.length });
   }
 
   const cols = "id, transaction_date, counterparty_name, amount, amount_base, currency, fx_rate, source, status, category, type, metadata, ledger";

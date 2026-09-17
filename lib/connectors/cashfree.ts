@@ -34,6 +34,33 @@ const WINDOW_ATTEMPTS = 5;
  * and on persistent failure keep every other window and move on. Idempotent nightly
  * re-syncs accumulate the union as Cashfree recovers.
  */
+/**
+ * Pure extraction of chargeback fees from raw recon events — shared by the connector's
+ * fetchReconDisputeFees and any caller that already holds the raw feed (so the flaky
+ * recon endpoint isn't paginated twice). Keeps non-zero fees of EITHER sign so a fee
+ * charged on the chargeback and (rarely) reversed on a win net out per order downstream.
+ */
+export function extractCashfreeDisputeFees(
+  events: CashfreeReconEvent[]
+): { orderId: string | null; cfPaymentId: string | null; fee: number; when: string | null }[] {
+  const out: { orderId: string | null; cfPaymentId: string | null; fee: number; when: string | null }[] = [];
+  for (const ev of events) {
+    const type = (ev.event_details?.event_type ?? "").toUpperCase();
+    if (!(type.includes("DISPUTE") || type.includes("CHARGEBACK") || type === "PRE_ARBITRATION")) continue;
+    const fee =
+      Number(ev.event_details?.event_service_charge ?? 0) +
+      Number(ev.event_details?.event_service_tax ?? 0);
+    if (!Number.isFinite(fee) || fee === 0) continue;
+    out.push({
+      orderId: ev.order_details?.order_id ?? null,
+      cfPaymentId: ev.payment_details?.cf_payment_id != null ? String(ev.payment_details.cf_payment_id) : null,
+      fee,
+      when: ev.event_details?.event_time ?? null,
+    });
+  }
+  return out;
+}
+
 export class CashfreeConnector {
   private headers: Record<string, string>;
 
@@ -55,22 +82,56 @@ export class CashfreeConnector {
     for (let cur = start; cur < end; cur += WINDOW_MS) {
       const windowFrom = new Date(cur);
       const windowTo = new Date(Math.min(cur + WINDOW_MS, end));
-      results.push(...(await this.fetchWindow(windowFrom, windowTo)));
+      for (const ev of await this.fetchWindowRaw(windowFrom, windowTo)) {
+        const txn = normalizeCashfreeReconEvent(ev);
+        if (txn) results.push(txn);
+      }
     }
     return results;
   }
 
   /**
-   * Paginate one ≤30-day window. Cashfree's recon error can strike mid-pagination,
-   * and re-requesting the SAME cursor keeps failing — so on any failure we restart
-   * the WHOLE window from a fresh cursor. After WINDOW_ATTEMPTS we give up on this
-   * window for this run (returning the other windows intact, never aborting the
-   * sync); a later sync re-fetches it (dedup makes that free).
+   * The raw recon events over a window — the single source both the payment-fee and
+   * the dispute-fee reconcile passes read (fetch once, derive both), so the flaky
+   * recon endpoint is paginated only once per night.
    */
-  private async fetchWindow(from: Date, to: Date): Promise<NormalizedTransaction[]> {
+  async fetchReconRaw(fromDate: Date, toDate: Date): Promise<CashfreeReconEvent[]> {
+    const out: CashfreeReconEvent[] = [];
+    const end = toDate.getTime();
+    const start = Math.round(fromDate.getTime() / DAY_MS) * DAY_MS;
+    for (let cur = start; cur < end; cur += WINDOW_MS) {
+      out.push(...(await this.fetchWindowRaw(new Date(cur), new Date(Math.min(cur + WINDOW_MS, end)))));
+    }
+    return out;
+  }
+
+  /**
+   * Dispute/chargeback FEES from the recon feed. The normalizer deliberately DROPS
+   * dispute/chargeback events (they'd duplicate the webhook-owned dispute rows, which
+   * carry a stable dispute_id recon lacks) — but those events are the ONLY source of
+   * the chargeback fee (event_service_charge + event_service_tax). So we read the raw
+   * events directly here and return the fee keyed by order_id / cf_payment_id, for a
+   * fill-only reconcile pass to stamp onto the existing dispute rows (never a new row).
+   * All INR. Same resilient windowed fetch as the payment feed.
+   */
+  async fetchReconDisputeFees(
+    fromDate: Date,
+    toDate: Date
+  ): Promise<{ orderId: string | null; cfPaymentId: string | null; fee: number; when: string | null }[]> {
+    return extractCashfreeDisputeFees(await this.fetchReconRaw(fromDate, toDate));
+  }
+
+  /**
+   * Paginate one ≤30-day window and return the RAW recon events. Cashfree's recon
+   * error can strike mid-pagination, and re-requesting the SAME cursor keeps failing —
+   * so on any failure we restart the WHOLE window from a fresh cursor. After
+   * WINDOW_ATTEMPTS we give up on this window for this run (returning the other windows
+   * intact, never aborting the sync); a later sync re-fetches it (dedup makes that free).
+   */
+  private async fetchWindowRaw(from: Date, to: Date): Promise<CashfreeReconEvent[]> {
     for (let attempt = 1; attempt <= WINDOW_ATTEMPTS; attempt++) {
       try {
-        const out: NormalizedTransaction[] = [];
+        const out: CashfreeReconEvent[] = [];
         let cursor: string | null = null;
         do {
           const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
@@ -87,10 +148,7 @@ export class CashfreeConnector {
             throw new Error(`Cashfree recon ${res.status}: ${body.slice(0, 160)}`);
           }
           const data = (await res.json()) as { data?: CashfreeReconEvent[]; cursor?: string | null };
-          for (const ev of data.data ?? []) {
-            const txn = normalizeCashfreeReconEvent(ev);
-            if (txn) out.push(txn);
-          }
+          for (const ev of data.data ?? []) out.push(ev);
           cursor = data.cursor ?? null;
         } while (cursor);
         return out; // window fully paginated

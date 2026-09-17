@@ -1,5 +1,6 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { fyStartForDate } from "@/lib/pnl";
+import { getDisputeFeesByMonth } from "@/lib/finance/disputes";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 // A projectable P&L component line. Derived rows (Net Revenue, CM tiers, Total
@@ -81,12 +82,15 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
   const window = monthSpan(addMonths(curKey, -7), addMonths(curKey, -1)); // ordered month keys
 
   const supabase = await createServiceClient();
-  const [monthlyRes, pnlRes, bankRes] = await Promise.all([
+  const [monthlyRes, pnlRes, bankRes, disputeFees] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     // Bank-collected customer-payment revenue (migration 123) — folded into gross so
     // the Gross Revenue forecast baseline matches the P&L (not gateway-only). 0 pre-123.
     supabase.rpc("dash_bank_revenue_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
+    // Gateway dispute (chargeback) fees — a Cost-of-Revenue line, seeded so the
+    // forecast projects it like Payment Gateway Fees. Tiny live query (not in a rollup).
+    getDisputeFeesByMonth(supabase, orgId, from, to),
   ]);
 
   type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
@@ -130,6 +134,7 @@ export async function getForecast(orgId: string, today = new Date()): Promise<Fo
   pushComp("__gross__", "Gross Revenue", "revenue", gross);
   pushComp("__refunds__", "Refunds", "deduction", refunds);
   pushComp("__pg_fees__", "Payment Gateway Fees", "deduction", fees);
+  pushComp("__dispute_fees__", "Dispute Fees", "deduction", disputeFees);
   for (const [slug, c] of cats) pushComp(slug, c.label, "expense", c.values);
 
   return {
@@ -148,6 +153,7 @@ export function sampleForecast(today = new Date()): ForecastData {
     ["__gross__", "Gross Revenue", "revenue", 24000000, 4],
     ["__refunds__", "Refunds", "deduction", 480000, 3],
     ["__pg_fees__", "Payment Gateway Fees", "deduction", 720000, 4],
+    ["__dispute_fees__", "Dispute Fees", "deduction", 36000, 3],
     ["ai_model", "AI Model", "expense", 5300000, 3],
     ["cloud_infra", "Cloud & Infrastructure", "expense", 300000, 2],
     ["technical_expense", "Technical Expense", "expense", 120000, 1],

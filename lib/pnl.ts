@@ -1,7 +1,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { selectAllKeyset } from "@/lib/supabase/paginate";
 import { CM_CONFIG, CM_CAT_ORDER } from "@/lib/pnl-config";
-import { getLostDisputesByMonth } from "@/lib/finance/disputes";
+import { getLostDisputesByMonth, getDisputeFeesByMonth } from "@/lib/finance/disputes";
 
 // Income-treatment bank categories that are OPERATING REVENUE (customers paying
 // directly into the bank, outside a payment gateway) — folded into Net Revenue so
@@ -161,7 +161,7 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
 
   const supabase = await createServiceClient();
   type IncomeRow = { id: string; transaction_date: string; category: string | null; type: string; amount: number; amount_base: number | null };
-  const [monthlyRes, pnlRes, incomeRows, catLabelRes, lostDisputes] = await Promise.all([
+  const [monthlyRes, pnlRes, incomeRows, catLabelRes, lostDisputes, disputeFees] = await Promise.all([
     supabase.rpc("dash_metrics_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     supabase.rpc("pnl_monthly" as never, { p_org: orgId, p_from: from, p_to: to } as never),
     // Bank rows treated as income (customer_payment → revenue; the rest → Other
@@ -187,6 +187,9 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     supabase.from("ledger_categories").select("slug, label").or(`org_id.is.null,org_id.eq.${orgId}`),
     // Lost chargebacks (contra-revenue). Tiny slice, direct keyset — no rollup.
     getLostDisputesByMonth(supabase, orgId, from, to),
+    // Gateway dispute (chargeback) fees — a Cost-of-Revenue line, stamped on the
+    // dispute rows (metadata.dispute_fee). Same tiny slice, live query — no rollup.
+    getDisputeFeesByMonth(supabase, orgId, from, to),
   ]);
 
   type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
@@ -236,11 +239,14 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
 
   const windowKeys = new Set<string>([
     ...Object.keys(gross), ...Object.keys(refunds), ...Object.keys(fees),
-    ...Object.keys(bankRevenue), ...Object.keys(lostDisputes),
+    ...Object.keys(bankRevenue), ...Object.keys(lostDisputes), ...Object.keys(disputeFees),
     ...[...cats.values()].flatMap((c) => Object.keys(c.values)),
     ...[...incomeCats.values()].flatMap((c) => Object.keys(c.values)),
   ]);
-  const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
+  const catVal = (slug: string, k: string) =>
+    slug === "__pg_fees__" ? (fees[k] ?? 0)
+    : slug === "__dispute_fees__" ? (disputeFees[k] ?? 0)
+    : (cats.get(slug)?.values[k] ?? 0);
   const otherIncomeVal = (k: string) => [...incomeCats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
 
   // Derived monthly series.
@@ -257,7 +263,7 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     const g = gross[k] ?? 0, rf = refunds[k] ?? 0, cb = lostDisputes[k] ?? 0;
     const nr = g - rf - cb;
     netRevenue[k] = nr;
-    const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
+    const opex = (fees[k] ?? 0) + (disputeFees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex;
     const noi = nr - opex;
     netOperatingIncome[k] = noi;
@@ -276,12 +282,22 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
   const present = (slug: string) => [...windowKeys].some((k) => catVal(slug, k) !== 0);
   const rows: PnlRow[] = [];
   const add = (r: PnlRow) => rows.push(r);
+  const SYNTHETIC_FEE = new Set(["__pg_fees__", "__dispute_fees__"]);
   const catRow = (slug: string, section?: string): PnlRow | null => {
-    if (slug !== "__pg_fees__" && !cats.has(slug)) return null;
+    if (!SYNTHETIC_FEE.has(slug) && !cats.has(slug)) return null;
     if (!present(slug)) return null;
-    const label = slug === "__pg_fees__" ? "Payment Gateway Fees" : (cats.get(slug)?.label ?? slug);
-    const monthlyVals = slug === "__pg_fees__" ? fees : (cats.get(slug)?.values ?? {});
-    return { id: `exp_${slug}`, label, kind: slug === "__pg_fees__" ? "deduction" : "expense", monthly: monthlyVals, drill: slug, section };
+    const label =
+      slug === "__pg_fees__" ? "Payment Gateway Fees"
+      : slug === "__dispute_fees__" ? "Dispute Fees"
+      : (cats.get(slug)?.label ?? slug);
+    const monthlyVals =
+      slug === "__pg_fees__" ? fees
+      : slug === "__dispute_fees__" ? disputeFees
+      : (cats.get(slug)?.values ?? {});
+    // The dispute-fee row id must differ from its drill key: `exp___dispute_fees__`
+    // is the row, `dispute_fees` the drill slice (the drill route + client key on it).
+    const drill = slug === "__dispute_fees__" ? "dispute_fees" : slug;
+    return { id: `exp_${slug}`, label, kind: SYNTHETIC_FEE.has(slug) ? "deduction" : "expense", monthly: monthlyVals, drill, section };
   };
 
   // Gross Revenue includes bank-collected customer payments; the drill splits it by
@@ -386,13 +402,17 @@ export function samplePnl(params: PnlParams): PnlData {
   const otherIncome = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.01)]));
 
   const chargebacks = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.004)]));
-  const catVal = (slug: string, k: string) => (slug === "__pg_fees__" ? (fees[k] ?? 0) : (cats.get(slug)?.values[k] ?? 0));
+  const disputeFees = Object.fromEntries(keys.map((k) => [k, Math.round((gross[k] ?? 0) * 0.0015)]));
+  const catVal = (slug: string, k: string) =>
+    slug === "__pg_fees__" ? (fees[k] ?? 0)
+    : slug === "__dispute_fees__" ? (disputeFees[k] ?? 0)
+    : (cats.get(slug)?.values[k] ?? 0);
   const netRevenue: Record<string, number> = {}, totalOpex: Record<string, number> = {}, netOperatingIncome: Record<string, number> = {}, netProfit: Record<string, number> = {};
   const cm: Record<string, Record<string, number>> = Object.fromEntries(CM_CONFIG.map((t) => [t.id, {}]));
   for (const k of keys) {
     const nr = (gross[k] ?? 0) - (refunds[k] ?? 0) - (chargebacks[k] ?? 0);
     netRevenue[k] = nr;
-    const opex = (fees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
+    const opex = (fees[k] ?? 0) + (disputeFees[k] ?? 0) + [...cats.values()].reduce((a, c) => a + (c.values[k] ?? 0), 0);
     totalOpex[k] = opex; netOperatingIncome[k] = nr - opex; netProfit[k] = netOperatingIncome[k] + (otherIncome[k] ?? 0);
     let running = nr;
     for (const t of CM_CONFIG) { running -= t.cats.reduce((a, s) => a + catVal(s, k), 0); cm[t.id][k] = running; }
@@ -404,10 +424,13 @@ export function samplePnl(params: PnlParams): PnlData {
   rows.push({ id: "chargebacks_lost", label: "Chargebacks (lost)", kind: "deduction", monthly: chargebacks, drill: "disputes_lost" });
   rows.push({ id: "net_revenue", label: "Net Revenue", kind: "subtotal", emphasis: "strong", monthly: netRevenue });
   const sampleCat = (slug: string, section?: string): PnlRow => ({
-    id: `exp_${slug}`, label: slug === "__pg_fees__" ? "Payment Gateway Fees" : (cats.get(slug)?.label ?? slug),
-    kind: slug === "__pg_fees__" ? "deduction" : "expense", monthly: slug === "__pg_fees__" ? fees : (cats.get(slug)?.values ?? {}), drill: slug, section,
+    id: `exp_${slug}`,
+    label: slug === "__pg_fees__" ? "Payment Gateway Fees" : slug === "__dispute_fees__" ? "Dispute Fees" : (cats.get(slug)?.label ?? slug),
+    kind: slug === "__pg_fees__" || slug === "__dispute_fees__" ? "deduction" : "expense",
+    monthly: slug === "__pg_fees__" ? fees : slug === "__dispute_fees__" ? disputeFees : (cats.get(slug)?.values ?? {}),
+    drill: slug === "__dispute_fees__" ? "dispute_fees" : slug, section,
   });
-  rows.push(sampleCat("__pg_fees__", "Cost of Revenue"), sampleCat("ai_model"), sampleCat("cloud_infra"), sampleCat("technical_expense"));
+  rows.push(sampleCat("__pg_fees__", "Cost of Revenue"), sampleCat("__dispute_fees__"), sampleCat("ai_model"), sampleCat("cloud_infra"), sampleCat("technical_expense"));
   rows.push({ id: "cm1", label: CM_CONFIG[0].label, kind: "cm", emphasis: "cm", monthly: cm.cm1, pctBaseId: "net_revenue" });
   rows.push(sampleCat("marketing", "Sales & Marketing"));
   rows.push({ id: "cm2", label: CM_CONFIG[1].label, kind: "cm", emphasis: "cm", monthly: cm.cm2, pctBaseId: "net_revenue" });

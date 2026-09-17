@@ -4,7 +4,7 @@ import { calculateRunway } from "@/lib/intelligence/runway";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cachedOrgLoader } from "@/lib/cache/org-cache";
 import { getCategories } from "./categories";
-import { getLostDisputesByMonth } from "@/lib/finance/disputes";
+import { getLostDisputesByMonth, getDisputeFeesByMonth } from "@/lib/finance/disputes";
 import type { LedgerCategory } from "./types";
 
 export type BankTxn = {
@@ -79,7 +79,7 @@ export async function getBankOverview(
   const periodFrom = opts?.from || monthStartISO(new Date());
   const periodTo = opts?.to || today;
 
-  const [categories, aggRes, collectionsByMonth, pgFeesByMonth, lostDisputes, runwayRes] = await Promise.all([
+  const [categories, aggRes, collectionsByMonth, pgFeesByMonth, lostDisputes, disputeFees, runwayRes] = await Promise.all([
     getCategories(orgId, supabase),
     // Single-query bank aggregation (migration 089): cards / by-category / review
     // count / filter options computed in Postgres in ONE indexed pass, instead of
@@ -97,6 +97,9 @@ export async function getBankOverview(
     // Lost chargebacks per month — netted out of collections so Bank net ties to
     // the P&L (which now treats them as contra-revenue). Same helper the P&L uses.
     getLostDisputesByMonth(supabase, orgId, periodFrom, periodTo),
+    // Gateway dispute (chargeback) fees — a P&L Cost-of-Revenue line (money the gateway
+    // withdrew from settlements), so subtract from collections too, matching Net Profit.
+    getDisputeFeesByMonth(supabase, orgId, periodFrom, periodTo),
     calculateRunway(orgId, supabase),
   ]);
 
@@ -117,6 +120,12 @@ export async function getBankOverview(
   // Lost chargebacks are contra-revenue (money the customer took back) — subtract
   // them from collections too, matching the P&L's Net Revenue treatment.
   for (const [key, amt] of Object.entries(lostDisputes)) {
+    if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(amt ?? 0));
+  }
+  // Dispute (chargeback) FEES are a Cost-of-Revenue deduction on the P&L — the gateway
+  // withdrew them from settlements — so subtract them here too, else Bank net would
+  // overstate Net Profit by the dispute-fee amount.
+  for (const [key, amt] of Object.entries(disputeFees)) {
     if (inRange(key)) collMap.set(key, (collMap.get(key) ?? 0) - Number(amt ?? 0));
   }
 

@@ -114,6 +114,42 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
   }
 
+  // Dispute (chargeback) FEES — single-level, grouped by payment GATEWAY (stem). Rows
+  // are dispute rows carrying metadata.dispute_fee; each group's amount is the summed
+  // fee (INR). Not in the pnl_drill_groups RPC; small set, direct query.
+  if (key === "dispute_fees") {
+    const { data: drows, error: derr } = await supabase
+      .from("transactions")
+      .select("source, currency, fx_rate, metadata")
+      .eq("org_id", org).eq("ledger", "payments").eq("category", "dispute")
+      .eq("conn_include_income", true)
+      .or("metadata->>dispute_fee.not.is.null")
+      .gte("transaction_date", from).lte("transaction_date", to)
+      .limit(5000);
+    if (derr) return NextResponse.json({ error: derr.message }, { status: 500 });
+    type FRow = { source: string | null; currency: string | null; fx_rate: number | null; metadata: Record<string, unknown> | null };
+    const FEE_NUM = /^-?[0-9]+(\.[0-9]+)?$/;
+    const feeInr = (r: FRow): number => {
+      const raw = r.metadata?.["dispute_fee"] as unknown;
+      const s = raw == null ? "" : String(raw);
+      if (!FEE_NUM.test(s)) return 0;
+      const n = Number(s);
+      return r.currency && r.currency !== "INR" ? n * (r.fx_rate ?? 1) : n;
+    };
+    const stem = (s: string | null) => (s ? s.split("_")[0] : "other"); // stripe_dispute → stripe
+    const m = new Map<string, { amount: number; count: number }>();
+    for (const r of (drows ?? []) as FRow[]) {
+      const fee = feeInr(r);
+      if (!(fee > 0)) continue;
+      const name = stem(r.source);
+      const e = m.get(name) ?? { amount: 0, count: 0 };
+      e.amount += fee; e.count += 1; m.set(name, e);
+    }
+    const g = [...m.entries()].map(([name, v]) => ({ name, amount: v.amount, txn_count: v.count }))
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    return NextResponse.json({ groups: g.slice(0, LIMIT), hasMore: g.length > LIMIT });
+  }
+
   const { data, error } = await supabase.rpc("pnl_drill_groups" as never, {
     p_org: org, p_key: key, p_from: from, p_to: to, p_limit: LIMIT + 1,
   } as never);

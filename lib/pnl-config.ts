@@ -3,12 +3,15 @@
 // lib/pnl.ts's server-only Supabase import.
 //
 // Contribution-margin tiers (SaaS default). Each tier subtracts its cost bucket
-// from the tier above. '__pg_fees__' is the metadata.fee line; the rest are
-// ledger_categories slugs.
+// from the tier above. '__pg_fees__' is the metadata.fee line and '__dispute_fees__'
+// the gateway chargeback-fee line (both synthetic slugs, populated from live queries
+// rather than the category rollup); the rest are ledger_categories slugs.
 export const CM_CONFIG: { id: string; label: string; cats: string[] }[] = [
-  { id: "cm1", label: "CM1 · Gross Margin", cats: ["__pg_fees__", "ai_model", "cloud_infra", "technical_expense"] },
+  { id: "cm1", label: "CM1 · Gross Margin", cats: ["__pg_fees__", "__dispute_fees__", "ai_model", "cloud_infra", "technical_expense"] },
   { id: "cm2", label: "CM2 · Post-Marketing", cats: ["marketing"] },
   { id: "cm3", label: "CM3 · Post-People", cats: ["payroll", "contractors", "professional"] },
 ];
 
-export const CM_CAT_ORDER = CM_CONFIG.flatMap((t) => t.cats).filter((c) => c !== "__pg_fees__");
+// Real ledger-category slugs in CM order (used to place/bucket actual expense
+// categories). The synthetic fee slugs are driven separately, so exclude both.
+export const CM_CAT_ORDER = CM_CONFIG.flatMap((t) => t.cats).filter((c) => c !== "__pg_fees__" && c !== "__dispute_fees__");
