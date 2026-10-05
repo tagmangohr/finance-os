@@ -29,6 +29,9 @@ export const JOB_WINDOW_DAYS = 14;
 export const RESUMABLE_WINDOW_DAYS = 30;
 /** Jobs claimed per worker batch. */
 export const CLAIM_BATCH = 3;
+/** Bank rows a reconcile 'categorize' chunk processes per pass — keeps a large
+ *  uncategorized backlog sweeping in bounded steps, well under the function limit. */
+export const BANK_CATEGORIZE_CHUNK = 2000;
 /** Per-chunk fetch budget — a resumable job paginates for at most this long, then
  *  saves its cursor and continues next pass. Well under the 60s function limit. */
 export const CHUNK_FETCH_MS = 18_000;
@@ -683,11 +686,22 @@ async function processReconcileJob(supabase: SupabaseLike, job: SyncJobRow, conn
     }
 
     if (connector.type === "mercury") {
-      // Auto-categorize the org's new bank transactions (rules/system; AI only if a key
-      // is configured). One full fill-only pass per night — isolated to this org's job.
-      const res = await categorizeBankTransactions(connector.org_id, supabase);
+      // Auto-categorize the org's uncategorized bank transactions (rules/system; AI only
+      // if a key is configured), KEYSET-CHUNKED so even a large backlog (tens of thousands
+      // of rows) sweeps across passes without exceeding the worker budget. job.cursor
+      // carries the (date,id) keyset between passes; the cursor advances past rows left
+      // uncategorized, so an unmatchable backlog can never wedge the sweep.
+      const cur = job.cursor ? (JSON.parse(job.cursor) as { d: string; i: string }) : null;
+      const res = await categorizeBankTransactions(connector.org_id, supabase, {
+        limit: BANK_CATEGORIZE_CHUNK, afterDate: cur?.d ?? null, afterId: cur?.i ?? null,
+      });
       if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(connector.org_id);
-      await markDone({ scanned: res.scanned, systemApplied: res.systemApplied, ruleApplied: res.ruleApplied, aiApplied: res.aiApplied, remaining: res.remaining });
+      const processed = (job.processed ?? 0) + res.scanned;
+      if (res.hasMore && res.nextCursor) {
+        await requeue({ stream: "categorize", cursor: JSON.stringify({ d: res.nextCursor.date, i: res.nextCursor.id }), processed });
+        return "progress";
+      }
+      await markDone({ processed, lastPass: { scanned: res.scanned, systemApplied: res.systemApplied, ruleApplied: res.ruleApplied, aiApplied: res.aiApplied } });
       return "done";
     }
 

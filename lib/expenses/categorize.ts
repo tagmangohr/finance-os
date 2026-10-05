@@ -7,6 +7,7 @@ import type { CategorySource } from "./types";
 
 type BankRow = {
   id: string;
+  transaction_date: string;
   counterparty_name: string | null;
   description: string | null;
   source: string | null;
@@ -23,6 +24,12 @@ export type CategorizeResult = {
   aiApplied: number;
   remaining: number;
   aiUsed: boolean;
+  // Keyset-chunk cursor (only set when called with `limit`): the (date,id) of the last
+  // scanned row, and whether a full `limit` batch came back (→ more may remain). Lets a
+  // bounded caller (the reconcile worker job) sweep a huge backlog across passes without
+  // ever exceeding its function budget.
+  nextCursor?: { date: string; id: string } | null;
+  hasMore?: boolean;
 };
 
 /**
@@ -52,29 +59,58 @@ function accountTypeDefault(r: BankRow): string | null {
 export async function categorizeBankTransactions(
   orgId: string,
   supabase: SupabaseClient,
-  opts: { useAI?: boolean; maxAi?: number } = {}
+  opts: { useAI?: boolean; maxAi?: number; limit?: number; afterDate?: string | null; afterId?: string | null } = {}
 ): Promise<CategorizeResult> {
   const cats = await getCategories(orgId, supabase);
   const tMap = treatmentMap(cats);
   const validSlugs = new Set(cats.map((c) => c.slug));
   const rules = await getRules(orgId, supabase);
 
-  const rows = await selectAll<BankRow>((from, to) =>
-    supabase
-      .from("transactions")
-      .select("id, counterparty_name, description, source, type, amount, account_type, metadata")
-      .eq("org_id", orgId)
-      .eq("ledger", "bank")
-      .is("category", null)
-      // `id` tiebreaker: transaction_date is non-unique, and OFFSET paging over a
-      // non-unique sort can skip or repeat rows at page boundaries — deterministic
-      // ordering closes that (fill-only, so a skipped row would stay uncategorized).
-      .order("transaction_date", { ascending: false })
-      .order("id", { ascending: true })
-      .range(from, to)
-  );
+  const SELECT_COLS = "id, transaction_date, counterparty_name, description, source, type, amount, account_type, metadata";
+  // BOUNDED mode (opts.limit): a single keyset-paginated page ordered (date ASC, id ASC)
+  // from the caller's cursor — so a bounded worker can sweep a large backlog across many
+  // passes. The cursor advances PAST rows left uncategorized (no rule/AI match), so an
+  // unmatchable backlog can never wedge the sweep. UNBOUNDED mode (no limit, existing
+  // callers): drain everything in one pass, exactly as before.
+  let rows: BankRow[];
+  if (opts.limit != null) {
+    let q = supabase
+      .from("transactions").select(SELECT_COLS)
+      .eq("org_id", orgId).eq("ledger", "bank").is("category", null)
+      .order("transaction_date", { ascending: true }).order("id", { ascending: true })
+      .limit(opts.limit);
+    if (opts.afterDate) {
+      // Keyset: strictly after (afterDate, afterId) in (date,id) order.
+      q = q.or(`transaction_date.gt.${opts.afterDate},and(transaction_date.eq.${opts.afterDate},id.gt.${opts.afterId})`);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(`categorize fetch failed: ${error.message}`);
+    rows = (data ?? []) as BankRow[];
+  } else {
+    rows = await selectAll<BankRow>((from, to) =>
+      supabase
+        .from("transactions")
+        .select(SELECT_COLS)
+        .eq("org_id", orgId)
+        .eq("ledger", "bank")
+        .is("category", null)
+        // `id` tiebreaker: transaction_date is non-unique, and OFFSET paging over a
+        // non-unique sort can skip or repeat rows at page boundaries — deterministic
+        // ordering closes that (fill-only, so a skipped row would stay uncategorized).
+        .order("transaction_date", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+  }
 
   const result: CategorizeResult = { scanned: rows.length, systemApplied: 0, ruleApplied: 0, aiApplied: 0, remaining: 0, aiUsed: false };
+  // In bounded mode, report the keyset cursor so the caller can resume past this page
+  // (including past the rows we leave uncategorized). hasMore when a full page came back.
+  if (opts.limit != null) {
+    const last = rows[rows.length - 1];
+    result.nextCursor = last ? { date: last.transaction_date, id: last.id } : null;
+    result.hasMore = rows.length === opts.limit;
+  }
   if (rows.length === 0) return result;
 
   const pushId = (m: Map<string, string[]>, slug: string, id: string) => {
