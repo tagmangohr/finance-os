@@ -11,7 +11,12 @@
  * In a paginated loop, ALSO check the chunk deadline between pages — this bounds
  * one request; the loop bounds the whole pass.
  */
-export const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
+// 20s, not a tight SLA: some gateway APIs (notably Razorpay's) are routinely
+// "slow but fine" and exceed 15s under load — a 15s cap spuriously aborts them and
+// wastes a chunk. 20s clears the normal-but-slow responses while still bounding a
+// genuinely hung request well inside the 60s/300s function budgets. Callers on a
+// tighter path can pass a smaller value.
+export const DEFAULT_FETCH_TIMEOUT_MS = 20_000;
 
 export function timedFetch(
   input: string | URL | Request,
