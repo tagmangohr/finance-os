@@ -1,3 +1,4 @@
+import { timedFetch } from "@/lib/http/fetch";
 import * as crypto from "crypto";
 import {
   NormalizedTransaction,
@@ -46,7 +47,7 @@ export class PayUConnector {
         hash,
       });
 
-      const res = await fetch(PAYU_BASE, {
+      const res = await timedFetch(PAYU_BASE, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: formBody.toString(),

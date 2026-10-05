@@ -1,4 +1,5 @@
 import type { NormalizedTransaction } from "@/lib/normalizer";
+import { timedFetch } from "@/lib/http/fetch";
 
 const BREX_BASE = "https://platform.brexapis.com";
 const PAGE = 100;
@@ -64,7 +65,7 @@ export class BrexConnector {
   private async getJson<T>(path: string, params?: Record<string, string>): Promise<T> {
     const u = new URL(`${BREX_BASE}${path}`);
     for (const [k, v] of Object.entries(params ?? {})) if (v) u.searchParams.set(k, v);
-    const res = await fetch(u.toString(), { headers: this.headers, next: { revalidate: 0 } });
+    const res = await timedFetch(u.toString(), { headers: this.headers, next: { revalidate: 0 } });
     if (!res.ok) throw new Error(`Brex ${res.status} ${path}: ${(await res.text()).slice(0, 160)}`);
     return (await res.json()) as T;
   }

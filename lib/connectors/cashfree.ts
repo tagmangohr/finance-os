@@ -1,3 +1,4 @@
+import { timedFetch } from "@/lib/http/fetch";
 import {
   NormalizedTransaction,
   CashfreeReconEvent,
@@ -160,7 +161,7 @@ export class CashfreeConnector {
         const out: CashfreeReconEvent[] = [];
         let cursor: string | null = null;
         do {
-          const res = await fetch(`${CASHFREE_BASE}/settlement/recon`, {
+          const res = await timedFetch(`${CASHFREE_BASE}/settlement/recon`, {
             method: "POST",
             headers: this.headers,
             next: { revalidate: 0 },
@@ -218,7 +219,7 @@ export class CashfreeConnector {
     } = {}
   ): Promise<NormalizedTransaction[]> {
     try {
-      const res = await fetch(
+      const res = await timedFetch(
         `${CASHFREE_BASE}/subscriptions/${encodeURIComponent(subscriptionId)}/payments`,
         { method: "GET", headers: this.headers, next: { revalidate: 0 } }
       );

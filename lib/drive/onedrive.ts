@@ -1,5 +1,6 @@
 import { buildOAuthState, expiryFromSecondsIn, getBaseUrl } from "./oauth";
 import type { DriveFileInfo } from "./types";
+import { timedFetch } from "@/lib/http/fetch";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,7 +55,7 @@ export type OneDriveTokens = {
 export async function exchangeOnedriveCode(code: string): Promise<OneDriveTokens> {
   const { clientId, clientSecret } = getCredentials();
 
-  const res = await fetch(`${MS_AUTH_BASE}/token`, {
+  const res = await timedFetch(`${MS_AUTH_BASE}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -89,7 +90,7 @@ export async function exchangeOnedriveCode(code: string): Promise<OneDriveTokens
 export async function refreshOnedriveToken(refreshToken: string): Promise<{ access_token: string; expiry: string }> {
   const { clientId, clientSecret } = getCredentials();
 
-  const res = await fetch(`${MS_AUTH_BASE}/token`, {
+  const res = await timedFetch(`${MS_AUTH_BASE}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -116,7 +117,7 @@ export async function refreshOnedriveToken(refreshToken: string): Promise<{ acce
 // ─── User info ────────────────────────────────────────────────────────────────
 
 export async function getOnedriveUserInfo(accessToken: string): Promise<{ email: string | null; name: string | null }> {
-  const res = await fetch(`${MS_GRAPH_BASE}/me?$select=mail,displayName`, {
+  const res = await timedFetch(`${MS_GRAPH_BASE}/me?$select=mail,displayName`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return { email: null, name: null };
@@ -179,7 +180,7 @@ export async function listOnedriveFolderFiles(
     `${childrenUrl}?$select=id,name,file,lastModifiedDateTime,eTag&$top=200`;
 
   while (url && results.length < 1000) {
-    const res = await fetch(url, {
+    const res = await timedFetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -232,7 +233,7 @@ export async function getOnedriveFolderName(
       ? `${MS_GRAPH_BASE}/me/drive/root:${folderId}:?$select=name`
       : `${MS_GRAPH_BASE}/me/drive/items/${folderId}?$select=name`;
 
-  const res = await fetch(metaUrl, {
+  const res = await timedFetch(metaUrl, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return "OneDrive Folder";
@@ -247,7 +248,7 @@ export async function downloadOnedriveFile(
   fileId: string,
   fileName: string
 ): Promise<{ buffer: Buffer; effectiveMime: string }> {
-  const res = await fetch(`${MS_GRAPH_BASE}/me/drive/items/${fileId}/content`, {
+  const res = await timedFetch(`${MS_GRAPH_BASE}/me/drive/items/${fileId}/content`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 

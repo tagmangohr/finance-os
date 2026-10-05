@@ -1,4 +1,5 @@
 import { NormalizedTransaction, MercuryTransaction, normalizeMercuryTransaction } from "@/lib/normalizer";
+import { timedFetch } from "@/lib/http/fetch";
 
 const MERCURY_BASE = "https://api.mercury.com/api/v1";
 const PAGE = 500;
@@ -22,7 +23,7 @@ export class MercuryConnector {
   }
 
   private async getJson<T>(url: string): Promise<T> {
-    const res = await fetch(url, { headers: this.headers, next: { revalidate: 0 } });
+    const res = await timedFetch(url, { headers: this.headers, next: { revalidate: 0 } });
     if (!res.ok) throw new Error(`Mercury ${res.status}: ${(await res.text()).slice(0, 160)}`);
     return (await res.json()) as T;
   }

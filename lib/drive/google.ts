@@ -1,5 +1,6 @@
 import { buildOAuthState, expiryFromSecondsIn, getBaseUrl } from "./oauth";
 import type { DriveFileInfo } from "./types";
+import { timedFetch } from "@/lib/http/fetch";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -77,7 +78,7 @@ export type GoogleTokens = {
 export async function exchangeGoogleCode(code: string): Promise<GoogleTokens> {
   const { clientId, clientSecret } = getCredentials();
 
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const res = await timedFetch(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -112,7 +113,7 @@ export async function exchangeGoogleCode(code: string): Promise<GoogleTokens> {
 export async function refreshGoogleToken(refreshToken: string): Promise<{ access_token: string; expiry: string }> {
   const { clientId, clientSecret } = getCredentials();
 
-  const res = await fetch(GOOGLE_TOKEN_URL, {
+  const res = await timedFetch(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -138,7 +139,7 @@ export async function refreshGoogleToken(refreshToken: string): Promise<{ access
 // ─── User info ────────────────────────────────────────────────────────────────
 
 export async function getGoogleUserInfo(accessToken: string): Promise<{ email: string | null; name: string | null }> {
-  const res = await fetch(GOOGLE_USER_INFO, {
+  const res = await timedFetch(GOOGLE_USER_INFO, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) return { email: null, name: null };
@@ -191,7 +192,7 @@ async function listFolderAtDepth(
       pageToken ? `&pageToken=${pageToken}` : ""
     }`;
 
-    const res = await fetch(url, {
+    const res = await timedFetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -247,7 +248,7 @@ export async function getGoogleFolderName(
   accessToken: string,
   folderId: string
 ): Promise<string> {
-  const res = await fetch(
+  const res = await timedFetch(
     `${GOOGLE_DRIVE_BASE}/files/${folderId}?fields=name`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
@@ -271,7 +272,7 @@ export async function downloadGoogleFile(
     ? `${GOOGLE_DRIVE_BASE}/files/${fileId}/export?mimeType=text%2Fcsv`
     : `${GOOGLE_DRIVE_BASE}/files/${fileId}?alt=media`;
 
-  const res = await fetch(url, {
+  const res = await timedFetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 

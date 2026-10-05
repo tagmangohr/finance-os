@@ -1,6 +1,7 @@
 import type { createServiceClient } from "@/lib/supabase/server";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import type { Database } from "@/lib/supabase/types";
+import { timedFetch } from "@/lib/http/fetch";
 import { persistSubscriptionResult } from "./persist";
 import { stripeSubscriptionAdapter } from "./adapters/stripe";
 import { razorpaySubscriptionAdapter } from "./adapters/razorpay";
@@ -39,11 +40,18 @@ export async function syncStripeSubscriptions(supabase: ServiceClient, connector
     // plan_name falls back to price.nickname / product id (enrich names separately).
     url.searchParams.append("expand[]", "data.customer");
     if (startingAfter) url.searchParams.set("starting_after", startingAfter);
-    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${cfg.secret_key}` }, next: { revalidate: 0 } });
+    const res = await timedFetch(url.toString(), { headers: { Authorization: `Bearer ${cfg.secret_key}` }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[subs/stripe] list ${res.status}: ${(await res.text()).slice(0, 160)}`); break; }
     const j = (await res.json()) as { data?: Array<{ id: string }>; has_more?: boolean };
     const rows = j.data ?? [];
-    for (const s of rows) { await persistSubscriptionResult(supabase, connector.org_id, connector.id, stripeSubscriptionAdapter(s)); fetched++; }
+    for (const s of rows) {
+      await persistSubscriptionResult(supabase, connector.org_id, connector.id, stripeSubscriptionAdapter(s));
+      fetched++;
+      // starting_after is an id cursor, so persisting row-by-row makes resume
+      // exact: if the deadline hits mid-page, resume AFTER the last-persisted id.
+      startingAfter = s.id;
+      if (Date.now() >= opts.deadlineMs) return { fetched, cursor: startingAfter, hasMore: true };
+    }
     startingAfter = j.has_more && rows.length ? rows[rows.length - 1].id : null;
   } while (startingAfter && Date.now() < opts.deadlineMs);
   return { fetched, cursor: startingAfter, hasMore: startingAfter !== null };
@@ -61,16 +69,29 @@ export async function syncRazorpaySubscriptions(supabase: ServiceClient, connect
   const base = "https://api.razorpay.com/v1";
   const planCache = new Map<string, unknown>();
   const custCache = new Map<string, unknown>();
-  const fetchJson = async (path: string) => { const r = await fetch(`${base}${path}`, { headers: { Authorization: auth }, next: { revalidate: 0 } }); return r.ok ? r.json() : null; };
+  const fetchJson = async (path: string) => { const r = await timedFetch(`${base}${path}`, { headers: { Authorization: auth }, next: { revalidate: 0 } }); return r.ok ? r.json() : null; };
   const getPlan = async (id?: string) => { if (!id) return null; if (planCache.has(id)) return planCache.get(id); const p = await fetchJson(`/plans/${id}`); planCache.set(id, p); return p; };
   const getCust = async (id?: string) => { if (!id) return null; if (custCache.has(id)) return custCache.get(id); const c = await fetchJson(`/customers/${id}`); custCache.set(id, c); return c; };
 
-  let skip = Number(opts.cursor ?? 0) || 0, fetched = 0, hasMore = true;
+  // Composite cursor "skip:index": `skip` is the page offset, `index` how many rows
+  // of that page were already persisted. Razorpay has no server-side date filter and
+  // (at ~149k subs) its per-row plan/customer enrichment can exceed one chunk, so a
+  // page-granular cursor could never finish a slow page → the stuck-at-ceiling freeze.
+  // Tracking the in-page index guarantees forward progress every pass.
+  const [skipStr, idxStr] = String(opts.cursor ?? "0").split(":");
+  let skip = Number(skipStr) || 0;
+  let startIdx = Number(idxStr) || 0;
+  let fetched = 0, hasMore = true;
   while (Date.now() < opts.deadlineMs) {
     const j = (await fetchJson(`/subscriptions?count=100&skip=${skip}`)) as { items?: Array<Record<string, unknown>> } | null;
     const items = j?.items ?? [];
     if (!items.length) { hasMore = false; break; }
-    for (const sub of items) {
+    let i = startIdx;
+    for (; i < items.length; i++) {
+      // Check the deadline BEFORE each row (not just per page) and resume exactly
+      // here next pass — one slow page can span several chunks without re-doing work.
+      if (Date.now() >= opts.deadlineMs) return { fetched, cursor: `${skip}:${i}`, hasMore: true };
+      const sub = items[i];
       const startAt = sub.start_at as number | undefined;
       if (startAt != null && startAt * 1000 < opts.fromMs) continue; // outside window
       if (opts.toMs && startAt != null && startAt * 1000 >= opts.toMs) continue; // above upper bound
@@ -79,10 +100,11 @@ export async function syncRazorpaySubscriptions(supabase: ServiceClient, connect
       await persistSubscriptionResult(supabase, connector.org_id, connector.id, razorpaySubscriptionAdapter(sub as never, { plan: plan as never, customer: customer as never }));
       fetched++;
     }
+    startIdx = 0; // fully drained this page → next page starts at its first row
     skip += 100;
     if (items.length < 100) { hasMore = false; break; }
   }
-  return { fetched, cursor: hasMore ? String(skip) : null, hasMore };
+  return { fetched, cursor: hasMore ? `${skip}:${startIdx}` : null, hasMore };
 }
 
 /** Dispatch to the right gateway sync. No-op for gateways without a pull API. */

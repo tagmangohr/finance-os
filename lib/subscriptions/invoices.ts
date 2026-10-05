@@ -1,6 +1,7 @@
 import type { createServiceClient } from "@/lib/supabase/server";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import type { Database, Json } from "@/lib/supabase/types";
+import { timedFetch } from "@/lib/http/fetch";
 
 type ServiceClient = Awaited<ReturnType<typeof createServiceClient>>;
 type ConnectorRow = Pick<Database["public"]["Tables"]["connectors"]["Row"], "id" | "org_id" | "type" | "config">;
@@ -58,7 +59,7 @@ export async function syncStripeInvoices(supabase: ServiceClient, connector: Con
     u.searchParams.set("created[gte]", String(fromSec));
     if (opts.toMs) u.searchParams.set("created[lt]", String(Math.floor(opts.toMs / 1000)));
     if (after) u.searchParams.set("starting_after", after);
-    const res = await fetch(u.toString(), { headers: { Authorization: `Bearer ${cfg.secret_key}` }, next: { revalidate: 0 } });
+    const res = await timedFetch(u.toString(), { headers: { Authorization: `Bearer ${cfg.secret_key}` }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[invoices/stripe] ${res.status}: ${(await res.text()).slice(0, 160)}`); break; }
     const j = (await res.json()) as { data?: Array<Record<string, unknown>>; has_more?: boolean };
     const rows = j.data ?? [];
@@ -102,7 +103,7 @@ export async function syncRazorpayInvoices(supabase: ServiceClient, connector: C
   const auth = "Basic " + Buffer.from(`${cfg.key_id}:${cfg.key_secret}`).toString("base64");
   let skip = Number(opts.cursor ?? 0) || 0, fetched = 0, hasMore = true;
   while (Date.now() < opts.deadlineMs) {
-    const res = await fetch(`https://api.razorpay.com/v1/invoices?count=100&skip=${skip}`, { headers: { Authorization: auth }, next: { revalidate: 0 } });
+    const res = await timedFetch(`https://api.razorpay.com/v1/invoices?count=100&skip=${skip}`, { headers: { Authorization: auth }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[invoices/razorpay] ${res.status}`); break; }
     const j = (await res.json()) as { items?: Array<Record<string, unknown>> };
     const items = j.items ?? [];
