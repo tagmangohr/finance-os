@@ -18,6 +18,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOW_MS = 10 * DAY_MS;
 // Full re-paginations of a window before giving up ON THIS RUN (see fetchWindow).
 const WINDOW_ATTEMPTS = 5;
+// Hard per-request timeout for the (flaky, occasionally-hanging) recon endpoint.
+// Node's fetch has no default timeout, so a stalled request would otherwise block
+// the caller forever. 15s is generous for a single page yet bounded.
+const RECON_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Bounds for a recon fetch so it can never exceed the caller's function budget:
+ *  `requestTimeoutMs` caps each HTTP request; `deadlineMs` (absolute epoch ms) stops
+ *  starting new windows/attempts once reached (partial result; fill-only → the rest
+ *  is picked up next nightly pass). */
+export type ReconFetchOpts = { deadlineMs?: number; requestTimeoutMs?: number };
 
 /**
  * Cashfree Payment Gateway connector.
@@ -95,12 +105,24 @@ export class CashfreeConnector {
    * the dispute-fee reconcile passes read (fetch once, derive both), so the flaky
    * recon endpoint is paginated only once per night.
    */
-  async fetchReconRaw(fromDate: Date, toDate: Date): Promise<CashfreeReconEvent[]> {
+  async fetchReconRaw(
+    fromDate: Date,
+    toDate: Date,
+    opts: ReconFetchOpts = {}
+  ): Promise<CashfreeReconEvent[]> {
     const out: CashfreeReconEvent[] = [];
     const end = toDate.getTime();
     const start = Math.round(fromDate.getTime() / DAY_MS) * DAY_MS;
     for (let cur = start; cur < end; cur += WINDOW_MS) {
-      out.push(...(await this.fetchWindowRaw(new Date(cur), new Date(Math.min(cur + WINDOW_MS, end)))));
+      // BOUNDED: once the caller's deadline passes, stop starting NEW windows and
+      // return what we have. The reconcile is fill-only + idempotent, so the
+      // windows we skip this run are simply picked up on the next nightly pass
+      // (the same "other windows kept, retry next sync" contract as a window error).
+      // Without this, the flaky recon endpoint (no per-request timeout previously)
+      // could stall the whole caller past its function budget — the reconcile cron's
+      // "running forever / never records a result" failure.
+      if (opts.deadlineMs != null && Date.now() >= opts.deadlineMs) break;
+      out.push(...(await this.fetchWindowRaw(new Date(cur), new Date(Math.min(cur + WINDOW_MS, end)), opts)));
     }
     return out;
   }
@@ -128,8 +150,12 @@ export class CashfreeConnector {
    * WINDOW_ATTEMPTS we give up on this window for this run (returning the other windows
    * intact, never aborting the sync); a later sync re-fetches it (dedup makes that free).
    */
-  private async fetchWindowRaw(from: Date, to: Date): Promise<CashfreeReconEvent[]> {
+  private async fetchWindowRaw(from: Date, to: Date, opts: ReconFetchOpts = {}): Promise<CashfreeReconEvent[]> {
+    const reqTimeoutMs = opts.requestTimeoutMs ?? RECON_REQUEST_TIMEOUT_MS;
     for (let attempt = 1; attempt <= WINDOW_ATTEMPTS; attempt++) {
+      // Respect the overall deadline between attempts too — don't burn backoff/retry
+      // time on a window once the caller's budget is spent.
+      if (opts.deadlineMs != null && Date.now() >= opts.deadlineMs) return [];
       try {
         const out: CashfreeReconEvent[] = [];
         let cursor: string | null = null;
@@ -138,6 +164,10 @@ export class CashfreeConnector {
             method: "POST",
             headers: this.headers,
             next: { revalidate: 0 },
+            // Hard per-request timeout — the recon endpoint can hang, and Node fetch
+            // has NO default timeout, so without this a single stalled request could
+            // block the caller indefinitely (root cause of the reconcile cron hang).
+            signal: AbortSignal.timeout(reqTimeoutMs),
             body: JSON.stringify({
               pagination: { limit: PAGE_SIZE, cursor },
               filters: { start_date: from.toISOString(), end_date: to.toISOString() },

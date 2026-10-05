@@ -47,6 +47,20 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         .delete()
         .in("status", ["done", "failed"])
         .lt("updated_at", cutoff);
+      // Watchdog: a cron_runs row still 'running' long past any legitimate function
+      // lifetime was killed mid-run (timeout) before it could record a result — the
+      // wrapper's finish() never executed. Flip it to 'failed' so Sync Health reflects
+      // reality instead of showing "running" indefinitely. 15 min is well beyond the
+      // longest cron (maxDuration 300s), so this never races a live run.
+      await supabase
+        .from("cron_runs")
+        .update({
+          status: "failed",
+          error: "did not finish — timed out before recording a result",
+          finished_at: new Date().toISOString(),
+        })
+        .eq("status", "running")
+        .lt("started_at", new Date(Date.now() - 15 * 60 * 1000).toISOString());
       // Keep the cron audit log bounded — 30 days of history is plenty for Sync Health.
       await supabase
         .from("cron_runs")

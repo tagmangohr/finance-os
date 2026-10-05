@@ -7,7 +7,10 @@ import { CashfreeConnector } from "@/lib/connectors/cashfree";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
-import type { NormalizedTransaction } from "@/lib/normalizer";
+import { reconcileCashfreeFees, reconcileCashfreeDisputeFees } from "@/lib/connectors/cashfree-fees";
+import { categorizeBankTransactions } from "@/lib/expenses/categorize";
+import { invalidateOrg } from "@/lib/cache/org-cache";
+import type { NormalizedTransaction, CashfreeReconEvent } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import { isLinkConnector, stageLinkSheet } from "@/lib/connectors/links";
 import type { Database, SyncJobRow } from "@/lib/supabase/types";
@@ -184,6 +187,84 @@ export async function enqueueIncremental(
   });
   if (error) throw new Error(`Failed to enqueue incremental: ${error.message}`);
   return { enqueued: true };
+}
+
+/** Connector types the nightly reconcile acts on. */
+const RECONCILE_TYPES = ["razorpay", "stripe", "cashfree", "mercury"];
+/** Trailing window the Cashfree fee/dispute-fee recon sweeps each night (late-settling
+ *  fees land within this; older history is covered by the one-off backfill). */
+const RECONCILE_FEE_WINDOW_DAYS = 75;
+
+/** Start of the current Indian financial year (Apr 1, IST) as epoch ms. Computed (not
+ *  hardcoded) so it stays correct across FY rollovers. */
+function currentFyStartMs(): number {
+  const ist = new Date(Date.now() + 5.5 * 3600 * 1000); // shift so UTC getters read IST wall-clock
+  const fyYear = ist.getUTCMonth() >= 3 ? ist.getUTCFullYear() : ist.getUTCFullYear() - 1; // Apr = month 3
+  return Date.UTC(fyYear, 3, 1, 0, 0, 0) - 5.5 * 3600 * 1000; // Apr 1 00:00 IST → UTC epoch
+}
+
+/**
+ * Enqueue the nightly reconciliation as BOUNDED, RESUMABLE queue jobs instead of one
+ * monolithic 300s cron pass (which timed out and never recorded a result). Each job is
+ * drained by the per-minute worker in ≤CHUNK_FETCH_MS chunks, idempotent/fill-only, so
+ * the reconcile scales with connector count and can never exceed the function budget.
+ *
+ *   • stripe / razorpay → a `subs` job over the current FY (reuses processSubsBackfill:
+ *     invoices → tag → subs, already cursor-resumable).
+ *   • cashfree          → a `reconcile` job (poll → fees+dispute-fees, bounded recon fetch).
+ *   • mercury (bank)    → one `reconcile`/`categorize` job per ORG (auto-categorize).
+ *
+ * Dedup: skip a connector/org that already has an open (pending/running) job of the same
+ * kind, so a slow night never piles duplicates. Returns counts for the cron log.
+ */
+export async function enqueueReconcile(
+  supabase: SupabaseLike
+): Promise<{ enqueued: number; skipped: number }> {
+  const { data: connectors } = await supabase
+    .from("connectors").select("id, org_id, type, status").eq("status", "active").in("type", RECONCILE_TYPES);
+  const conns = (connectors ?? []) as Pick<ConnectorRow, "id" | "org_id" | "type">[];
+  const now = new Date();
+  const fyStart = new Date(currentFyStartMs());
+  const feeFrom = new Date(Date.now() - RECONCILE_FEE_WINDOW_DAYS * DAY_MS);
+  let enqueued = 0, skipped = 0;
+
+  const openByConnector = async (connectorId: string, type: string): Promise<boolean> => {
+    const { count } = await supabase.from("sync_jobs").select("id", { count: "exact", head: true })
+      .eq("connector_id", connectorId).eq("type", type).in("status", ["pending", "running"]);
+    return (count ?? 0) > 0;
+  };
+  const openCategorizeForOrg = async (orgId: string): Promise<boolean> => {
+    const { count } = await supabase.from("sync_jobs").select("id", { count: "exact", head: true })
+      .eq("org_id", orgId).eq("type", "reconcile").eq("stream", "categorize").in("status", ["pending", "running"]);
+    return (count ?? 0) > 0;
+  };
+  const add = async (row: Database["public"]["Tables"]["sync_jobs"]["Insert"]): Promise<void> => {
+    const { error } = await supabase.from("sync_jobs").insert(row);
+    if (error) throw new Error(`Failed to enqueue reconcile job: ${error.message}`);
+    enqueued++;
+  };
+
+  for (const c of conns) {
+    if (c.type === "stripe" || c.type === "razorpay") {
+      if (await openByConnector(c.id, "subs")) { skipped++; continue; }
+      await add({ org_id: c.org_id, connector_id: c.id, type: "subs",
+        window_from: fyStart.toISOString(), window_to: now.toISOString() });
+    } else if (c.type === "cashfree") {
+      if (await openByConnector(c.id, "reconcile")) { skipped++; continue; }
+      await add({ org_id: c.org_id, connector_id: c.id, type: "reconcile", stream: "poll",
+        window_from: feeFrom.toISOString(), window_to: now.toISOString() });
+    }
+  }
+  // Bank auto-categorize: once per distinct mercury org (one carrier connector per org).
+  const seenOrg = new Set<string>();
+  for (const c of conns) {
+    if (c.type !== "mercury" || seenOrg.has(c.org_id)) continue;
+    seenOrg.add(c.org_id);
+    if (await openCategorizeForOrg(c.org_id)) { skipped++; continue; }
+    await add({ org_id: c.org_id, connector_id: c.id, type: "reconcile", stream: "categorize",
+      window_from: now.toISOString(), window_to: now.toISOString() });
+  }
+  return { enqueued, skipped };
 }
 
 /** Max subscriptions polled per nightly pass. Cashfree has no list-subscriptions
@@ -555,6 +636,73 @@ async function processLegacyJob(supabase: SupabaseLike, job: SyncJobRow, connect
 }
 
 /**
+ * Process ONE bounded chunk of a nightly RECONCILE job (type='reconcile'), enqueued by
+ * enqueueReconcile. Dispatches by connector type; each phase is time-boxed to
+ * CHUNK_FETCH_MS and idempotent/fill-only, so it always fits the worker budget and a
+ * retry/overlap is harmless.
+ *   • cashfree: stream 'poll' (recover webhook-missed subscription charges) → 'fees'
+ *     (fetch the recon feed ONCE, BOUNDED by the chunk deadline, and fill BOTH payment
+ *     fees and chargeback/dispute fees from it).
+ *   • mercury:  'categorize' (auto-categorize the org's new bank transactions).
+ */
+async function processReconcileJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
+  const deadlineMs = Date.now() + CHUNK_FETCH_MS;
+  const requeue = (extra: Record<string, unknown>) =>
+    supabase.from("sync_jobs").update({
+      attempts: 0, locked_at: null, locked_by: null, status: "pending",
+      run_after: new Date().toISOString(), updated_at: new Date().toISOString(), ...extra,
+    }).eq("id", job.id);
+  const markDone = (result: Record<string, unknown>) =>
+    supabase.from("sync_jobs").update({
+      status: "done", last_error: null, cursor: null, result, updated_at: new Date().toISOString(),
+    }).eq("id", job.id);
+
+  try {
+    if (connector.type === "cashfree") {
+      const phase = (job.stream as "poll" | "fees" | null) ?? "poll";
+      if (phase === "poll") {
+        const res = await pollCashfreeSubscriptions(supabase, connector, { deadlineMs });
+        await requeue({ stream: "fees", result: { polled: res.polled, inserted: res.inserted, updated: res.updated } });
+        return "progress";
+      }
+      // 'fees' — fetch the (flaky) recon feed ONCE, bounded by the chunk deadline, and
+      // fill payment fees + chargeback/dispute fees from the shared raw events.
+      const fromDate = new Date(job.window_from);
+      const toDate = new Date(job.window_to);
+      let rawEvents: CashfreeReconEvent[] | undefined;
+      const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
+      if (cfg.client_id && cfg.client_secret) {
+        rawEvents = await new CashfreeConnector(cfg.client_id, cfg.client_secret)
+          .fetchReconRaw(fromDate, toDate, { deadlineMs });
+      }
+      const fees = await reconcileCashfreeFees(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
+      const disp = await reconcileCashfreeDisputeFees(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
+      if ((fees.updated ?? 0) + (disp.updated ?? 0) > 0) invalidateOrg(connector.org_id);
+      await markDone({ feesFilled: fees.updated ?? 0, disputeFeesFilled: disp.updated ?? 0, feesSeen: fees.feesSeen ?? 0 });
+      return "done";
+    }
+
+    if (connector.type === "mercury") {
+      // Auto-categorize the org's new bank transactions (rules/system; AI only if a key
+      // is configured). One full fill-only pass per night — isolated to this org's job.
+      const res = await categorizeBankTransactions(connector.org_id, supabase);
+      if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(connector.org_id);
+      await markDone({ scanned: res.scanned, systemApplied: res.systemApplied, ruleApplied: res.ruleApplied, aiApplied: res.aiApplied, remaining: res.remaining });
+      return "done";
+    }
+
+    // Any other connector type carrying a reconcile job — nothing to do.
+    await markDone({ skipped: true });
+    return "done";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    const permanent = err instanceof SyncConfigError;
+    await finishJob(supabase, job, { ok: false, error: message, permanent });
+    return job.attempts >= job.max_attempts || permanent ? "failed" : "progress";
+  }
+}
+
+/**
  * Drain the queue for up to WORKER_BUDGET_MS: claim a batch, process it, repeat
  * until empty or out of budget. Concurrent/overlapping invocations are safe
  * (FOR UPDATE SKIP LOCKED).
@@ -606,6 +754,7 @@ export async function drainSyncJobs(
           await finishJob(supabase, job, { ok: false, error: "Connector no longer exists", permanent: true });
           return "failed";
         }
+        if (job.type === "reconcile") return processReconcileJob(supabase, job, connector);
         if (job.type === "subs") return processSubsBackfill(supabase, job, connector);
         if (isLinkConnector(connector.type)) return processSheetJob(supabase, job, connector);
         return isResumable(connector.type)

@@ -47,7 +47,7 @@ export const CRON_DEFS: CronDef[] = [
     jobName: "reconcile",
     label: "Reconcile",
     description:
-      "Every night after the main sync, runs the heavy reconciliation: polls each subscription for missed charges, back-fills gateway fees, syncs subscriptions & invoices, and auto-categorizes new bank transactions.",
+      "Every night after the main sync, queues the reconciliation work — polling subscriptions for missed charges, back-filling gateway & chargeback fees, syncing subscriptions & invoices, and auto-categorizing new bank transactions. Each job is drained by the background worker in bounded, resumable steps.",
     schedule: "Daily · 02:00 IST",
     staleHours: 30,
     dailyish: true,
