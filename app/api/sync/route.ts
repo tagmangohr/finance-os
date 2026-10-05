@@ -77,10 +77,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (syncedOrgs.size > 0) {
       try {
         const { createServiceClient } = await import("@/lib/supabase/server");
-        const { categorizeBankTransactions } = await import("@/lib/expenses/categorize");
+        const { enqueueCategorize } = await import("@/lib/connectors/jobs");
         const svc = await createServiceClient();
-        for (const oid of syncedOrgs) await categorizeBankTransactions(oid, svc);
-      } catch (e) { console.error("[sync] post-link categorize failed (non-fatal):", e); }
+        // Enqueue ONE bounded, worker-drained categorize per org instead of an inline
+        // unbounded pass — the worker kick below starts it draining immediately.
+        const connByOrg = new Map(linkConnectors.map((c) => [c.org_id, c.id]));
+        for (const oid of syncedOrgs) {
+          const cid = connByOrg.get(oid);
+          if (cid) await enqueueCategorize(svc, oid, cid);
+        }
+      } catch (e) { console.error("[sync] post-link categorize enqueue failed (non-fatal):", e); }
     }
     if (enqueued > 0 && cronSecret) {
       try { await fetch(`${origin}/api/cron/process-sync-jobs`, { headers: { authorization: `Bearer ${cronSecret}` } }); } catch { /* cron drains anyway */ }

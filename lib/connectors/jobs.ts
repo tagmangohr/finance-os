@@ -10,6 +10,7 @@ import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions
 import { reconcileCashfreeFees, reconcileCashfreeDisputeFees } from "@/lib/connectors/cashfree-fees";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import { invalidateOrg } from "@/lib/cache/org-cache";
+import { timedFetch } from "@/lib/http/fetch";
 import type { NormalizedTransaction, CashfreeReconEvent } from "@/lib/normalizer";
 import { advanceCheckpoint, OVERLAP_DAYS, INITIAL_BACKFILL_DAYS } from "@/lib/connectors/checkpoint";
 import { isLinkConnector, stageLinkSheet } from "@/lib/connectors/links";
@@ -193,7 +194,9 @@ export async function enqueueIncremental(
 }
 
 /** Connector types the nightly reconcile acts on. */
-const RECONCILE_TYPES = ["razorpay", "stripe", "cashfree", "mercury"];
+const RECONCILE_TYPES = ["razorpay", "stripe", "cashfree", "mercury", "brex"];
+/** Bank-ledger connector types whose orgs get a nightly auto-categorize pass. */
+const BANK_CATEGORIZE_TYPES = new Set(["mercury", "brex"]);
 /** Trailing window the Cashfree fee/dispute-fee recon sweeps each night (late-settling
  *  fees land within this; older history is covered by the one-off backfill). */
 const RECONCILE_FEE_WINDOW_DAYS = 75;
@@ -258,16 +261,53 @@ export async function enqueueReconcile(
         window_from: feeFrom.toISOString(), window_to: now.toISOString() });
     }
   }
-  // Bank auto-categorize: once per distinct mercury org (one carrier connector per org).
+  // Bank auto-categorize: once per distinct bank org (mercury/brex; one carrier per org).
   const seenOrg = new Set<string>();
   for (const c of conns) {
-    if (c.type !== "mercury" || seenOrg.has(c.org_id)) continue;
+    if (!BANK_CATEGORIZE_TYPES.has(c.type) || seenOrg.has(c.org_id)) continue;
     seenOrg.add(c.org_id);
     if (await openCategorizeForOrg(c.org_id)) { skipped++; continue; }
     await add({ org_id: c.org_id, connector_id: c.id, type: "reconcile", stream: "categorize",
       window_from: now.toISOString(), window_to: now.toISOString() });
   }
   return { enqueued, skipped };
+}
+
+/**
+ * Enqueue a single bounded, worker-drained bank-categorize job for one org (dedup:
+ * skips if a categorize job is already open for that org). Used by bank webhooks and
+ * link-sync so they ENQUEUE instead of running an unbounded categorizeBankTransactions
+ * inline inside a 60s request function. Processed by processReconcileJob's stream=
+ * 'categorize' branch (keyset-chunked). Returns whether a new job was created.
+ */
+export async function enqueueCategorize(
+  supabase: SupabaseLike,
+  orgId: string,
+  connectorId: string
+): Promise<{ enqueued: boolean }> {
+  const { count } = await supabase.from("sync_jobs").select("id", { count: "exact", head: true })
+    .eq("org_id", orgId).eq("type", "reconcile").eq("stream", "categorize").in("status", ["pending", "running"]);
+  if ((count ?? 0) > 0) return { enqueued: false };
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("sync_jobs").insert({
+    org_id: orgId, connector_id: connectorId, type: "reconcile", stream: "categorize",
+    window_from: now, window_to: now,
+  });
+  if (error) throw new Error(`Failed to enqueue categorize: ${error.message}`);
+  return { enqueued: true };
+}
+
+/**
+ * Fire the per-minute worker now so freshly-enqueued jobs start draining promptly
+ * instead of waiting for the next cron tick. Best-effort + bounded (5s) — the worker
+ * returns before it drains (in after()), and the every-minute cron is the backstop.
+ */
+export async function kickSyncWorker(origin: string): Promise<void> {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return;
+  try {
+    await timedFetch(`${origin}/api/cron/process-sync-jobs?chain=1`, { headers: { authorization: `Bearer ${secret}` } }, 5000);
+  } catch { /* the per-minute cron drains the queue regardless */ }
 }
 
 /** Max subscriptions polled per nightly pass. Cashfree has no list-subscriptions
@@ -661,6 +701,23 @@ async function processReconcileJob(supabase: SupabaseLike, job: SyncJobRow, conn
     }).eq("id", job.id);
 
   try {
+    // STREAM is authoritative for categorize (an org-level op) — checked before the
+    // connector-type branch so any bank carrier (mercury/brex/webhook) routes here.
+    if (job.stream === "categorize") {
+      const cur = job.cursor ? (JSON.parse(job.cursor) as { d: string; i: string }) : null;
+      const res = await categorizeBankTransactions(connector.org_id, supabase, {
+        limit: BANK_CATEGORIZE_CHUNK, afterDate: cur?.d ?? null, afterId: cur?.i ?? null,
+      });
+      if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(connector.org_id);
+      const processed = (job.processed ?? 0) + res.scanned;
+      if (res.hasMore && res.nextCursor) {
+        await requeue({ stream: "categorize", cursor: JSON.stringify({ d: res.nextCursor.date, i: res.nextCursor.id }), processed });
+        return "progress";
+      }
+      await markDone({ processed, lastPass: { scanned: res.scanned, systemApplied: res.systemApplied, ruleApplied: res.ruleApplied, aiApplied: res.aiApplied } });
+      return "done";
+    }
+
     if (connector.type === "cashfree") {
       const phase = (job.stream as "poll" | "fees" | null) ?? "poll";
       if (phase === "poll") {
@@ -682,26 +739,6 @@ async function processReconcileJob(supabase: SupabaseLike, job: SyncJobRow, conn
       const disp = await reconcileCashfreeDisputeFees(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
       if ((fees.updated ?? 0) + (disp.updated ?? 0) > 0) invalidateOrg(connector.org_id);
       await markDone({ feesFilled: fees.updated ?? 0, disputeFeesFilled: disp.updated ?? 0, feesSeen: fees.feesSeen ?? 0 });
-      return "done";
-    }
-
-    if (connector.type === "mercury") {
-      // Auto-categorize the org's uncategorized bank transactions (rules/system; AI only
-      // if a key is configured), KEYSET-CHUNKED so even a large backlog (tens of thousands
-      // of rows) sweeps across passes without exceeding the worker budget. job.cursor
-      // carries the (date,id) keyset between passes; the cursor advances past rows left
-      // uncategorized, so an unmatchable backlog can never wedge the sweep.
-      const cur = job.cursor ? (JSON.parse(job.cursor) as { d: string; i: string }) : null;
-      const res = await categorizeBankTransactions(connector.org_id, supabase, {
-        limit: BANK_CATEGORIZE_CHUNK, afterDate: cur?.d ?? null, afterId: cur?.i ?? null,
-      });
-      if (res.systemApplied + res.ruleApplied + res.aiApplied > 0) invalidateOrg(connector.org_id);
-      const processed = (job.processed ?? 0) + res.scanned;
-      if (res.hasMore && res.nextCursor) {
-        await requeue({ stream: "categorize", cursor: JSON.stringify({ d: res.nextCursor.date, i: res.nextCursor.id }), processed });
-        return "progress";
-      }
-      await markDone({ processed, lastPass: { scanned: res.scanned, systemApplied: res.systemApplied, ruleApplied: res.ruleApplied, aiApplied: res.aiApplied } });
       return "done";
     }
 

@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import crypto from "crypto";
-import { randomUUID } from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { decryptConfigSecrets } from "@/lib/crypto/secrets";
-import { enqueueIncremental, drainSyncJobs } from "@/lib/connectors/jobs";
+import { enqueueIncremental, enqueueCategorize, kickSyncWorker } from "@/lib/connectors/jobs";
 import { captureEvent } from "@/lib/events/capture";
-import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import type { Database } from "@/lib/supabase/types";
 
 export const runtime = "nodejs";
@@ -130,9 +128,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   after(async () => {
     const sb = await createServiceClient();
     try {
+      // ENQUEUE, don't process inline — a webhook must not drain the whole queue +
+      // run an unbounded categorize in its 60s budget. The per-minute worker drains
+      // both (bounded, resumable); we kick it so they start promptly.
       await enqueueIncremental(sb, conn);
-      await drainSyncJobs(sb, randomUUID());
-      await categorizeBankTransactions(orgId, sb);
+      await enqueueCategorize(sb, orgId, conn.id);
+      await kickSyncWorker(req.nextUrl.origin);
     } catch (e) {
       console.error("[brex webhook] async processing failed:", e);
     }

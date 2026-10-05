@@ -5,6 +5,11 @@ import { isCronEnabled } from "@/lib/ops/cron-settings";
 import { syncDriveFile } from "@/lib/drive/sync";
 import type { DriveConnection, DriveFile } from "@/lib/drive/types";
 
+// Up to 50 sheets, each parsed + row-synced sequentially — give it real budget (it had
+// none declared, so it ran on the platform default and a batch of large sheets could be
+// killed mid-loop). Paired with a per-run deadline below so it never exceeds this.
+export const maxDuration = 300;
+
 /**
  * GET /api/cron/drive-sync
  *
@@ -74,7 +79,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let totalInserted = 0;
   let totalUpdated  = 0;
 
+  // Stop starting new files ~30s before the function cap so a batch of large sheets
+  // can't blow the budget and get killed mid-loop (losing the run's bookkeeping).
+  // Unprocessed files keep their last_sync_at, so the next hourly run picks them up.
+  const deadlineMs = startedAt + 270_000;
+
   for (const rawFile of files as FileWithJoins[]) {
+    if (Date.now() > deadlineMs) {
+      summary.push({ file: rawFile.file_name, status: "skipped", reason: "run deadline — deferred to next sync" });
+      continue;
+    }
     const connection = rawFile.drive_folders.drive_connections;
 
     try {
