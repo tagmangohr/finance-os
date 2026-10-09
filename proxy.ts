@@ -73,10 +73,14 @@ export async function proxy(request: NextRequest) {
 
   // Public routes — no user session required. /api/v1 is the partner API,
   // authenticated by an org API key (Bearer) inside the route, not a login cookie.
+  // /api/admin/cashfree-backfill is a server-to-server ops endpoint gated by
+  // CRON_SECRET inside the route (same posture as /api/cron), so it must bypass the
+  // login-session gate or the proxy redirects the request before the secret check runs.
   if (
     pathname.startsWith("/auth") ||
     pathname.startsWith("/api/webhooks") ||
     pathname.startsWith("/api/cron") ||
+    pathname.startsWith("/api/admin/cashfree-backfill") ||
     pathname.startsWith("/api/v1")
   ) {
     return supabaseResponse;
