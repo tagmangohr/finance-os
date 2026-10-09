@@ -1243,6 +1243,20 @@ export function normalizeCashfreeSubscriptionPayment(p: CashfreeWebhookPayload):
   if (payId == null) return null;
 
   const status = mapCashfreePaymentStatus(d.payment_status);
+
+  // NOTE on Cashfree subscription-event classification (the "enrollment failed but money
+  // settled" case): a subscription's first charge rides the mandate AUTH, and Cashfree
+  // stamps payment_status=FAILED on the webhook when ENROLLMENT fails ("Invalid Token
+  // Bin" / "Authorization amount does not match") EVEN WHEN the card was charged and the
+  // money settled. We deliberately STILL record that as `failed` here (it is the best
+  // signal the webhook carries, and preserves genuine first-charge-failure visibility),
+  // and let the two downstream layers make it correct:
+  //   • the settlement-recon heal (reconcileCashfreePayments) is the money-truth — it
+  //     flips `failed → completed` for any charge that actually settled; and
+  //   • the status-finality guard (STATUS_FINALITY: completed > failed) guarantees that
+  //     once settled, no later FAILED/AUTH re-delivery can flip it back.
+  // So a settled-but-enrollment-failed charge shows `failed` only until the next recon
+  // pass, then becomes `completed`; a genuinely-failed charge correctly stays `failed`.
   const subId = d.subscription_id ?? null;
   const when = d.payment_initiated_date ?? p.event_time;
 

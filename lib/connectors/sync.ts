@@ -410,17 +410,24 @@ function stableJson(value: unknown): string {
 // fires a SUBSCRIPTION_AUTH_STATUS ("pending" mandate) AFTER the charge succeeded
 // (1,195 charges / ₹44.1L were stranded "pending" this way); App Store re-delivers a
 // renewal ("completed") AFTER a REFUND folded onto the same row, un-refunding it.
-// Ranks: pending(0) < completed = failed (1) < refunded (2). So pending→completed,
-// completed→refunded, failed→completed all flow; but a LOWER-finality incoming status
-// (completed/pending onto refunded, pending onto completed) is refused. A genuine new
-// attempt is a new external_id (new row), so this only blocks the erroneous races.
-const STATUS_FINALITY: Record<string, number> = { pending: 0, failed: 1, completed: 1, refunded: 2 };
+//
+// Ranks: pending(0) < failed(1) < completed(2) < refunded(3). COMPLETED OUTRANKS FAILED
+// deliberately: once a charge is captured/settled (money moved), no later event may
+// move it back to `failed` or `pending`. This closes the Cashfree bug where a
+// SUBSCRIPTION_PAYMENT_FAILED / AUTH_STATUS ("enrollment failed") event re-delivered
+// after the money had already settled flipped a genuinely-COMPLETED charge to `failed`
+// (completed and failed were previously tied at rank 1, so the guard let `failed`
+// overwrite `completed`). The settlement-recon heal relies on `failed→completed` still
+// flowing (recon is the money-truth), which it does (2 > 1). A genuine *new* attempt is
+// a new external_id (its own row), so a real later failure is never masked by this —
+// only erroneous re-deliveries / races onto the SAME charge id are refused.
+const STATUS_FINALITY: Record<string, number> = { pending: 0, failed: 1, completed: 2, refunded: 3 };
 // For the ATOMIC db guard: when writing status X, the statuses with STRICTLY higher
 // finality that the write must not clobber (used as a conditional WHERE).
 const HIGHER_FINALITY_THAN: Record<string, string[]> = {
-  pending: ["completed", "failed", "refunded"],
+  pending: ["failed", "completed", "refunded"],
+  failed: ["completed", "refunded"], // a `failed` write must never clobber a completed/refunded charge
   completed: ["refunded"],
-  failed: ["refunded"],
   // refunded: nothing is higher-finality, so no guard needed.
 };
 function guardStatusDowngrade(
@@ -530,22 +537,77 @@ export async function persistTransactions(
     ? await getExistingTransactionsByExternalId(supabase, orgId, externalIds)
     : new Map<string, ExistingTransactionByExternalId[]>();
 
-  const newRows = rows.filter((r) => !r.external_id || !existingByExternalId.has(r.external_id));
   const existingRows = rows.filter((r) => r.external_id && existingByExternalId.has(r.external_id));
+  const newRowsRaw = rows.filter((r) => !r.external_id || !existingByExternalId.has(r.external_id));
+  // Dedup newRows by external_id. Postgres cannot ON CONFLICT DO NOTHING a row against
+  // ANOTHER row in the SAME insert statement — two events for the same new
+  // (org, external_id) in one persist call raise a unique violation. When a batch holds
+  // multiple states for one brand-new charge, keep the HIGHEST-finality one (a settled
+  // `completed` must win over a re-delivered `failed`, never the reverse) — the same
+  // monotonic rule the UPDATE path enforces, applied here so the insert can't under-book
+  // a settled charge. Ties → later row wins. (Null external_ids are always distinct.)
+  const newRows: typeof newRowsRaw = [];
+  {
+    const byExt = new Map<string, (typeof newRowsRaw)[number]>();
+    const nullExt: typeof newRowsRaw = [];
+    for (const r of newRowsRaw) {
+      if (!r.external_id) { nullExt.push(r); continue; }
+      const prev = byExt.get(r.external_id);
+      if (!prev || (STATUS_FINALITY[r.status ?? ""] ?? 0) >= (STATUS_FINALITY[prev.status ?? ""] ?? 0)) {
+        byExt.set(r.external_id, r);
+      }
+    }
+    newRows.push(...byExt.values(), ...nullExt);
+  }
+
+  // Idempotent insert against the global (org_id, external_id) uniqueness guard
+  // (migration 105): ON CONFLICT DO NOTHING inserts the new rows and silently skips any
+  // a concurrent sync already wrote. Retries once on a statement-timeout (a busy DB must
+  // never silently drop a received payment). Returns the error otherwise so the caller
+  // can reroute a race to the UPDATE path rather than losing the event.
+  const insertNew = async (
+    batch: TransactionInsert[]
+  ): Promise<{ count: number; error?: never } | { error: { code?: string; message: string }; count?: never }> => {
+    for (let attempt = 1; ; attempt++) {
+      const { error, count } = await supabase
+        .from("transactions")
+        .upsert(batch, { onConflict: "org_id,external_id", ignoreDuplicates: true, count: "exact" });
+      if (!error) return { count: count ?? 0 };
+      if (error.code === "57014" && attempt < 3) { await new Promise((r) => setTimeout(r, 400 * attempt)); continue; }
+      return { error };
+    }
+  };
 
   if (newRows.length > 0) {
-    // Idempotent insert against the global (org_id, external_id) uniqueness guard
-    // (migration 105): ON CONFLICT DO NOTHING inserts the new rows and silently skips
-    // any a concurrent sync — or a reconnect under a DIFFERENT connector — already
-    // wrote. This is per-row, so a single duplicate can't drop the whole batch (a
-    // plain insert is all-or-nothing and would skip EVERY new row on one conflict).
-    // NULL-external_id rows never conflict (nulls are distinct) and insert normally.
-    const { error, count } = await supabase
-      .from("transactions")
-      .upsert(newRows, { onConflict: "org_id,external_id", ignoreDuplicates: true, count: "exact" });
-    if (error) throw new Error(`Insert failed: ${error.message}`);
-    out.inserted = count ?? 0;
-    out.skipped += newRows.length - (count ?? 0);
+    const res = await insertNew(newRows);
+    if (res.error) {
+      if (res.error.code === "23505") {
+        // A concurrent writer created some of these between our existence check and the
+        // insert (or the row exists under a different connector). Re-fetch, insert the
+        // genuinely-new remainder, and route the now-existing rows to the UPDATE path so
+        // the status/metadata transition they carry still lands — instead of being lost
+        // to a thrown "Insert failed" (the duplicate-key errors that silently dropped
+        // ~370 Cashfree status updates in Sep 2026).
+        const ids = newRows.map((x) => x.external_id).filter(Boolean) as string[];
+        const now = await getExistingTransactionsByExternalId(supabase, orgId, ids);
+        const stillNew = newRows.filter((x) => !x.external_id || !now.has(x.external_id));
+        if (stillNew.length > 0) {
+          const retry = await insertNew(stillNew);
+          if (retry.error) throw new Error(`Insert failed: ${retry.error.message}`);
+          out.inserted += retry.count;
+          out.skipped += stillNew.length - retry.count;
+        }
+        for (const [k, v] of now) {
+          if (!existingByExternalId.has(k)) existingByExternalId.set(k, v);
+        }
+        existingRows.push(...newRows.filter((x) => x.external_id && now.has(x.external_id)));
+      } else {
+        throw new Error(`Insert failed: ${res.error.message}`);
+      }
+    } else {
+      out.inserted += res.count;
+      out.skipped += newRows.length - res.count;
+    }
   }
 
   // Refresh changed existing rows through a BOUNDED pool (not an unbounded
@@ -567,25 +629,34 @@ export async function persistTransactions(
       // Statuses with strictly higher finality that this write must not clobber.
       const higherFinality = HIGHER_FINALITY_THAN[fields.status ?? ""];
       updateThunks.push(async () => {
-        let query = supabase
-          .from("transactions")
-          .update(fields)
-          .eq("id", existing.id)
-          .eq("org_id", orgId);
-        // ATOMIC finality guard. guardStatusDowngrade() above decides against THIS row's
-        // status as READ at fetch time. But two events for the same charge can arrive in
-        // the same second and run as CONCURRENT invocations: each reads the pre-write
-        // status, both pass the in-memory guard, and last-write-wins could still land a
-        // lower-finality status on top of a row the other invocation just moved forward
-        // (e.g. a re-delivered "completed" clobbering a "refunded", or "pending" clobbering
-        // a settled charge). So make the write itself conditional on the row not already
-        // holding a HIGHER-finality status — a concurrent forward write turns this one into
-        // a 0-row no-op. Null-safe: a NULL status is still allowed through.
-        if (higherFinality && higherFinality.length) {
-          query = query.or(`status.is.null,status.not.in.(${higherFinality.join(",")})`);
+        // Rebuilt each attempt (PostgREST query builders are one-shot). Retries once on a
+        // statement-timeout so a busy DB doesn't silently drop a status transition.
+        const runUpdate = async () => {
+          let query = supabase
+            .from("transactions")
+            .update(fields)
+            .eq("id", existing.id)
+            .eq("org_id", orgId);
+          // ATOMIC finality guard. guardStatusDowngrade() above decides against THIS row's
+          // status as READ at fetch time. But two events for the same charge can arrive in
+          // the same second and run as CONCURRENT invocations: each reads the pre-write
+          // status, both pass the in-memory guard, and last-write-wins could still land a
+          // lower-finality status on top of a row the other invocation just moved forward
+          // (e.g. a re-delivered "completed" clobbering a "refunded", or "pending" clobbering
+          // a settled charge). So make the write itself conditional on the row not already
+          // holding a HIGHER-finality status — a concurrent forward write turns this one into
+          // a 0-row no-op. Null-safe: a NULL status is still allowed through.
+          if (higherFinality && higherFinality.length) {
+            query = query.or(`status.is.null,status.not.in.(${higherFinality.join(",")})`);
+          }
+          return query;
+        };
+        for (let attempt = 1; ; attempt++) {
+          const { error } = await runUpdate();
+          if (!error) return;
+          if (error.code === "57014" && attempt < 3) { await new Promise((r) => setTimeout(r, 400 * attempt)); continue; }
+          throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
         }
-        const { error } = await query;
-        if (error) throw new Error(`Refresh failed for ${row.external_id}: ${error.message}`);
       });
     }
     if (touched) out.updated++;

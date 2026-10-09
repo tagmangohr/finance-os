@@ -8,6 +8,7 @@ import { decryptConfigSecrets } from "@/lib/crypto/secrets";
 import { syncGatewaySubscriptions } from "@/lib/subscriptions/sync";
 import { syncGatewayInvoices, tagSubscriptionCharges } from "@/lib/subscriptions/invoices";
 import { reconcileCashfreeFees, reconcileCashfreeDisputeFees } from "@/lib/connectors/cashfree-fees";
+import { reconcileCashfreePayments } from "@/lib/connectors/cashfree-payments";
 import { categorizeBankTransactions } from "@/lib/expenses/categorize";
 import { invalidateOrg } from "@/lib/cache/org-cache";
 import { timedFetch } from "@/lib/http/fetch";
@@ -735,10 +736,17 @@ async function processReconcileJob(supabase: SupabaseLike, job: SyncJobRow, conn
         rawEvents = await new CashfreeConnector(cfg.client_id, cfg.client_secret)
           .fetchReconRaw(fromDate, toDate, { deadlineMs });
       }
+      // MONEY-TRUTH heal FIRST: insert settled payments Cashfree never webhooked us,
+      // and flip enrollment-failed-but-settled charges to completed. Runs before the
+      // fee passes so a freshly-inserted payment can receive its fee in the same run.
+      const pay = await reconcileCashfreePayments(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
       const fees = await reconcileCashfreeFees(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
       const disp = await reconcileCashfreeDisputeFees(supabase, connector, { fromDate, toDate, deadlineMs, rawEvents });
-      if ((fees.updated ?? 0) + (disp.updated ?? 0) > 0) invalidateOrg(connector.org_id);
-      await markDone({ feesFilled: fees.updated ?? 0, disputeFeesFilled: disp.updated ?? 0, feesSeen: fees.feesSeen ?? 0 });
+      if ((pay.inserted ?? 0) + (pay.healed ?? 0) + (fees.updated ?? 0) + (disp.updated ?? 0) > 0) invalidateOrg(connector.org_id);
+      await markDone({
+        paymentsInserted: pay.inserted ?? 0, paymentsHealed: pay.healed ?? 0,
+        feesFilled: fees.updated ?? 0, disputeFeesFilled: disp.updated ?? 0, feesSeen: fees.feesSeen ?? 0,
+      });
       return "done";
     }
 
