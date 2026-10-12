@@ -1234,8 +1234,24 @@ export function normalizeCashfreeWebhookEvent(p: CashfreeWebhookPayload): Normal
 export function normalizeCashfreeSubscriptionPayment(p: CashfreeWebhookPayload): NormalizedTransaction | null {
   const type = (p.type ?? "").toUpperCase();
   const d = p.data ?? {};
-  // Charge fields are directly on `data`. No amount/status → lifecycle-only event
-  // (e.g. STATUS_CHANGED) which carries no money — the registry captures it instead.
+
+  // Event-classification ALLOW-LIST: only genuine CHARGE-OUTCOME events become payment
+  // rows. Cashfree attaches a payment_status/payment_amount to LIFECYCLE events too —
+  // SUBSCRIPTION_PAYMENT_CANCELLED (a scheduled charge cancelled before it ran) and
+  // SUBSCRIPTION_CONTROLLED_NOTIFICATION_STATUS (a pre-debit notification) carry e.g.
+  // payment_status="CANCELLED" with an amount — so the old "no payment fields = lifecycle"
+  // check (below) let them through as phantom `failed` rows (~220/mo of pure noise in the
+  // Failed-Payments metric; no money ever moved, and recon never lists them as SUCCESS so
+  // the heal never touches them). They are not payment attempts, so skip them here. The
+  // subscription registry still captures EVERY SUBSCRIPTION_* event via
+  // extractCashfreeSubscription(), so subscription tracking/polling is unaffected.
+  const CHARGE_OUTCOME_EVENTS = new Set([
+    "SUBSCRIPTION_PAYMENT_SUCCESS", "SUBSCRIPTION_PAYMENT_FAILED",
+    "SUBSCRIPTION_AUTH_STATUS", "SUBSCRIPTION_CONTROLLED_EXECUTION_STATUS",
+  ]);
+  if (!CHARGE_OUTCOME_EVENTS.has(type)) return null;
+
+  // Charge fields are directly on `data`. No amount/status → nothing to book.
   if (d.payment_amount == null && d.payment_status == null) return null;
   // cf_txn_id is the PG payment id recon reports (10-digit sequence); fall back to the
   // subscription-subsystem cf_payment_id only if it's somehow absent.
