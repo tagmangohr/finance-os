@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
 import crypto from "crypto";
 import { createServiceClient } from "@/lib/supabase/server";
 import { persistTransactions } from "@/lib/connectors/sync";
+import { ensureRazorpayPaymentInGross } from "@/lib/connectors/razorpay-refund-payment";
 import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { captureEvent } from "@/lib/events/capture";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
@@ -185,9 +186,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ── Transaction events (payment / refund / dispute / settlement) ─────────────
   // Order matters: dispute events are also prefixed "payment." so check them first.
   const txns: NormalizedTransaction[] = [];
+  let refundPaymentId: string | null = null;
   if (type.startsWith("payment.dispute.")) { const d = payload.dispute?.entity as RazorpayDispute | undefined; if (d) txns.push(normalizeRazorpayDispute(d)); }
   else if (type.startsWith("payment.")) { const p = payload.payment?.entity as RazorpayPayment | undefined; if (p) txns.push(normalizeRazorpayPayment(p)); }
-  else if (type.startsWith("refund.")) { const r = payload.refund?.entity as RazorpayRefund | undefined; if (r) txns.push(normalizeRazorpayRefund(r)); }
+  else if (type.startsWith("refund.")) { const r = payload.refund?.entity as RazorpayRefund | undefined; if (r) { txns.push(normalizeRazorpayRefund(r)); if (r.status === "processed") refundPaymentId = r.payment_id ?? null; } }
   else if (type.startsWith("settlement.")) { const s = payload.settlement?.entity as RazorpaySettlement | undefined; if (s) txns.push(normalizeRazorpaySettlement(s)); }
 
   if (txns.length === 0) {
@@ -201,6 +203,21 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     await logWebhook(supabase, { outcome: "persist_error", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id, error: err instanceof Error ? err.message : String(err) });
     console.error(`[razorpay webhook] persist failed for ${type}:`, err);
     return NextResponse.json({ error: "Persist failed" }, { status: 500 });
+  }
+
+  // A PROCESSED refund proves its payment was collected. captured=false UPI auto-refunds
+  // never land via the normal sync, so make sure the gross-side payment exists (net =
+  // gross − refund = 0 instead of an orphaned refund reducing net). Gated to the terminal
+  // (processed) refund — on refund.created the refund isn't subtracted yet (_dm_refunds
+  // needs status='completed'), so booking gross then would briefly overstate net. In
+  // after() so the ACK stays fast; idempotent + finality-guarded, so it never disturbs a
+  // payment already in gross.
+  if (refundPaymentId) {
+    const paymentId = refundPaymentId;
+    after(async () => {
+      try { await ensureRazorpayPaymentInGross(supabase, matched.id, matched.org_id, paymentId); }
+      catch (e) { console.error("[razorpay webhook] ensure refund payment-in-gross failed:", e); }
+    });
   }
 
   await logWebhook(supabase, { outcome: "persisted", signature_ok: true, event_type: type, connector_id: matched.id, org_id: matched.org_id, external_id: txns[0].external_id, amount: txns[0].amount, status: txns[0].status });

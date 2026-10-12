@@ -109,6 +109,22 @@ export class RazorpayConnector {
     return results;
   }
 
+  /**
+   * Fetch ONE payment by id (raw entity), or null if Razorpay has no such payment.
+   * Used to backfill the gross-side payment behind a refund: a UPI "collect" that was
+   * received then auto-refunded reports captured=false and never lands via the normal
+   * payments sync, so the refund row ends up orphaned (net reduced with no matching
+   * gross). The refund proves the money moved, so we fetch the payment to book it.
+   */
+  async getPayment(paymentId: string): Promise<RazorpayPayment | null> {
+    try {
+      return await this.get<RazorpayPayment>(`/payments/${encodeURIComponent(paymentId)}`, {});
+    } catch (e) {
+      if (e instanceof RazorpayApiError && (e.status === 400 || e.status === 404)) return null;
+      throw e;
+    }
+  }
+
   // ─── Payouts ──────────────────────────────────────────────────────────────
   // Payouts is an OPTIONAL, Razorpay X-only feature (Razorpay's banking product).
   // The /payouts API requires an account_number param, and that number must be a
