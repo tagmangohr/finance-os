@@ -505,11 +505,63 @@ export async function persistTransactions(
   // A charge that is only ever momentarily pending is not lost: its terminal event books it.
   const isDropPending = (r: (typeof allRows)[number]) =>
     r.status === "pending" && (r.ledger ?? "payments") === "payments" && categorizeSource(r.source) === "payment";
-  const rows = allRows.filter((r) => !isDropPending(r));
+  let rows = allRows.filter((r) => !isDropPending(r));
   const droppedPending = allRows.length - rows.length;
   if (droppedPending > 0) {
     out.skipped += droppedPending;
     console.warn(`[sync] dropped ${droppedPending} non-terminal ${allRows.find(isDropPending)?.source ?? "?"} payment charge(s) — pending charges are never persisted (revenue guard)`);
+  }
+  if (rows.length === 0) return out;
+
+  // ── ORPHAN STRIPE-REFUND GUARD ──────────────────────────────────────────────
+  // TagMango shares this Stripe account. A refund.* event (or a backfilled refund)
+  // can reference a TagMango charge we deliberately never stored (isTagMangoCharge) —
+  // which would book a spurious Fiesta refund that subtracts real revenue. The old
+  // charge-derived refund path was implicitly safe (it ran only after the TagMango
+  // guard on the charge); the per-refund-object path has no charge in hand, so guard
+  // here: drop a stripe_refund whose parent charge (metadata.payment_external_id) is
+  // neither in THIS batch nor already in our ledger. Scoped to stripe_refund — only
+  // Stripe is a shared account — and fails OPEN on any error (keep the refund).
+  //
+  // Ordering: in the events-delta the same window carries charge.succeeded BEFORE
+  // refund.created (processed oldest→newest, so the charge is in THIS batch) → a
+  // genuine refund is never dropped. The only edge is a real-time webhook delivering
+  // refund.created before its charge (Stripe doesn't guarantee webhook order): the
+  // refund is skipped now but SELF-HEALS on the next events-delta run, which re-reads
+  // that event with the charge already in the ledger. (A permanent drop would require
+  // the charge to never land at all — i.e. it isn't ours = TagMango, the intended drop.)
+  const stripeRefundRows = rows.filter((r) => r.source === "stripe_refund");
+  if (stripeRefundRows.length > 0) {
+    try {
+      const parentOf = (r: (typeof rows)[number]) =>
+        ((r.metadata as Record<string, unknown> | null)?.payment_external_id as string | undefined) || null;
+      const known = new Set(
+        rows.filter((r) => r.source === "stripe" && r.external_id).map((r) => r.external_id as string)
+      );
+      const needed = [...new Set(stripeRefundRows.map(parentOf).filter((id): id is string => !!id && !known.has(id)))];
+      if (needed.length > 0) {
+        const { data: found } = await supabase
+          .from("transactions")
+          .select("external_id")
+          .eq("connector_id", connectorId)
+          .eq("source", "stripe")
+          .in("external_id", needed);
+        for (const f of found ?? []) if (f.external_id) known.add(f.external_id);
+      }
+      const before = rows.length;
+      rows = rows.filter((r) => {
+        if (r.source !== "stripe_refund") return true;
+        const p = parentOf(r);
+        return !p || known.has(p); // keep if no parent link (nothing to check) or parent is ours
+      });
+      const droppedOrphans = before - rows.length;
+      if (droppedOrphans > 0) {
+        out.skipped += droppedOrphans;
+        console.warn(`[sync] dropped ${droppedOrphans} orphan stripe refund(s) with no matching Fiesta charge (TagMango/shared-account refund)`);
+      }
+    } catch (err) {
+      console.error("[sync] orphan stripe-refund guard failed (keeping all refunds):", err);
+    }
   }
   if (rows.length === 0) return out;
 

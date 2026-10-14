@@ -179,6 +179,34 @@ export type StripeCharge = {
         net: number;           // amount − fee, settlement-currency smallest unit
       }
     | null;
+  // Expanded refund sub-list (expand: ["data.refunds"]). Each Refund carries its OWN
+  // `created` (the true refund date) + per-refund amount — the authoritative source we
+  // date refund rows by, instead of the charge date. Absent on lean pages/events; the
+  // real-time paths instead consume refund.* events (StripeRefund) directly.
+  refunds?: { object?: "list"; data?: StripeRefund[]; has_more?: boolean } | null;
+};
+
+// A Stripe Refund object (re_...). Arrives expanded on the charge (data.refunds) and
+// as the object of refund.created / refund.updated events. Its `created` is the REFUND
+// date (unlike charge.created), and `charge` links back to the original payment row.
+export type StripeRefund = {
+  id: string;
+  object: "refund";
+  amount: number;            // smallest unit, in the charge's currency
+  currency: string;
+  created: number;           // unix — the REFUND timestamp (not the charge's)
+  status: string | null;     // succeeded | pending | failed | canceled | requires_action
+  charge: string | null;     // ch_... parent charge (our payment row's external_id)
+  payment_intent?: string | null;
+  reason?: string | null;
+  // Expanded balance transaction — the settled INR figure + rate for a foreign refund
+  // (same shape/role as the charge's). Present only when expanded; else FX is resolved
+  // from transaction_date by enrichRowsWithFx.
+  balance_transaction?:
+    | string
+    | { amount: number; currency: string; exchange_rate: number | null; fee: number; net: number }
+    | null;
+  metadata?: Record<string, string> | null;
 };
 
 export type StripePayout = {
@@ -655,63 +683,106 @@ export function normalizeStripeCharge(
 }
 
 /**
- * Derive a standalone REFUND line-item from a Stripe charge. Stripe reports refunds
- * as `amount_refunded` on the charge (it does not push a separate refund object into
- * charge.* events, and refunds.data isn't expanded on our lean pages), so — unlike
- * Razorpay/Cashfree which emit their own refund rows — Stripe refunds would otherwise
- * never appear as a `category='refund'` deduction. Without this, a refunded charge is
- * counted at full gross in revenue and NEVER subtracted (net + refund card both wrong).
+ * Normalize ONE Stripe Refund object (re_...) into a standalone refund line-item.
  *
- * Returns one refund row per charge carrying the CUMULATIVE refunded amount (partial
- * refunds accumulate into charge.amount_refunded, so one row is correct — and keying
- * on `<charge>_refund` means later refunds refresh the same row via the upsert path,
- * never double-count). Booked at the CHARGE date (Stripe gives no per-refund date
- * here); INR conversion is left to enrichRowsWithFx = the charge-date ECB rate.
- * Returns null when nothing is refunded.
+ * Unlike the old charge-derived approach (which booked a single cumulative row at the
+ * CHARGE date), this dates the refund at the refund's OWN `created` — so a refund that
+ * happens in a later month attributes to that month, and partial/multiple refunds on a
+ * charge each become their own correctly-dated row. `metadata.payment_external_id`
+ * links back to the original payment row (the charge, our `external_id`).
+ *
+ * Only a terminal, money-moved refund (status 'succeeded'; or absent/empty, which the
+ * charge-expanded sub-list uses for settled refunds) becomes a row — pending/failed/
+ * canceled return null (the later refund.updated → 'succeeded' books it). FX mirrors
+ * the charge: INR resolves 1:1; a foreign refund with an expanded INR balance_transaction
+ * uses that settled figure, else leaves amount_base null for enrichRowsWithFx to fill at
+ * the REFUND-date rate (enrich keys on transaction_date). `parentChargeId` backfills the
+ * link when a charge-nested refund omits its own `charge` pointer.
  */
-export function stripeRefundFromCharge(charge: StripeCharge): NormalizedTransaction | null {
-  const refundedMinor = charge.amount_refunded ?? 0;
-  if (!refundedMinor || refundedMinor <= 0) return null;
+export function normalizeStripeRefund(
+  refund: StripeRefund,
+  parentChargeId?: string | null,
+  counterpartyName?: string | null
+): NormalizedTransaction | null {
+  const st = (refund.status ?? "").toLowerCase();
+  // Count only settled refunds. Charge-expanded refunds omit/empty status for settled
+  // ones, so treat "" as succeeded; explicit non-succeeded states are not yet money-out.
+  if (st && st !== "succeeded") return null;
+  const minor = refund.amount ?? 0;
+  if (!minor || minor <= 0) return null;
 
-  const currency = charge.currency.toUpperCase();
+  const currency = (refund.currency ?? BASE_CURRENCY).toUpperCase();
   const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.has(currency);
-  const amount = isZeroDecimal ? refundedMinor : refundedMinor / 100;
+  const amount = isZeroDecimal ? minor : minor / 100;
+  const chargeId = refund.charge ?? parentChargeId ?? null;
 
-  let counterparty: string | null = null;
-  if (charge.customer && typeof charge.customer === "object") {
-    counterparty = charge.customer.name ?? charge.customer.email ?? null;
+  // Foreign refund with an expanded INR balance transaction → use the settled INR
+  // figure (authoritative, like the charge). Else INR 1:1, else leave null for enrich.
+  const bt = refund.balance_transaction && typeof refund.balance_transaction === "object"
+    ? refund.balance_transaction
+    : null;
+  let amount_base: number | null = null;
+  let fx_rate: number | null = null;
+  if (currency === BASE_CURRENCY) {
+    amount_base = amount;
+    fx_rate = 1;
+  } else if (bt && bt.currency.toUpperCase() === BASE_CURRENCY) {
+    amount_base = ZERO_DECIMAL_CURRENCIES.has(bt.currency.toUpperCase()) ? bt.amount : bt.amount / 100;
+    fx_rate = bt.exchange_rate ?? null;
   }
-  if (!counterparty) counterparty = charge.billing_details?.name ?? charge.billing_details?.email ?? null;
-
-  // INR rows resolve immediately; foreign rows leave amount_base null so
-  // enrichRowsWithFx fills it at the charge-date rate (same basis as the charge).
-  const amount_base = currency === BASE_CURRENCY ? amount : null;
-  const base_currency = currency === BASE_CURRENCY ? BASE_CURRENCY : null;
-  const fx_rate = currency === BASE_CURRENCY ? 1 : null;
 
   return {
-    external_id: `${charge.id}_refund`,
+    external_id: refund.id,
     type: "debit",
     amount,
     currency,
     category: "refund",
-    counterparty_name: counterparty,
-    description: `Refund for charge ${charge.id}`,
+    // Refund objects carry no customer identity; when we have the parent charge (the
+    // list-sync path) we pass its counterparty so refunds stay attributable/searchable.
+    counterparty_name: counterpartyName ?? null,
+    description: chargeId ? `Refund for charge ${chargeId}` : `Refund ${refund.id}`,
     source: "stripe_refund",
     status: "completed",
-    transaction_date: unixToDateString(charge.created),
-    transaction_at: unixToIso(charge.created),
+    transaction_date: unixToDateString(refund.created),
+    transaction_at: unixToIso(refund.created),
     amount_base,
-    base_currency,
+    base_currency: amount_base !== null ? BASE_CURRENCY : null,
     fx_rate,
     metadata: {
-      charge_id: charge.id,
-      charge_amount: isZeroDecimal ? charge.amount : charge.amount / 100,
-      fully_refunded: !!charge.refunded,
-      reconstructed_from_charge: true,
+      // Trace key → the original payment row's external_id (the charge id).
+      payment_external_id: chargeId,
+      charge_id: chargeId,
+      refund_id: refund.id,
+      reason: refund.reason ?? null,
+      refund_fee: bt && typeof bt.fee === "number"
+        ? (ZERO_DECIMAL_CURRENCIES.has(bt.currency.toUpperCase()) ? bt.fee : bt.fee / 100)
+        : null,
     },
-    raw: { charge_id: charge.id, amount_refunded: charge.amount_refunded, currency: charge.currency, refunded: charge.refunded },
+    raw: refund,
   };
+}
+
+/**
+ * Expand a charge's `data.refunds` sub-list into per-refund rows (one correctly-dated
+ * `category='refund'` debit each). Used by the list-backfill paths, which set
+ * expand:["data.refunds"]. Returns [] when the charge has no (expanded) refunds — the
+ * real-time paths rely on refund.* events (normalizeStripeRefund) instead.
+ */
+export function stripeRefundsFromCharge(charge: StripeCharge): NormalizedTransaction[] {
+  const list = charge.refunds?.data ?? [];
+  if (list.length === 0) return [];
+  // Derive the customer label from the charge so refund rows stay attributable.
+  let counterparty: string | null = null;
+  if (charge.customer && typeof charge.customer === "object") {
+    counterparty = charge.customer.name ?? charge.customer.email ?? null;
+  }
+  if (!counterparty) counterparty = charge.billing_details?.name ?? charge.billing_details?.email ?? charge.receipt_email ?? null;
+  const out: NormalizedTransaction[] = [];
+  for (const r of list) {
+    const row = normalizeStripeRefund(r, charge.id, counterparty);
+    if (row) out.push(row);
+  }
+  return out;
 }
 
 /**
@@ -1600,14 +1671,82 @@ export function normalizeAppStoreTransaction(
   };
 }
 
+/**
+ * Companion to normalizeAppStoreTransaction for REFUND/REVOKE notifications: emit a
+ * standalone debit `category='refund'` row dated at the REVOCATION date (the true
+ * refund date), so App Store refunds actually net in revenue. Previously a refund only
+ * flipped the sale row to 'refunded' with no refund row — and since the Refunds metric
+ * counts refund ROWS only (migration 102), those refunds were netted NOWHERE (net
+ * overstated). The flip is still emitted (status marker; keeps the sale in Gross); THIS
+ * row is what subtracts it, exactly once. `metadata.payment_external_id` links back to
+ * the sale row. Returns null for non-reversal notifications or a zero-price txn.
+ */
+export function appStoreRefundFromTransaction(
+  txn: AppStoreTransactionInfo,
+  ctx: { notificationType?: string; subtype?: string }
+): NormalizedTransaction | null {
+  const nt = (ctx.notificationType ?? "").toUpperCase();
+  const txId = txn.transactionId;
+  if (!txId) return null;
+
+  const isRestore = APPSTORE_RESTORE.has(nt);
+  const isReversal = !isRestore && (APPSTORE_REVERSAL.has(nt) || txn.revocationDate != null);
+  if (!isReversal) return null;
+
+  // App Store refunds reverse the WHOLE transaction → the original sale price.
+  const amount = txn.price != null ? txn.price / 1000 : 0;
+  if (!amount) return null;
+  const currency = (txn.currency ?? "USD").toUpperCase();
+
+  // The REFUND date (when Apple revoked). revocationDate is set on a reversal; fall
+  // back to signedDate (notification time), then purchaseDate.
+  const whenMs = txn.revocationDate ?? txn.signedDate ?? txn.purchaseDate ?? null;
+  const amount_base = currency === BASE_CURRENCY ? amount : null;
+
+  return {
+    external_id: `appstore_${txId}_refund`,
+    type: "debit",
+    amount,
+    currency,
+    category: "refund",
+    counterparty_name: null, // Apple provides no customer PII
+    description: `REFUND${txn.productId ? ` · ${txn.productId}` : ""}`,
+    source: "app_store",
+    status: "completed",
+    transaction_date: whenMs != null ? msToDateString(whenMs) : parseDateString(""),
+    transaction_at: whenMs != null ? msToIso(whenMs) : null,
+    amount_base,
+    base_currency: amount_base !== null ? BASE_CURRENCY : null,
+    fx_rate: amount_base !== null ? 1 : null,
+    subscription_id: null, // a refund is not a recurring charge
+    metadata: {
+      payment_external_id: `appstore_${txId}`,
+      notification_type: nt,
+      subtype: ctx.subtype ?? null,
+      transaction_id: txId,
+      original_transaction_id: txn.originalTransactionId ?? null,
+      product_id: txn.productId ?? null,
+      revocation_reason: txn.revocationReason ?? null,
+      revocation_date: txn.revocationDate ?? null,
+    },
+    raw: txn,
+  };
+}
+
 // ─── PayU normalizers ─────────────────────────────────────────────────────────
 
 export function normalizePayUTransaction(tx: PayUTransaction): NormalizedTransaction {
   let status: NormalizedTransaction["status"];
-  let type: "credit" | "debit" = "credit";
+  // Keep a refunded row as a CREDIT flipped to 'refunded' (sale stays in Gross, status
+  // marks it refunded) — NOT a type='debit' with category=null, which the old mapping
+  // used and which mis-counted the refund as an EXPENSE. PayU's mirror import gives a
+  // single mutating row with no separate refund event/date, so (like App Store flip-only)
+  // we can't synthesize a dated debit refund row here; this at least stops the expense
+  // misclassification and preserves the sale in Gross.
+  const type = "credit" as const;
   switch (tx.status?.toLowerCase()) {
     case "success":                   status = "completed"; break;
-    case "refunded":                  status = "refunded"; type = "debit"; break;
+    case "refunded":                  status = "refunded"; break;
     case "failure": case "failed":    status = "failed";   break;
     default:                          status = "pending";
   }
@@ -1667,10 +1806,12 @@ export function normalizePaytmTransaction(tx: PaytmTransaction): NormalizedTrans
 
 export function normalizeEasebuzzTransaction(tx: EasebuzzTransaction): NormalizedTransaction {
   let status: NormalizedTransaction["status"];
-  let type: "credit" | "debit" = "credit";
+  // See normalizePayUTransaction: keep refunded as a credit flip (sale stays in Gross),
+  // not a type='debit'/category=null row that was mis-counted as an expense.
+  const type = "credit" as const;
   switch (tx.status?.toLowerCase()) {
     case "success":                   status = "completed"; break;
-    case "refunded":                  status = "refunded"; type = "debit"; break;
+    case "refunded":                  status = "refunded"; break;
     case "failure": case "failed":    status = "failed";   break;
     default:                          status = "pending";
   }

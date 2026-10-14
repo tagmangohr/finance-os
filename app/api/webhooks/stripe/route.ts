@@ -6,12 +6,13 @@ import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { captureEvent } from "@/lib/events/capture";
 import {
   normalizeStripeCharge,
-  stripeRefundFromCharge,
+  normalizeStripeRefund,
   normalizeStripePayout,
   normalizeStripeDispute,
   isTagMangoCharge,
   type NormalizedTransaction,
   type StripeCharge,
+  type StripeRefund,
   type StripePayout,
   type StripeDispute,
 } from "@/lib/normalizer";
@@ -23,6 +24,10 @@ export const maxDuration = 30;
 const CHARGE_EVENTS = new Set([
   "charge.succeeded", "charge.failed", "charge.captured", "charge.updated", "charge.refunded",
 ]);
+// Refund objects (re_...) carry their OWN date → the refund row is dated at the refund
+// date, not the charge date. (Requires subscribing the endpoint to refund.* in the Stripe
+// dashboard; the events-delta sync is the backstop that catches refunds regardless.)
+const REFUND_EVENTS = new Set(["refund.created", "refund.updated"]);
 const DISPUTE_EVENTS = new Set([
   "charge.dispute.created", "charge.dispute.updated", "charge.dispute.closed",
   "charge.dispute.funds_withdrawn", "charge.dispute.funds_reinstated",
@@ -95,13 +100,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const txns: NormalizedTransaction[] = [];
   if (DISPUTE_EVENTS.has(event.type)) txns.push(normalizeStripeDispute(obj as StripeDispute));
   else if (PAYOUT_EVENTS.has(event.type)) txns.push(normalizeStripePayout(obj as StripePayout));
+  else if (REFUND_EVENTS.has(event.type)) {
+    const refund = normalizeStripeRefund(obj as StripeRefund); // dated at the refund's own date
+    if (refund) txns.push(refund);
+  }
   else if (CHARGE_EVENTS.has(event.type)) {
     const c = obj as StripeCharge;
-    if (!isTagMangoCharge(c)) {
-      txns.push(normalizeStripeCharge(c)); // exclude shared-account TagMango charges
-      const refund = stripeRefundFromCharge(c); // emit a refund line-item if the charge is (partly) refunded
-      if (refund) txns.push(refund);
-    }
+    // Only flips the charge's status (keeps the sale in Gross); the refund row comes
+    // from the refund.* event above.
+    if (!isTagMangoCharge(c)) txns.push(normalizeStripeCharge(c)); // exclude shared-account TagMango
   }
   const isSub = SUBSCRIPTION_EVENTS.has(event.type);
   const isInvoice = INVOICE_EVENTS.has(event.type);

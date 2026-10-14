@@ -338,7 +338,9 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
       // 'income' credits are tracked in the Bank tab, not in PG revenue metrics.
       if (!isBank) {
         if (r.status === "completed" || r.status === "refunded") m.gross! += b;
-        if (r.status === "refunded") m.refunds! += b;
+        // Refunds are counted from the separate debit refund ROW only (below), NOT from
+        // the flipped 'refunded' credit — matching migration 102's _dm_refunds. Counting
+        // both double-subtracts a refund that exists as flip + row (Stripe/Razorpay-full).
         if (r.status === "completed") {
           m.txns! += 1;
           const label = (r.counterparty_name ?? "").toLowerCase();
@@ -369,7 +371,7 @@ async function fromFallback(orgId: string, supabase: SupabaseClient): Promise<Me
         if (r.status === "completed") { health.completed += 1; health.netCompletedVolume += b; custTxns90 += 1; custNet90 += b; const l = (r.counterparty_name ?? "").toLowerCase(); if (l) custSet90.add(l); }
         else if (r.status === "failed") health.failed += 1;
         else if (r.status === "pending") health.pending += 1;
-        else if (r.status === "refunded") { health.refunded += 1; health.refundAmount += b; }
+        else if (r.status === "refunded") health.refunded += 1; // COUNT only; refund AMOUNT comes from the debit row below (refund-rows-only, migration 102)
         if (r.status === "completed" || r.status === "refunded") health.grossVolume += b;
       } else if (cat === "refund") health.refundAmount += b;
       if (cat === "dispute") { health.disputeCount += 1; health.disputeAmount += b; }

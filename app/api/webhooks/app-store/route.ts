@@ -5,7 +5,7 @@ import { connectorByToken } from "@/lib/connectors/webhook-connector";
 import { persistTransactions } from "@/lib/connectors/sync";
 import { captureEvent } from "@/lib/events/capture";
 import { APPLE_ROOT_CERTIFICATES } from "@/lib/apple/root-ca";
-import { normalizeAppStoreTransaction, type AppStoreTransactionInfo } from "@/lib/normalizer";
+import { normalizeAppStoreTransaction, appStoreRefundFromTransaction, type AppStoreTransactionInfo } from "@/lib/normalizer";
 import { stampAppStoreFee } from "@/lib/connectors/app-store-rates";
 import { appStoreSubscriptionAdapter } from "@/lib/subscriptions/adapters/app-store";
 import { persistSubscriptionResult } from "@/lib/subscriptions/persist";
@@ -167,8 +167,15 @@ async function handleFiestaRelay(
   txn.raw = body;
   // Attribute Apple's fee (customer price − partner share) from the derived rates.
   await stampAppStoreFee(supabase, matched.org_id, txn);
+  // A REFUND/REVOKE also emits a dated debit refund row (so the refund actually nets,
+  // not just flips the sale to 'refunded'). Keyed on appstore_<txId>_refund → idempotent.
+  const rows = [txn];
+  const refundRow = transaction
+    ? appStoreRefundFromTransaction(transaction, { notificationType: notificationType ?? undefined, subtype: subtype ?? undefined })
+    : null;
+  if (refundRow) { refundRow.raw = body; rows.push(refundRow); }
   try {
-    await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
+    await persistTransactions(supabase, matched.org_id, matched.id, rows);
   } catch (err) {
     await logWebhook(supabase, {
       outcome: "persist_error", signature_ok: false, event_type: eventType,
@@ -307,8 +314,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Attribute Apple's fee (customer price − partner share) from the derived rates.
   await stampAppStoreFee(supabase, matched.org_id, txn);
+  // Emit a dated debit refund row for REFUND/REVOKE (see the verified-path site above).
+  const rows = [txn];
+  const refundRow = txnInfo
+    ? appStoreRefundFromTransaction(txnInfo, { notificationType: payload.notificationType, subtype: payload.subtype })
+    : null;
+  if (refundRow) rows.push(refundRow); // raw defaults to the decoded txnInfo (same as txn here)
   try {
-    await persistTransactions(supabase, matched.org_id, matched.id, [txn]);
+    await persistTransactions(supabase, matched.org_id, matched.id, rows);
   } catch (err) {
     await logWebhook(supabase, {
       outcome: "persist_error", signature_ok: true, event_type: eventType,

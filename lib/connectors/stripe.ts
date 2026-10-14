@@ -2,10 +2,12 @@ import Stripe from "stripe";
 import {
   NormalizedTransaction,
   StripeCharge,
+  StripeRefund,
   StripePayout,
   StripeDispute,
   normalizeStripeCharge,
-  stripeRefundFromCharge,
+  normalizeStripeRefund,
+  stripeRefundsFromCharge,
   normalizeStripePayout,
   normalizeStripeDispute,
   isTagMangoCharge,
@@ -86,11 +88,12 @@ export class StripeConnector {
         // for the Payments customer-search — including one-time-purchase charges where
         // billing_details.* and receipt_email come back null (a large slice of failed
         // charges did exactly that, leaving them unsearchable). The normalizer reads
-        // charge.customer.{name,email,phone} from this. We do NOT expand balance_transaction
-        // (FX comes from ECB rates, lib/fx) — keeping the expand to one keeps pages light,
-        // and the resumable chunked sync (migration 021) absorbs any extra per-page latency
-        // by simply spanning more chunks rather than timing out.
-        expand: ["data.customer"],
+        // charge.customer.{name,email,phone} from this. data.refunds expands the per-refund
+        // objects (each with its OWN `created` + amount) so refund rows are dated at the
+        // refund date, not the charge date. We do NOT expand balance_transaction (FX comes
+        // from ECB rates, lib/fx); the resumable chunked sync (migration 021) absorbs any
+        // extra per-page latency by spanning more chunks rather than timing out.
+        expand: ["data.customer", "data.refunds"],
       };
       if (startingAfter) params.starting_after = startingAfter;
 
@@ -100,8 +103,7 @@ export class StripeConnector {
         const c = charge as unknown as StripeCharge;
         if (isTagMangoCharge(c)) continue; // exclude shared-account TagMango
         results.push(normalizeStripeCharge(c));
-        const refund = stripeRefundFromCharge(c); // separate refund line-item if refunded
-        if (refund) results.push(refund);
+        results.push(...stripeRefundsFromCharge(c)); // one correctly-dated row per refund
       }
 
       if (!page.has_more || page.data.length === 0) break;
@@ -173,10 +175,11 @@ export class StripeConnector {
         stream === "charges"
           ? await this.stripe.charges.list({
               ...params,
-              // Needed for the processing fee (balance_transaction.fee). Safe under
-              // the resumable engine: heavier pages just mean fewer per time-boxed
+              // balance_transaction → processing fee; refunds → per-refund objects
+              // (own date + amount) so refund rows are dated at the refund date. Safe
+              // under the resumable engine: heavier pages just mean fewer per time-boxed
               // chunk, never a timeout.
-              expand: ["data.balance_transaction"],
+              expand: ["data.balance_transaction", "data.refunds"],
             } as Stripe.ChargeListParams)
           : stream === "payouts"
           ? await this.stripe.payouts.list(params as Stripe.PayoutListParams)
@@ -187,8 +190,7 @@ export class StripeConnector {
           const c = item as unknown as StripeCharge;
           if (isTagMangoCharge(c)) continue; // exclude TagMango
           results.push(normalizeStripeCharge(c));
-          const refund = stripeRefundFromCharge(c);
-          if (refund) results.push(refund);
+          results.push(...stripeRefundsFromCharge(c)); // per-refund rows, dated at refund date
         } else {
           results.push(
             stream === "payouts"
@@ -230,16 +232,20 @@ export class StripeConnector {
     const PAYOUT = new Set([
       "payout.created", "payout.updated", "payout.paid", "payout.failed", "payout.canceled",
     ]);
-    // Includes charge.refunded → the charge object carries refunded=true +
-    // amount_refunded, so refunds land as a status/metadata change on the charge.
+    // charge.refunded still flips the charge to 'refunded' (keeps the sale in Gross); the
+    // refund ROW now comes from refund.* events (the Refund object carries its own date).
     const CHARGE = new Set([
       "charge.succeeded", "charge.failed", "charge.captured", "charge.updated",
       "charge.refunded", "charge.pending", "charge.expired",
     ]);
+    // refund.created / refund.updated carry the Refund object (re_...) with its OWN
+    // `created` (the true refund date) — the source we date refund rows by. refund.updated
+    // catches a pending→succeeded transition (normalizeStripeRefund books only 'succeeded').
+    const REFUND = new Set(["refund.created", "refund.updated"]);
     // Filter at the API (types[]) so we only page through events we act on. Without
     // this we'd page the account's ENTIRE event stream (failed payment_intents,
     // invoices, checkout sessions…) — thousands/day — and blow the listing budget.
-    const TYPES = [...CHARGE, ...DISPUTE, ...PAYOUT]; // 17 types (Stripe caps types[] at 20)
+    const TYPES = [...CHARGE, ...DISPUTE, ...PAYOUT, ...REFUND]; // 19 types (Stripe caps types[] at 20)
 
     // 1. Read the FULL relevant-event list since the checkpoint. If we can't finish
     //    listing within the deadline we report complete=false — the caller then punts
@@ -273,13 +279,12 @@ export class StripeConnector {
         let txn: NormalizedTransaction | null = null;
         if (DISPUTE.has(ev.type)) txn = normalizeStripeDispute(obj as unknown as StripeDispute);
         else if (PAYOUT.has(ev.type)) txn = normalizeStripePayout(obj as unknown as StripePayout);
+        else if (REFUND.has(ev.type)) txn = normalizeStripeRefund(obj as unknown as StripeRefund);
         else if (CHARGE.has(ev.type)) {
           const c = obj as unknown as StripeCharge;
-          if (!isTagMangoCharge(c)) {
-            txn = normalizeStripeCharge(c); // skip TagMango charge events
-            const refund = stripeRefundFromCharge(c); // refund delta on the same charge
-            if (refund?.external_id) byId.set(refund.external_id, refund);
-          }
+          // Charge events only flip the charge's status (sale stays in Gross); the refund
+          // row is produced from the refund.* event above, dated at the refund's own date.
+          if (!isTagMangoCharge(c)) txn = normalizeStripeCharge(c);
         }
         if (txn?.external_id) byId.set(txn.external_id, txn);
       } catch {
