@@ -534,9 +534,12 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
             </button>
           </div>
         )}
-        <div className="overflow-x-auto">
+        {/* Fixed-height viewport so the table area stays a CONSTANT size regardless of how
+            many rows the current page/search returns (it scrolls internally instead of the
+            container compressing/expanding). Header stays visible via sticky. */}
+        <div className="overflow-auto h-[clamp(400px,62vh,840px)]">
           <table className="w-full text-[13px]">
-            <thead><tr className="text-left text-background bg-foreground">
+            <thead className="sticky top-0 z-10"><tr className="text-left text-background bg-foreground">
               <th className="px-2.5 py-2.5 w-8 rounded-l-lg">
                 <input
                   type="checkbox"
@@ -563,7 +566,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
             </tr></thead>
             <tbody>
               {pageRows.length === 0 ? (
-                <tr><td colSpan={14} className="py-8 text-center text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
+                <tr><td colSpan={14} className="h-[clamp(320px,52vh,720px)] text-center align-middle text-muted-foreground">{loadingRows ? "Loading…" : "No transactions match."}</td></tr>
               ) : pageRows.map((t) => (
                 <tr key={t.id} className={cn("border-b border-border/30 transition-colors hover:bg-muted/30", selected.has(t.id) ? "bg-primary/[0.06]" : needsReview(t) && "bg-rose-500/[0.03]")}>
                   <td className="px-2.5 py-2 align-middle">
