@@ -5,7 +5,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { toast } from "sonner";
 import {
   UserPlus, X, RefreshCw, Shield, Wrench, Eye, Mail, Trash2, Settings2, Check, Building2, Copy, KeyRound,
-  History, Search as SearchIcon, Download as DownloadIcon, ShieldCheck, LogIn, Clock,
+  History, Search as SearchIcon, Download as DownloadIcon, ShieldCheck, LogIn, Clock, ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -1015,6 +1015,7 @@ function OrgSection({
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [removing, setRemoving] = React.useState(false);
   const [query, setQuery] = React.useState("");
+  const [collapsed, setCollapsed] = React.useState(false); // collapse/expand this org's member list
 
   const q = query.trim().toLowerCase();
   const visible = q
@@ -1063,19 +1064,26 @@ function OrgSection({
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap border-b border-border bg-muted/30">
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => setCollapsed((c) => !c)}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand" : "Collapse"}
+          className="flex items-center gap-2.5 min-w-0 flex-1 text-left rounded-lg -mx-1 px-1 py-0.5 hover:bg-muted/60 transition-colors"
+        >
+          <ChevronDown className={cn("w-4 h-4 text-muted-foreground/70 flex-shrink-0 transition-transform", collapsed && "-rotate-90")} />
           <UserAvatar name={group.org.name} size="xs" rounded="lg" />
           <span className="text-[13.5px] font-semibold text-foreground truncate">{group.org.name}</span>
           <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground bg-muted rounded px-1.5 py-0.5 flex-shrink-0">
             {active.length} active{pending.length ? ` · ${pending.length} pending` : ""}
           </span>
-        </div>
+        </button>
         {group.members.length > 3 && (
           <div className="relative flex-shrink-0">
             <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60" />
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => { setQuery(e.target.value); if (e.target.value) setCollapsed(false); }}
               placeholder="Search members…"
               spellCheck={false}
               className="h-8 w-40 sm:w-52 pl-8 pr-2.5 rounded-lg border border-border bg-background text-[12px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/25 focus:border-primary/40 transition-all"
@@ -1087,37 +1095,41 @@ function OrgSection({
         </Button>
       </div>
 
-      {/* Bulk-selection toolbar */}
-      {selected.size > 0 && (
-        <div className="px-4 py-2 flex items-center justify-between bg-primary/[0.05] border-b border-primary/15">
-          <span className="text-[11px] font-medium text-foreground">{selected.size} selected</span>
-          <div className="flex items-center gap-1.5">
-            <button onClick={toggleAll} className="text-[11px] text-primary/80 hover:text-primary px-2 py-1 transition-colors">
-              {allSelected ? "Clear all" : "Select all"}
-            </button>
-            <Button size="sm" onClick={removeSelected} disabled={removing}
-              className="h-7 text-[11px] gap-1.5 bg-red-500/10 text-destructive border border-red-500/20 hover:bg-red-500/20">
-              {removing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-              Remove selected
-            </Button>
-          </div>
-        </div>
-      )}
+      {!collapsed && (
+        <>
+          {/* Bulk-selection toolbar */}
+          {selected.size > 0 && (
+            <div className="px-4 py-2 flex items-center justify-between bg-primary/[0.05] border-b border-primary/15">
+              <span className="text-[11px] font-medium text-foreground">{selected.size} selected</span>
+              <div className="flex items-center gap-1.5">
+                <button onClick={toggleAll} className="text-[11px] text-primary/80 hover:text-primary px-2 py-1 transition-colors">
+                  {allSelected ? "Clear all" : "Select all"}
+                </button>
+                <Button size="sm" onClick={removeSelected} disabled={removing}
+                  className="h-7 text-[11px] gap-1.5 bg-red-500/10 text-destructive border border-red-500/20 hover:bg-red-500/20">
+                  {removing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                  Remove selected
+                </Button>
+              </div>
+            </div>
+          )}
 
-      <div className="p-3 space-y-1.5">
-        {group.members.length === 0 ? (
-          <p className="text-[12px] text-muted-foreground/70 rounded-lg border border-dashed border-border py-6 text-center">
-            No members yet — add users for {group.org.name}
-          </p>
-        ) : visible.length === 0 ? (
-          <p className="text-[12px] text-muted-foreground/70 text-center py-6">No members match “{query}”.</p>
-        ) : (
-          visible.map((m) => (
-            <MemberRow key={m.id} member={m} onEdit={onEdit} onRevoke={onRevoke}
-              selected={selected.has(m.id)} onToggleSelect={toggle} />
-          ))
-        )}
-      </div>
+          <div className="p-3 space-y-1.5">
+            {group.members.length === 0 ? (
+              <p className="text-[12px] text-muted-foreground/70 rounded-lg border border-dashed border-border py-6 text-center">
+                No members yet — add users for {group.org.name}
+              </p>
+            ) : visible.length === 0 ? (
+              <p className="text-[12px] text-muted-foreground/70 text-center py-6">No members match “{query}”.</p>
+            ) : (
+              visible.map((m) => (
+                <MemberRow key={m.id} member={m} onEdit={onEdit} onRevoke={onRevoke}
+                  selected={selected.has(m.id)} onToggleSelect={toggle} />
+              ))
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
