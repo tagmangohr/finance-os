@@ -95,30 +95,58 @@ export async function syncStripeInvoices(supabase: ServiceClient, connector: Con
   return { fetched, cursor: after, hasMore: after !== null };
 }
 
-/** Sync Razorpay invoices. invoice.payment_id → transactions.external_id (pay_…);
- *  invoice.subscription_id → the subscription. */
+/** Which of these Razorpay invoice ids are ALREADY stored. Uses the existing unique
+ *  index (gateway, invoice_id), so it's a cheap indexed lookup. */
+async function existingRazorpayInvoiceIds(supabase: ServiceClient, ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  const { data, error } = await supabase
+    .from("gateway_invoices")
+    .select("invoice_id")
+    .eq("gateway", "razorpay")
+    .in("invoice_id", ids);
+  if (error) { console.error("[invoices/razorpay] existence check failed:", error.message); return new Set(); }
+  return new Set((data ?? []).map((r) => r.invoice_id as string));
+}
+
+/**
+ * Sync Razorpay invoices (invoice.payment_id → transactions.external_id pay_…;
+ * invoice.subscription_id → the subscription).
+ *
+ * INCREMENTAL + server-filtered + existence-terminated. The old implementation walked
+ * `skip` from 0 through the ENTIRE invoice history every run (238k+ invoices), filtering
+ * by date client-side — so deep-`skip` pages eventually exceeded the fetch timeout and
+ * the stream failed permanently (the bug this fixes). Now:
+ *   1. SERVER-side `from` filter bounds the walk to the FY window (never pages the
+ *      ~200k pre-FY history).
+ *   2. Razorpay returns NEWEST-first, so the only unsynced invoices are at the top. We
+ *      page from the newest and STOP at the first page every one of whose ids we already
+ *      have — everything below it is older and already stored. Each run therefore pages
+ *      only the small recent delta.
+ * Correctness is based on ROW EXISTENCE, not a stored date — so it is immune to
+ * issued_at-vs-created_at skew and to a lost cursor: a fresh run always re-scans from the
+ * newest and re-converges on the synced region (idempotent upsert makes the re-scan free
+ * of side effects). The `skip` cursor only resumes a large one-time backlog mid-pass.
+ */
 export async function syncRazorpayInvoices(supabase: ServiceClient, connector: ConnectorRow, opts: SyncOpts): Promise<InvSyncResult> {
   const cfg = decryptConfigSecrets((connector.config ?? {}) as Record<string, string>);
   if (!cfg.key_id || !cfg.key_secret) return { fetched: 0, cursor: null, hasMore: false };
   const auth = "Basic " + Buffer.from(`${cfg.key_id}:${cfg.key_secret}`).toString("base64");
+  const fromSec = Math.floor(opts.fromMs / 1000); // server-side FY bound — skips pre-FY history
   let skip = Number(opts.cursor ?? 0) || 0, fetched = 0, hasMore = true;
   while (Date.now() < opts.deadlineMs) {
-    const res = await timedFetch(`https://api.razorpay.com/v1/invoices?count=100&skip=${skip}`, { headers: { Authorization: auth }, next: { revalidate: 0 } });
+    const res = await timedFetch(`https://api.razorpay.com/v1/invoices?count=100&skip=${skip}&from=${fromSec}`, { headers: { Authorization: auth }, next: { revalidate: 0 } });
     if (!res.ok) { console.error(`[invoices/razorpay] ${res.status}`); break; }
     const j = (await res.json()) as { items?: Array<Record<string, unknown>> };
     const items = j.items ?? [];
     if (!items.length) { hasMore = false; break; }
-    const out: InvoiceRow[] = items
-      .filter((inv) => {
-        const c = inv.created_at as number | undefined;
-        if (c == null) return true;
-        if (c * 1000 < opts.fromMs) return false;
-        if (opts.toMs && c * 1000 >= opts.toMs) return false;
-        return true;
-      })
-      .map((inv) => razorpayInvoiceRow(inv, connector.org_id, connector.id));
+    const ids = items.map((inv) => inv.id as string).filter(Boolean);
+    const known = await existingRazorpayInvoiceIds(supabase, ids);
+    // Upsert the new ones (and refresh any known ones on this page — cheap, ≤100 rows).
+    const out = items.map((inv) => razorpayInvoiceRow(inv, connector.org_id, connector.id));
     await upsertInvoices(supabase, out);
-    fetched += out.length;
+    fetched += ids.filter((id) => !known.has(id)).length;
+    // Reached the already-synced region: every id on this full page is known → stop.
+    if (known.size === ids.length && ids.length > 0) { hasMore = false; break; }
     skip += 100;
     if (items.length < 100) { hasMore = false; break; }
   }
