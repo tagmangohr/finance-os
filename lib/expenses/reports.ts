@@ -264,20 +264,31 @@ export async function getBankTransactions(
   const [countRes, rowsRes] = await Promise.all([
     countQuery,
     rowsQuery
-      // Newest first by the REAL timestamp, not just the date. transaction_date is
-      // date-only, so ordering by it alone left same-day rows in id (UUID) order —
-      // effectively random, which buried timestamped feeds (Mercury/Brex) among
-      // date-only sheet rows. Order within a day by transaction_at (nulls last, so
-      // date-only sheet rows trail the timestamped ones), then id for determinism.
+      // Paginate by the INDEXED (transaction_date, id) keyset ONLY. transaction_at is
+      // unindexed + null-heavy, so adding it to the ORDER BY forces Postgres to sort the
+      // ENTIRE filtered bank set before applying the page LIMIT — ~9x slower and, on a
+      // wide range or under load, past the statement timeout (this exact sort 500'd the
+      // page before — commit 2867dba — and the export route still avoids it for the same
+      // reason). Within-day ordering by the real timestamp is restored as a cheap JS sort
+      // of the returned page below (≤200 rows), so display order is unchanged.
       .order("transaction_date", { ascending: false })
-      .order("transaction_at", { ascending: false, nullsFirst: false })
       .order("id", { ascending: false })
       .range(page * pageSize, page * pageSize + pageSize - 1),
   ]);
 
   if (countRes.error) throw new Error(`Bank txn count failed: ${countRes.error.message}`);
   if (rowsRes.error) throw new Error(`Bank txn page failed: ${rowsRes.error.message}`);
-  return { rows: (rowsRes.data ?? []) as BankTxn[], total: countRes.count ?? 0, page, pageSize };
+  // Within-day display order: newest real timestamp first, date-only (null transaction_at)
+  // rows trailing, id as the final tiebreak — matching the prior intent without the
+  // unindexed server-side sort.
+  const rows = ((rowsRes.data ?? []) as BankTxn[]).slice().sort((a, b) => {
+    if (a.transaction_date !== b.transaction_date) return a.transaction_date < b.transaction_date ? 1 : -1;
+    const at = (r: BankTxn) => (r.transaction_at ? Date.parse(r.transaction_at) : Number.NEGATIVE_INFINITY);
+    const da = at(a), db = at(b);
+    if (da !== db) return db - da;
+    return a.id < b.id ? 1 : -1;
+  });
+  return { rows, total: countRes.count ?? 0, page, pageSize };
 }
 
 /**

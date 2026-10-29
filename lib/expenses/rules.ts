@@ -18,7 +18,12 @@ export async function getRules(orgId: string, supabase: SupabaseClient): Promise
     .select("id, org_id, match_field, match_type, match_value, match_counterparty, category_slug, priority, source")
     .or(`org_id.is.null,org_id.eq.${orgId}`)
     .order("priority", { ascending: true });
-  return (data ?? []) as CategoryRule[];
+  // Fully order ONCE here (priority asc, then org-specific before system at equal
+  // priority) so matchRule can iterate directly — it used to re-sort the whole rule set
+  // on every row, which was O(rows × rules·log rules) and a CPU cliff on a large backfill.
+  return ((data ?? []) as CategoryRule[]).sort(
+    (a, b) => a.priority - b.priority || (b.org_id ? 1 : 0) - (a.org_id ? 1 : 0)
+  );
 }
 
 type MatchableTxn = {
@@ -28,14 +33,12 @@ type MatchableTxn = {
 };
 
 /**
- * First matching rule wins. Ordered by priority asc, then org-specific before
- * system at equal priority (a company's own rule overrides a generic seed).
+ * First matching rule wins. `rules` MUST already be ordered (priority asc, then
+ * org-specific before system at equal priority) — getRules does this once. Do NOT
+ * re-sort here: this runs per row, so sorting here is an O(rows × rules·log rules) cliff.
  */
 export function matchRule(txn: MatchableTxn, rules: CategoryRule[]): string | null {
-  const sorted = [...rules].sort(
-    (a, b) => a.priority - b.priority || (b.org_id ? 1 : 0) - (a.org_id ? 1 : 0)
-  );
-  for (const r of sorted) {
+  for (const r of rules) {
     const field =
       r.match_field === "counterparty" ? txn.counterparty_name
       : r.match_field === "description" ? txn.description

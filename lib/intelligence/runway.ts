@@ -1,7 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { POSTED_TRANSACTION_STATUSES, isTransferSource } from '@/lib/finance/transaction-status';
-import { baseAmt } from '@/lib/utils';
-import { selectAll } from '@/lib/supabase/paginate';
 import { getMercuryCashPosition } from '@/lib/expenses/mercury-balances';
 import type { RunwayResult } from './types';
 
@@ -15,10 +12,15 @@ export async function calculateRunway(
   const todayStr = today.toISOString().split('T')[0];
   const ninetyStr = ninetyDaysAgo.toISOString().split('T')[0];
 
-  // The three 90-day sums (burn debits, PG credits, expense reversals) come from
-  // vw_runway_inputs — one row, computed in Postgres — instead of draining tens
-  // of thousands of raw rows into JS. Fetched with the snapshot in parallel.
-  const [snapshotResult, inputsRes] = await Promise.all([
+  // The 90-day burn/inflow come from the trigger-maintained cashflow ROLLUP
+  // (cashflow_daily_range → rollup_cashflow_daily, ~90 daily rows). The old
+  // vw_runway_inputs view (and its drain fallback) scanned the raw 90-day transaction
+  // slice (~200k rows) and statement-timed-out as the ledger grew — a hard crash on the
+  // un-try/caught Bank page-load path. The rollup's `outflow` mirrors the view's
+  // operating-expense debits (_cf_out); its `inflow` mirrors the PG + bank-income credits
+  // (_cf_in), which folds in the tiny expense-reversal credits — so we read reversals as 0
+  // (negligible; at worst a slightly conservative burn). Fetched with the snapshot.
+  const [snapshotResult, cashflowRes] = await Promise.all([
     supabase
       .from('financial_snapshots')
       .select('cash_balance')
@@ -26,47 +28,21 @@ export async function calculateRunway(
       .order('snapshot_date', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    supabase
-      .from('vw_runway_inputs' as never)
-      .select('burn_debits_90d, credits_90d, reversals_90d')
-      .eq('org_id' as never, orgId)
-      .maybeSingle(),
+    supabase.rpc('cashflow_daily_range', { p_org: orgId, p_from: ninetyStr, p_to: todayStr }),
   ]);
 
-  let totalDebits90d: number;
-  let totalCredits90d: number;
-  let totalReversals90d: number;
-
-  const inputs = inputsRes.data as unknown as { burn_debits_90d: number; credits_90d: number; reversals_90d: number } | null;
-  if (inputs) {
-    totalDebits90d = Number(inputs.burn_debits_90d ?? 0);
-    totalCredits90d = Number(inputs.credits_90d ?? 0);
-    totalReversals90d = Number(inputs.reversals_90d ?? 0);
-  } else {
-    // Fallback (view not applied yet): drain the 90-day rows. A debit is burn only
-    // if it's an operating expense — bank debits categorized 'expense', or PG-ledger
-    // debits that aren't transfers/payouts.
-    const countsAsBurn = (t: { ledger: 'payments' | 'bank'; pnl_treatment: string | null; source: string | null }) =>
-      t.ledger === 'bank' ? t.pnl_treatment === 'expense' : !isTransferSource(t.source ?? undefined);
-    const [debits90, credits90, reversals90] = await Promise.all([
-      selectAll<{ amount: number; amount_base: number | null; source: string | null; ledger: 'payments' | 'bank'; pnl_treatment: string | null }>((from, to) =>
-        supabase.from('transactions').select('amount, amount_base, source, ledger, pnl_treatment')
-          .eq('org_id', orgId).eq('type', 'debit').in('status', POSTED_TRANSACTION_STATUSES)
-          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
-      selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
-        supabase.from('transactions').select('amount, amount_base')
-          .eq('org_id', orgId).eq('type', 'credit').eq('ledger', 'payments')
-          .or('category.is.null,category.neq.settlement').in('status', POSTED_TRANSACTION_STATUSES)
-          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
-      selectAll<{ amount: number; amount_base: number | null }>((from, to) =>
-        supabase.from('transactions').select('amount, amount_base')
-          .eq('org_id', orgId).eq('type', 'credit').eq('ledger', 'bank').eq('pnl_treatment', 'expense')
-          .in('status', POSTED_TRANSACTION_STATUSES)
-          .gte('transaction_date', ninetyStr).lte('transaction_date', todayStr).range(from, to)),
-    ]);
-    totalDebits90d = debits90.filter(countsAsBurn).reduce((s, t) => s + baseAmt(t), 0);
-    totalCredits90d = credits90.reduce((s, t) => s + baseAmt(t), 0);
-    totalReversals90d = reversals90.reduce((s, t) => s + baseAmt(t), 0);
+  let totalDebits90d = 0;
+  let totalCredits90d = 0;
+  const totalReversals90d = 0; // folded into the rollup's inflow (negligible)
+  if (!cashflowRes.error && Array.isArray(cashflowRes.data)) {
+    for (const d of cashflowRes.data as Array<{ inflow: number | null; outflow: number | null }>) {
+      totalCredits90d += Number(d.inflow ?? 0);
+      totalDebits90d += Number(d.outflow ?? 0);
+    }
+  } else if (cashflowRes.error) {
+    // Safe degradation: never crash the page on a runway read. Leaving the sums at 0
+    // makes runway read "no burn" (cash still comes from the snapshot / Mercury balance).
+    console.error('[runway] cashflow rollup read failed:', cashflowRes.error.message);
   }
 
   // Cash balance: prefer a POSITIVE stored snapshot, else a 90-day net proxy (credits −
