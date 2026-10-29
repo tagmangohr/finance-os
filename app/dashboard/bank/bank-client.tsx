@@ -7,7 +7,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Landmark, Search, Download, Sparkles, Wand2, TrendingDown, Clock,
   Wallet, AlertTriangle, ArrowDownRight, ArrowUpRight, Plug, Pencil, X,
-  Scissors, Undo2, Plus, Trash2,
+  Scissors, Undo2, Plus, Trash2, Loader2,
 } from "lucide-react";
 import { useNavProgress } from "@/components/dashboard/nav-progress";
 import { MetricCard } from "@/components/dashboard/metric-card";
@@ -124,6 +124,9 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
     { transaction_date: "", counterparty_name: "", description: "", amount: "", type: "debit" }
   );
   const [savingEdit, setSavingEdit] = useState(false);
+  // Error shown INSIDE the edit dialog (a top-of-page banner would sit hidden behind the
+  // modal — the same reason the split editor surfaces its error in-modal).
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Split editor: divide one bank txn into N parts that total the original exactly.
   const [splitRow, setSplitRow] = useState<BankTxn | null>(null);
@@ -134,6 +137,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
 
   function openEdit(t: BankTxn) {
     setEditRow(t);
+    setEditError(null);
     setEditForm({
       transaction_date: t.transaction_date?.slice(0, 10) ?? "",
       counterparty_name: t.counterparty_name ?? "",
@@ -146,6 +150,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
   async function saveEdit() {
     if (!editRow) return;
     setSavingEdit(true);
+    setEditError(null);
     try {
       const res = await fetch(`/api/transactions/${editRow.id}`, {
         method: "PATCH",
@@ -159,12 +164,15 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
         }),
       });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "Failed to save");
+      // Keep the dialog OPEN on failure and show the reason in-modal, so the user is
+      // never left staring at a stuck dialog with the error hidden behind it.
+      if (!res.ok) { setEditError(j.error ?? "Failed to save"); return; }
       setEditRow(null);
+      setMsg("Transaction updated.");
       await fetchRows();
       router.refresh();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Failed to save");
+      setEditError(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSavingEdit(false);
     }
@@ -457,6 +465,8 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                 autoComplete="off"
                 className="bg-transparent text-[13px] outline-none w-44"
               />
+              {/* Progress cue: spins while a search is queued (debounce) or in flight. */}
+              {(loadingRows || qInput !== q) && <Loader2 className="size-3.5 animate-spin text-muted-foreground shrink-0" aria-label="Searching" />}
             </div>
             <select value={filter} onChange={(e) => { setFilter(e.target.value as Filter); setPage(0); }} className="rounded-lg border border-foreground bg-background px-2.5 py-1.5 text-[12.5px] outline-none">
               <option value="all">All</option>
@@ -687,7 +697,7 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
       </SectionCard>
 
       {/* Inline field editor — edits are marked manual so a sheet re-sync won't overwrite them. */}
-      <Dialog.Root open={editRow != null} onOpenChange={(o) => !o && setEditRow(null)}>
+      <Dialog.Root open={editRow != null} onOpenChange={(o) => { if (!o) { setEditRow(null); setEditError(null); } }}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 bg-black/40 z-[150]" />
           <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-[440px] bg-card border border-border rounded-xl z-[151] shadow-2xl focus:outline-none">
@@ -727,11 +737,17 @@ export function BankClient({ data, hasBankConnector, orgId }: { data: BankOvervi
                 </label>
               </div>
               <p className="text-[11px] text-muted-foreground/70">Set the category from the row after saving. Manual edits are kept even when the sheet re-syncs.</p>
+              {editError && (
+                <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-600">
+                  <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
             </div>
             <div className="flex gap-2 px-4 py-3 border-t border-border">
               <Dialog.Close className="flex-1 h-9 rounded-lg border border-border text-[13px] font-medium hover:bg-muted">Cancel</Dialog.Close>
-              <button onClick={saveEdit} disabled={savingEdit} className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary/90 disabled:opacity-60">
-                {savingEdit ? "Saving…" : "Save"}
+              <button onClick={saveEdit} disabled={savingEdit} className="flex-1 h-9 rounded-lg bg-primary text-primary-foreground text-[13px] font-medium hover:bg-primary/90 disabled:opacity-60 flex items-center justify-center gap-1.5">
+                {savingEdit && <Loader2 className="size-3.5 animate-spin" />}{savingEdit ? "Saving…" : "Save"}
               </button>
             </div>
           </Dialog.Content>
