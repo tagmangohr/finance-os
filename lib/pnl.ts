@@ -192,6 +192,13 @@ export async function getPnl(orgId: string, params: PnlParams): Promise<PnlData>
     getDisputeFeesByMonth(supabase, orgId, from, to),
   ]);
 
+  // Surface (don't swallow) a failed revenue/expense RPC. These feed DIFFERENT rows
+  // from DIFFERENT rollups, so one can fail — e.g. a statement timeout at scale —
+  // while the other renders, silently zeroing just Revenue or just Expenses. Log it
+  // loudly so that failure mode is never invisible again.
+  if (monthlyRes.error) console.error("[pnl] dash_metrics_monthly failed — Revenue will render blank:", monthlyRes.error.message);
+  if (pnlRes.error) console.error("[pnl] pnl_monthly failed — Expenses will render blank:", pnlRes.error.message);
+
   type MonthlyRow = { month: string; gross_revenue: number; refunds: number };
   type PnlCatRow = { month: string; category: string; label: string; amount: number };
   const monthly: MonthlyRow[] = (monthlyRes.data as MonthlyRow[]) ?? [];

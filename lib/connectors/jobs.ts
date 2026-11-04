@@ -588,7 +588,9 @@ async function processSubsBackfill(supabase: SupabaseLike, job: SyncJobRow, conn
  * 100k+ sheet completes across many bounded passes without ever timing out.
  */
 async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connector: ConnectorRow): Promise<Outcome> {
-  const APPLY_LIMIT = 5000; // rows per server-side chunk (rollups suppressed → fast)
+  const APPLY_LIMIT = 5000; // rows per server-side chunk; rollups are maintained
+                            // incrementally by the per-row triggers (migration 134),
+                            // so no bulk rebuild phase is needed afterwards.
   const requeue = (extra: Record<string, unknown>) =>
     supabase.from("sync_jobs").update({
       attempts: 0, locked_at: null, locked_by: null, status: "pending",
@@ -624,10 +626,14 @@ async function processSheetJob(supabase: SupabaseLike, job: SyncJobRow, connecto
       return "progress";
     }
     if (phase === "rebuild") {
-      // Recompute THIS org's rollups once (triggers were suppressed during
-      // delete+apply), clear staging, mark the connector synced + the job done.
-      const { error } = await supabase.rpc("rebuild_org_rollups" as never, { p_org: connector.org_id } as never);
-      if (error) throw new Error(error.message);
+      // Finalize: clear staging, mark the connector synced + the job done.
+      // NOTE: no full-org rollup rebuild here anymore. As of migration 134 the sheet
+      // delete+apply no longer suppress the per-row rollup triggers, so the rollups
+      // are maintained INCREMENTALLY (and lock-safely) as the rows land — touching
+      // only the (org, day) partitions the sheet changed. The old rebuild_org_rollups
+      // call was a whole-org DELETE+INSERT over every rollup that fought live payment
+      // ingestion for its lock and failed every run with "lock timeout". The phase is
+      // kept (not renamed) so any job already queued in it drains cleanly.
       // Clear staging via a timeout-free function (a plain PostgREST delete of the
       // whole staged batch — up to 100k rows — runs under the default 8s cap and
       // was the source of the "statement timeout" seen after large loads).
