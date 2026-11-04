@@ -124,14 +124,18 @@ export async function getMetricData(orgId: string, supabase: SupabaseClient, ran
   try {
     const viaRollups = await fromRollups(orgId, supabase, r);
     if (viaRollups) return viaRollups;
-  } catch {
-    /* rollups unavailable → fall through to the (slower) views */
+  } catch (e) {
+    // Not just "migration missing" (that returns null, not throws). A THROW here is a
+    // real failure — e.g. a statement timeout at scale — so log it: silently falling
+    // through to the views (which may also time out) is how the dashboard ends up
+    // showing ₹0 with no trace of why.
+    console.error("[metrics] rollup path threw, falling back to views:", e instanceof Error ? e.message : e);
   }
   try {
     const viaViews = await fromViews(orgId, supabase);
     if (viaViews) return { ...viaViews, rangeLabel: r.label };
-  } catch {
-    /* fall through to the paginated fallback */
+  } catch (e) {
+    console.error("[metrics] views path threw, falling back to raw pagination:", e instanceof Error ? e.message : e);
   }
   try {
     return { ...(await fromFallback(orgId, supabase)), rangeLabel: r.label };

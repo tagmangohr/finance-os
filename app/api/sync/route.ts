@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse, after } from "next/server";
-import { invalidateOrg } from "@/lib/cache/org-cache";
 import { isAuthFailure, requireOrgAccess } from "@/lib/api/auth";
 import { parseSyncDateRange } from "@/lib/api/validation";
-import { enqueueBackfill } from "@/lib/connectors/jobs";
-import { isLinkConnector, syncLinkConnector } from "@/lib/connectors/links";
+import { enqueueBackfill, enqueueLinkSheetSync } from "@/lib/connectors/jobs";
+import { isLinkConnector } from "@/lib/connectors/links";
+import { createServiceClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/supabase/types";
 
 type ConnectorRow = Database["public"]["Tables"]["connectors"]["Row"];
 
-// Link connectors (Google Sheet / Excel) run their full MERGE synchronously here.
-// A first sync of a large sheet inserts many rows (each firing the per-row rollup
-// triggers), so 30s wasn't enough → 504. 300s (Pro plan) gives ample headroom;
-// gateway fallbacks finish fast regardless.
+// Sheets/Excel parse+stage the whole workbook in the background (after()) and then
+// enqueue a resumable job that applies the staged rows in bounded chunks — they are
+// NO LONGER merged synchronously here (that non-resumable O(n) path 504'd on large
+// sheets). 300s gives the background parse+stage ample headroom; gateway fallbacks
+// finish fast regardless.
 export const maxDuration = 300;
 
 const GATEWAY_TYPES = ["razorpay", "stripe", "cashfree", "payu", "paytm", "easebuzz"];
@@ -64,31 +65,33 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     else enqueued += await enqueueBackfill(auth.supabase, c, range.fromDate, range.toDate);
   }
 
-  // Background: run the small link syncs + kick the worker so jobs start now.
+  // Background: enqueue the sheet syncs via the resumable staging path + kick the
+  // worker so jobs start now.
   const cronSecret = process.env.CRON_SECRET;
   const origin = req.nextUrl.origin;
   after(async () => {
-    const syncedOrgs = new Set<string>();
-    for (const c of linkConnectors) {
-      try { await syncLinkConnector(auth.supabase, c); invalidateOrg(c.org_id); syncedOrgs.add(c.org_id); } catch { /* surfaced via connector status */ }
-    }
-    // Re-apply vendor rules to any uncategorized bank rows the link syncs (re-)inserted,
-    // so a re-sync never leaves a previously-categorized vendor uncategorized.
-    if (syncedOrgs.size > 0) {
+    // Sheets/Excel route through the SAME resumable staging path as the per-connector
+    // "Sync" button (parse+stage → delete → apply in bounded, lock-safe chunks, with
+    // rollups maintained incrementally). The previous direct mergeConnectorTransactions
+    // path here was a NON-resumable 300s O(n) merge that fired per-row triggers with no
+    // suppression and 504'd on large sheets — it must never run for the global sync.
+    // Categorization of the (re-)inserted bank rows is handled by the worker/nightly
+    // path, exactly as it is for the per-connector Sync button (parity).
+    if (linkConnectors.length > 0) {
       try {
-        const { createServiceClient } = await import("@/lib/supabase/server");
-        const { enqueueCategorize } = await import("@/lib/connectors/jobs");
         const svc = await createServiceClient();
-        // Enqueue ONE bounded, worker-drained categorize per org instead of an inline
-        // unbounded pass — the worker kick below starts it draining immediately.
-        const connByOrg = new Map(linkConnectors.map((c) => [c.org_id, c.id]));
-        for (const oid of syncedOrgs) {
-          const cid = connByOrg.get(oid);
-          if (cid) await enqueueCategorize(svc, oid, cid);
+        for (const c of linkConnectors) {
+          try {
+            await enqueueLinkSheetSync(svc, c);
+          } catch (e) {
+            console.error("[sync] sheet enqueue failed (non-fatal):", e instanceof Error ? e.message : e);
+          }
         }
-      } catch (e) { console.error("[sync] post-link categorize enqueue failed (non-fatal):", e); }
+      } catch (e) {
+        console.error("[sync] sheet staging setup failed (non-fatal):", e instanceof Error ? e.message : e);
+      }
     }
-    if (enqueued > 0 && cronSecret) {
+    if ((enqueued > 0 || linkConnectors.length > 0) && cronSecret) {
       try { await fetch(`${origin}/api/cron/process-sync-jobs`, { headers: { authorization: `Bearer ${cronSecret}` } }); } catch { /* cron drains anyway */ }
     }
   });
