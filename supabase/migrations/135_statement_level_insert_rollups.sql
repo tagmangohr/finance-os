@@ -298,7 +298,7 @@ begin
   -- rollup_revenue_monthly
   return query
   with raw as (
-    select t.org_id, date_trunc('month',t.transaction_date)::date month, sum(_rev_contrib(t)) g
+    select t.org_id, date_trunc('month',t.transaction_date)::date as month, sum(_rev_contrib(t)) as g
     from transactions t where t.transaction_date is not null group by 1,2
     having sum(_rev_contrib(t)) <> 0
   )
@@ -310,7 +310,7 @@ begin
   -- rollup_revenue_gateway_day
   return query
   with raw as (
-    select t.org_id, t.transaction_date day, _rev_gateway(t) gw, sum(_dm_gross(t)) a
+    select t.org_id, t.transaction_date as day, _rev_gateway(t) as gw, sum(_dm_gross(t)) as a
     from transactions t where t.transaction_date is not null group by 1,2,3
     having sum(_dm_gross(t)) <> 0
   )
@@ -322,7 +322,7 @@ begin
   -- rollup_fees_gateway_day
   return query
   with raw as (
-    select t.org_id, t.transaction_date day, _rev_gateway(t) gw, sum(_pnl_fee(t)) a
+    select t.org_id, t.transaction_date as day, _rev_gateway(t) as gw, sum(_pnl_fee(t)) as a
     from transactions t where t.transaction_date is not null group by 1,2,3
     having sum(_pnl_fee(t)) <> 0
   )
@@ -334,7 +334,7 @@ begin
   -- rollup_pnl_cat_day
   return query
   with raw as (
-    select t.org_id, t.transaction_date day, _pnl_expense_cat(t) cat, sum(_dm_expense_m(t)) a
+    select t.org_id, t.transaction_date as day, _pnl_expense_cat(t) as cat, sum(_dm_expense_m(t)) as a
     from transactions t where t.transaction_date is not null group by 1,2,3
     having sum(_dm_expense_m(t)) <> 0
     union all
@@ -350,7 +350,7 @@ begin
   -- rollup_cashflow_daily
   return query
   with raw as (
-    select t.org_id, t.transaction_date day, sum(_cf_in(t)) i, sum(_cf_out(t)) o
+    select t.org_id, t.transaction_date as day, sum(_cf_in(t)) as i, sum(_cf_out(t)) as o
     from transactions t where t.transaction_date is not null group by 1,2
     having sum(_cf_in(t)) <> 0 or sum(_cf_out(t)) <> 0
   )
